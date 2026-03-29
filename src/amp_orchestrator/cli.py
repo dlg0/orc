@@ -6,10 +6,12 @@ from pathlib import Path
 
 import click
 
-from amp_orchestrator.config import CONFIG_DIR, create_default_config, detect_project
+from amp_orchestrator.amp_runner import StubAmpRunner
+from amp_orchestrator.config import CONFIG_DIR, create_default_config, detect_project, load_config
 from amp_orchestrator.events import EventLog, EventType
 from amp_orchestrator.lock import OrchestratorLock
 from amp_orchestrator.queue import get_ready_issues
+from amp_orchestrator.scheduler import run_loop
 from amp_orchestrator.state import OrchestratorMode, StateStore
 
 
@@ -54,7 +56,9 @@ def status() -> None:
 @main.command()
 def start() -> None:
     """Begin processing ready issues."""
-    state_dir = _get_state_dir()
+    project = detect_project()
+    repo_root = project.repo_root
+    state_dir = repo_root / CONFIG_DIR
     lock = OrchestratorLock(state_dir)
 
     if not lock.acquire():
@@ -70,13 +74,27 @@ def start() -> None:
                 f"Cannot start from {state.mode.value} state"
             )
 
+        prev_mode = state.mode.value
         store.transition(state, OrchestratorMode.running)
         events = EventLog(state_dir)
-        events.record(EventType.state_changed, {"from": "idle", "to": "running"})
+        events.record(EventType.state_changed, {"from": prev_mode, "to": "running"})
         click.echo("Orchestrator started")
+
+        config = load_config(repo_root)
+        runner = StubAmpRunner()  # TODO: replace with RealAmpRunner
+        run_loop(repo_root, state_dir, config, runner)
     except Exception:
-        lock.release()
+        # Ensure state goes back to idle on unexpected error
+        try:
+            store = StateStore(state_dir)
+            state = store.load()
+            if state.mode == OrchestratorMode.running:
+                store.transition(state, OrchestratorMode.error)
+        except Exception:
+            pass
         raise
+    finally:
+        lock.release()
 
 
 @main.command()

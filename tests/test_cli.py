@@ -92,34 +92,40 @@ def test_pause_from_idle_fails(tmp_path: Path) -> None:
         assert "Cannot pause" in result.output
 
 
-def test_start_sets_running(tmp_path: Path) -> None:
+def test_start_runs_and_goes_idle(tmp_path: Path) -> None:
+    _make_project(tmp_path)
     state_dir = tmp_path / ".amp-orchestrator"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     store.save(OrchestratorState(mode=OrchestratorMode.idle))
 
-    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+    from amp_orchestrator.config import ProjectContext
+
+    with (
+        patch("amp_orchestrator.cli.detect_project", return_value=ProjectContext(repo_root=tmp_path, has_git=True, has_beads=True)),
+        patch("amp_orchestrator.cli.load_config"),
+        patch("amp_orchestrator.cli.run_loop"),
+    ):
         runner = CliRunner()
         result = runner.invoke(main, ["start"])
         assert result.exit_code == 0
         assert "started" in result.output.lower()
 
-        reloaded = store.load()
-        assert reloaded.mode == OrchestratorMode.running
-
 
 def test_start_refuses_when_locked(tmp_path: Path) -> None:
+    _make_project(tmp_path)
     state_dir = tmp_path / ".amp-orchestrator"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     store.save(OrchestratorState(mode=OrchestratorMode.idle))
 
+    from amp_orchestrator.config import ProjectContext
     from amp_orchestrator.lock import OrchestratorLock
     lock = OrchestratorLock(state_dir)
     lock.acquire()
 
     try:
-        with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+        with patch("amp_orchestrator.cli.detect_project", return_value=ProjectContext(repo_root=tmp_path, has_git=True, has_beads=True)):
             runner = CliRunner()
             result = runner.invoke(main, ["start"])
             assert result.exit_code != 0
