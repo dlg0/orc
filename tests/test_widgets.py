@@ -12,9 +12,11 @@ from amp_orchestrator.state import OrchestratorMode, OrchestratorState
 from amp_orchestrator.tui.app import OrchestratorApp
 from amp_orchestrator.tui.snapshot import DashboardSnapshot
 from amp_orchestrator.tui.widgets import (
+    EVENT_SEVERITY,
     MODE_STYLES,
     NO_PROJECT_PLACEHOLDER,
     _ACTION_ENABLED,
+    _event_severity,
     _human_message,
     ActiveIssuePanel,
     ConfigPanel,
@@ -67,7 +69,7 @@ def test_mode_styles_covers_all_modes() -> None:
 def test_status_panel_composes() -> None:
     panel = StatusPanel()
     children = list(panel.compose())
-    assert len(children) == 8  # title, badge, last-updated, queue, failed, completed, error, ErrorAlert
+    assert len(children) == 9  # title, badge, last-updated, queue, severity-counts, failed, completed, error, ErrorAlert
 
 
 def test_active_issue_panel_composes() -> None:
@@ -218,6 +220,42 @@ def test_help_modal_has_bindings() -> None:
     assert "q" in keys
     assert "r" in keys
     assert "?" in keys
+
+
+# --- _event_severity tests ---
+
+
+def test_event_severity_errors() -> None:
+    assert _event_severity("error") == "ERR"
+    assert _event_severity("conflict_detected") == "ERR"
+
+
+def test_event_severity_warnings() -> None:
+    assert _event_severity("issue_needs_rework") == "WARN"
+    assert _event_severity("pause_requested") == "WARN"
+    assert _event_severity("stop_requested") == "WARN"
+    assert _event_severity("conflict_resolution_started") == "WARN"
+
+
+def test_event_severity_info_default() -> None:
+    assert _event_severity("amp_started") == "INFO"
+    assert _event_severity("amp_finished") == "INFO"
+    assert _event_severity("issue_selected") == "INFO"
+    assert _event_severity("unknown_type") == "INFO"
+
+
+def test_events_log_format_entry_includes_severity_prefix() -> None:
+    entry = {"timestamp": "2025-01-01T12:00:00Z", "event_type": "error", "data": {"error": "fail"}}
+    result = EventsLog._format_entry(entry)
+    assert "[ERR]" in result
+
+    entry_info = {"timestamp": "2025-01-01T12:00:00Z", "event_type": "amp_started", "data": None}
+    result_info = EventsLog._format_entry(entry_info)
+    assert "[INFO]" in result_info
+
+    entry_warn = {"timestamp": "2025-01-01T12:00:00Z", "event_type": "issue_needs_rework", "data": None}
+    result_warn = EventsLog._format_entry(entry_warn)
+    assert "[WARN]" in result_warn
 
 
 # --- _human_message tests ---
