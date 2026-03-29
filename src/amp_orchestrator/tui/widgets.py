@@ -25,6 +25,45 @@ MODE_STYLES: dict[OrchestratorMode, tuple[str, str]] = {
 NO_PROJECT_MSG = "[bold red]⚠ Not connected to repo/state directory[/]"
 NO_PROJECT_PLACEHOLDER = "[dim]Not available — no project detected[/]"
 
+class StaleBanner(Static):
+    """Banner shown when dashboard data is stale or refresh has failed."""
+
+    DEFAULT_CSS = """
+    StaleBanner {
+        height: auto;
+        background: #4a3500;
+        color: white;
+        text-align: center;
+        text-style: bold;
+        padding: 0 1;
+        display: none;
+    }
+    StaleBanner.visible {
+        display: block;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Label("", id="stale-banner-text")
+
+    def show_stale(self, seconds_ago: int) -> None:
+        """Show a staleness warning with the elapsed time."""
+        self.query_one("#stale-banner-text", Label).update(
+            f"[bold yellow on #4a3500]⚠ STALE: Dashboard data not refreshed for {seconds_ago}s[/]"
+        )
+        self.add_class("visible")
+
+    def show_error(self, message: str) -> None:
+        """Show a refresh-failed banner."""
+        self.query_one("#stale-banner-text", Label).update(
+            f"[bold red on #4a3500]⚠ Refresh failed: {message}[/]"
+        )
+        self.add_class("visible")
+
+    def hide(self) -> None:
+        self.remove_class("visible")
+
+
 class NotConnectedBanner(Static):
     """Persistent banner shown when no repo/state directory is detected."""
 
@@ -220,6 +259,7 @@ class StatusPanel(Static):
     def compose(self) -> ComposeResult:
         yield Label("Status", classes="panel-title")
         yield Label("[grey]○ IDLE[/]", id="mode-badge")
+        yield Label("[dim]Last updated: —[/]", id="last-updated")
         yield Label("Queue: 0 issue(s)", id="queue-count")
         yield Label("", id="failed-count")
         yield Label("", id="last-completed")
@@ -230,11 +270,19 @@ class StatusPanel(Static):
         self.query_one("#mode-badge", Label).update(
             "[bold red]⚠ NOT CONNECTED[/]"
         )
+        self.query_one("#last-updated", Label).update("")
         self.query_one("#queue-count", Label).update(NO_PROJECT_PLACEHOLDER)
         self.query_one("#failed-count", Label).update("")
         self.query_one("#last-completed", Label).update("")
         self.query_one("#last-error", Label).update("")
         self.query_one(ErrorAlert).set_error("")
+
+    def update_last_refreshed(self, ts: datetime) -> None:
+        """Update the 'Last updated' display with the given timestamp."""
+        time_str = ts.strftime("%H:%M:%S")
+        self.query_one("#last-updated", Label).update(
+            f"[dim]Last updated: {time_str}[/]"
+        )
 
     def show_transitional(self, text: str) -> None:
         """Show a transitional status like 'Starting…' or 'Pausing…'."""

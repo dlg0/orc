@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 from textual import work
@@ -25,8 +26,12 @@ from amp_orchestrator.tui.widgets import (
     HistoryTable,
     NotConnectedBanner,
     QueueTable,
+    StaleBanner,
     StatusPanel,
 )
+
+
+_STALE_THRESHOLD_SECS = 10
 
 
 class OrchestratorApp(App):
@@ -78,10 +83,13 @@ class OrchestratorApp(App):
         self._config = OrchestratorConfig()
         self._pending_action: str | None = None
         self._orch_mode: OrchestratorMode = OrchestratorMode.idle
+        self._last_successful_refresh: datetime | None = None
+        self._last_refresh_error: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield NotConnectedBanner()
+        yield StaleBanner()
         with Horizontal(id="main-area"):
             with Vertical(id="left-col"):
                 yield StatusPanel()
@@ -100,6 +108,7 @@ class OrchestratorApp(App):
             self._do_full_refresh()
             self.set_interval(1.0, self._do_fast_refresh)
             self.set_interval(5.0, self._do_queue_refresh)
+            self.set_interval(1.0, self._check_staleness)
         else:
             self._show_no_project()
 
@@ -130,24 +139,62 @@ class OrchestratorApp(App):
         """Refresh state and events (runs in thread)."""
         if not self._state_dir:
             return
-        snap = load_snapshot_fast(self._state_dir, self._config)
-        self.call_from_thread(self._apply_fast_snapshot, snap)
+        try:
+            snap = load_snapshot_fast(self._state_dir, self._config)
+            self.call_from_thread(self._mark_refresh_success)
+            self.call_from_thread(self._apply_fast_snapshot, snap)
+        except Exception as exc:
+            self.call_from_thread(self._mark_refresh_error, str(exc))
 
     @work(thread=True)
     def _do_queue_refresh(self) -> None:
         """Refresh queue (runs in thread)."""
         if not self._repo_root or not self._state_dir:
             return
-        snap = load_snapshot(self._repo_root, self._state_dir)
-        self.call_from_thread(self._apply_snapshot, snap)
+        try:
+            snap = load_snapshot(self._repo_root, self._state_dir)
+            self.call_from_thread(self._mark_refresh_success)
+            self.call_from_thread(self._apply_snapshot, snap)
+        except Exception as exc:
+            self.call_from_thread(self._mark_refresh_error, str(exc))
 
     @work(thread=True)
     def _do_full_refresh(self) -> None:
         """Full refresh (runs in thread)."""
         if not self._repo_root or not self._state_dir:
             return
-        snap = load_snapshot(self._repo_root, self._state_dir)
-        self.call_from_thread(self._apply_snapshot, snap)
+        try:
+            snap = load_snapshot(self._repo_root, self._state_dir)
+            self.call_from_thread(self._mark_refresh_success)
+            self.call_from_thread(self._apply_snapshot, snap)
+        except Exception as exc:
+            self.call_from_thread(self._mark_refresh_error, str(exc))
+
+    def _mark_refresh_success(self) -> None:
+        """Record a successful refresh and update the status display."""
+        now = datetime.now(timezone.utc)
+        self._last_successful_refresh = now
+        self._last_refresh_error = None
+        self.query_one(StatusPanel).update_last_refreshed(now)
+        self.query_one(StaleBanner).hide()
+
+    def _mark_refresh_error(self, message: str) -> None:
+        """Record a failed refresh."""
+        self._last_refresh_error = message
+
+    def _check_staleness(self) -> None:
+        """Show/hide the stale banner based on time since last successful refresh."""
+        banner = self.query_one(StaleBanner)
+        if self._last_refresh_error:
+            banner.show_error(self._last_refresh_error)
+            return
+        if self._last_successful_refresh is None:
+            return
+        elapsed = (datetime.now(timezone.utc) - self._last_successful_refresh).total_seconds()
+        if elapsed >= _STALE_THRESHOLD_SECS:
+            banner.show_stale(int(elapsed))
+        else:
+            banner.hide()
 
     def action_refresh(self) -> None:
         """Manual refresh triggered by 'r' key."""

@@ -24,6 +24,7 @@ from amp_orchestrator.tui.widgets import (
     HistoryTable,
     NotConnectedBanner,
     QueueTable,
+    StaleBanner,
     StatusPanel,
 )
 
@@ -66,7 +67,7 @@ def test_mode_styles_covers_all_modes() -> None:
 def test_status_panel_composes() -> None:
     panel = StatusPanel()
     children = list(panel.compose())
-    assert len(children) == 7  # title, badge, queue, failed, completed, error, ErrorAlert
+    assert len(children) == 8  # title, badge, last-updated, queue, failed, completed, error, ErrorAlert
 
 
 def test_active_issue_panel_composes() -> None:
@@ -194,6 +195,19 @@ def test_pending_action_none_does_not_suppress() -> None:
     app = OrchestratorApp()
     snap = _snap(mode=OrchestratorMode.idle)
     assert app._check_pending_action(snap) is False
+
+
+def test_stale_banner_composes() -> None:
+    banner = StaleBanner()
+    children = list(banner.compose())
+    assert len(children) == 1  # Label
+
+
+def test_app_refresh_tracking_fields() -> None:
+    """App should initialise refresh tracking fields."""
+    app = OrchestratorApp()
+    assert app._last_successful_refresh is None
+    assert app._last_refresh_error is None
 
 
 def test_help_modal_has_bindings() -> None:
