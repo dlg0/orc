@@ -29,6 +29,9 @@ class OrchestratorConfig:
     verification_commands: list[str] = field(default_factory=list)
     amp_mode: str = "smart"
     use_decomposition_preflight: bool = True
+    enable_evaluation: bool = True
+    evaluation_mode: str | None = None
+    evaluation_timeout: int = 900
 
 
 CONFIG_DIR = ".amp-orchestrator"
@@ -106,6 +109,9 @@ def create_default_config(repo_root: Path) -> Path:
         "verification_commands": config.verification_commands,
         "amp_mode": config.amp_mode,
         "use_decomposition_preflight": config.use_decomposition_preflight,
+        "enable_evaluation": config.enable_evaluation,
+        "evaluation_mode": config.evaluation_mode,
+        "evaluation_timeout": config.evaluation_timeout,
     }
 
     config_path = config_dir / CONFIG_FILE

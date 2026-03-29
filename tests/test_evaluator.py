@@ -1,0 +1,239 @@
+"""Tests for the independent completion evaluator module."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+from amp_orchestrator.amp_runner import IssueContext
+from amp_orchestrator.evaluator import (
+    AmpEvaluatorRunner,
+    EvaluationResult,
+    EvaluationVerdict,
+    StubEvaluator,
+)
+
+
+def _make_context() -> IssueContext:
+    return IssueContext(
+        issue_id="TEST-1",
+        title="Test issue",
+        description="A test description",
+        acceptance_criteria="It works",
+        worktree_path=Path("/tmp/worktree"),
+        repo_root=Path("/tmp/repo"),
+    )
+
+
+# --- EvaluationResult basics ---
+
+
+def test_fail_creates_failed_result() -> None:
+    result = EvaluationResult.fail("something broke")
+    assert result.verdict is EvaluationVerdict.failed
+    assert result.summary == "something broke"
+
+
+def test_passed_property_true_for_passed_verdict() -> None:
+    result = EvaluationResult(verdict=EvaluationVerdict.passed, summary="ok")
+    assert result.passed is True
+
+
+def test_passed_property_false_for_failed_verdict() -> None:
+    result = EvaluationResult.fail("nope")
+    assert result.passed is False
+
+
+def test_to_dict_round_trip() -> None:
+    result = EvaluationResult(
+        verdict=EvaluationVerdict.passed,
+        summary="looks good",
+        evidence=["file changed"],
+        tests_run=["pytest"],
+        gaps=["edge case"],
+        task_too_large_signal=True,
+    )
+    d = result.to_dict()
+    assert d == {
+        "verdict": "pass",
+        "summary": "looks good",
+        "evidence": ["file changed"],
+        "tests_run": ["pytest"],
+        "gaps": ["edge case"],
+        "task_too_large_signal": True,
+    }
+
+
+# --- StubEvaluator ---
+
+
+def test_stub_default_returns_passed() -> None:
+    stub = StubEvaluator()
+    result = stub.evaluate(_make_context(), "main", [])
+    assert result.passed is True
+
+
+def test_stub_passed_classmethod() -> None:
+    stub = StubEvaluator.passed(summary="all clear")
+    result = stub.evaluate(_make_context(), "main", [])
+    assert result.passed is True
+    assert result.summary == "all clear"
+
+
+def test_stub_failed_classmethod() -> None:
+    stub = StubEvaluator.failed(summary="no good")
+    result = stub.evaluate(_make_context(), "main", [])
+    assert result.passed is False
+    assert result.summary == "no good"
+
+
+def test_stub_evaluate_returns_configured_result() -> None:
+    custom = EvaluationResult(
+        verdict=EvaluationVerdict.failed,
+        summary="custom fail",
+        gaps=["missing feature"],
+    )
+    stub = StubEvaluator(custom)
+    result = stub.evaluate(_make_context(), "main", ["make test"])
+    assert result is custom
+
+
+# --- AmpEvaluatorRunner._build_prompt ---
+
+
+def test_build_prompt_contains_issue_fields() -> None:
+    ctx = _make_context()
+    prompt = AmpEvaluatorRunner._build_prompt(ctx, "main", [])
+    assert ctx.issue_id in prompt
+    assert ctx.title in prompt
+    assert ctx.description in prompt
+    assert ctx.acceptance_criteria in prompt
+
+
+def test_build_prompt_contains_base_branch() -> None:
+    prompt = AmpEvaluatorRunner._build_prompt(_make_context(), "develop", [])
+    assert "origin/develop" in prompt
+
+
+def test_build_prompt_formats_verification_commands() -> None:
+    cmds = ["pytest", "mypy src/"]
+    prompt = AmpEvaluatorRunner._build_prompt(_make_context(), "main", cmds)
+    assert "- pytest" in prompt
+    assert "- mypy src/" in prompt
+
+
+def test_build_prompt_no_verification_commands() -> None:
+    prompt = AmpEvaluatorRunner._build_prompt(_make_context(), "main", [])
+    assert "(none configured)" in prompt
+
+
+# --- AmpEvaluatorRunner._extract_json_block ---
+
+
+def test_extract_json_block_valid() -> None:
+    text = 'Some text\n```json\n{"verdict": "pass", "summary": "ok"}\n```\n'
+    result = AmpEvaluatorRunner._extract_json_block(text)
+    assert result is not None
+    assert result["verdict"] == "pass"
+
+
+def test_extract_json_block_prefers_last() -> None:
+    text = (
+        '```json\n{"verdict": "fail", "summary": "first"}\n```\n'
+        'middle\n'
+        '```json\n{"verdict": "pass", "summary": "second"}\n```\n'
+    )
+    result = AmpEvaluatorRunner._extract_json_block(text)
+    assert result is not None
+    assert result["summary"] == "second"
+
+
+def test_extract_json_block_no_blocks() -> None:
+    assert AmpEvaluatorRunner._extract_json_block("no json here") is None
+
+
+def test_extract_json_block_missing_verdict_key() -> None:
+    text = '```json\n{"summary": "no verdict"}\n```\n'
+    assert AmpEvaluatorRunner._extract_json_block(text) is None
+
+
+# --- AmpEvaluatorRunner._json_to_result ---
+
+
+def test_json_to_result_pass_verdict() -> None:
+    result = AmpEvaluatorRunner._json_to_result({"verdict": "pass", "summary": "ok"})
+    assert result.verdict is EvaluationVerdict.passed
+    assert result.summary == "ok"
+
+
+def test_json_to_result_fail_verdict() -> None:
+    result = AmpEvaluatorRunner._json_to_result({"verdict": "fail", "summary": "bad"})
+    assert result.verdict is EvaluationVerdict.failed
+
+
+def test_json_to_result_invalid_verdict_defaults_to_failed() -> None:
+    result = AmpEvaluatorRunner._json_to_result({"verdict": "maybe", "summary": "idk"})
+    assert result.verdict is EvaluationVerdict.failed
+
+
+def test_json_to_result_extracts_all_fields() -> None:
+    data = {
+        "verdict": "pass",
+        "summary": "done",
+        "evidence": ["changed foo.py"],
+        "tests_run": ["pytest tests/"],
+        "gaps": ["no edge case test"],
+        "task_too_large_signal": True,
+    }
+    result = AmpEvaluatorRunner._json_to_result(data)
+    assert result.evidence == ["changed foo.py"]
+    assert result.tests_run == ["pytest tests/"]
+    assert result.gaps == ["no edge case test"]
+    assert result.task_too_large_signal is True
+
+
+# --- AmpEvaluatorRunner._parse_output ---
+
+
+def _make_proc(
+    returncode: int = 0,
+    stdout: str = "",
+    stderr: str = "",
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(
+        args=["amp"], returncode=returncode, stdout=stdout, stderr=stderr
+    )
+
+
+def test_parse_output_nonzero_exit_code() -> None:
+    runner = AmpEvaluatorRunner()
+    proc = _make_proc(returncode=1)
+    result = runner._parse_output(proc)
+    assert result.passed is False
+    assert "code 1" in result.summary
+
+
+def test_parse_output_valid_json_block() -> None:
+    runner = AmpEvaluatorRunner()
+    stdout = (
+        'Thinking...\n```json\n{"verdict": "pass", "summary": "all good"}\n```\ndone\n'
+    )
+    result = runner._parse_output(_make_proc(stdout=stdout))
+    assert result.passed is True
+    assert result.summary == "all good"
+
+
+def test_parse_output_bare_json_line() -> None:
+    runner = AmpEvaluatorRunner()
+    stdout = 'Some log output\n{"verdict": "pass", "summary": "bare json"}\n'
+    result = runner._parse_output(_make_proc(stdout=stdout))
+    assert result.passed is True
+    assert result.summary == "bare json"
+
+
+def test_parse_output_no_structured_output() -> None:
+    runner = AmpEvaluatorRunner()
+    result = runner._parse_output(_make_proc(stdout="just some text\n"))
+    assert result.passed is False
+    assert "no structured result" in result.summary.lower()

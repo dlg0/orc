@@ -9,8 +9,9 @@ from pathlib import Path
 
 import click
 
-from amp_orchestrator.amp_runner import StubAmpRunner
+from amp_orchestrator.amp_runner import RealAmpRunner
 from amp_orchestrator.config import OrchestratorConfig, load_config
+from amp_orchestrator.evaluator import AmpEvaluatorRunner
 from amp_orchestrator.events import EventLog, EventType
 from amp_orchestrator.lock import OrchestratorLock
 from amp_orchestrator.scheduler import run_loop
@@ -41,7 +42,10 @@ def start_orchestrator(repo_root: Path, state_dir: Path) -> None:
                 f"Detected stale {state.mode.value} state (previous process crashed)."
             )
             if state.active_issue_id:
-                click.echo(f"  Stale active issue: {state.active_issue_id}")
+                stale_label = state.active_issue_id
+                if state.active_issue_title:
+                    stale_label += f" — {state.active_issue_title}"
+                click.echo(f"  Stale active issue: {stale_label}")
                 click.echo(f"  Branch: {state.active_branch}")
                 click.echo(f"  Worktree: {state.active_worktree_path}")
             # Reset to idle so we can start fresh
@@ -69,8 +73,12 @@ def start_orchestrator(repo_root: Path, state_dir: Path) -> None:
         click.echo("Orchestrator started")
 
         config = load_config(repo_root)
-        runner = StubAmpRunner()  # TODO: replace with RealAmpRunner
-        run_loop(repo_root, state_dir, config, runner)
+        runner = RealAmpRunner(mode=config.amp_mode)
+        evaluator = AmpEvaluatorRunner(
+            mode=config.evaluation_mode or config.amp_mode,
+            timeout=config.evaluation_timeout,
+        ) if config.enable_evaluation else None
+        run_loop(repo_root, state_dir, config, runner, evaluator=evaluator)
     except Exception:
         # Ensure state goes back to error on unexpected failure
         try:
@@ -107,28 +115,39 @@ def pause_orchestrator(state_dir: Path) -> None:
 def resume_orchestrator(repo_root: Path, state_dir: Path) -> None:
     """Resume from paused state.
 
-    Transitions to running, loads config, creates a runner, and enters the
-    scheduler loop.  Handles unexpected failures by transitioning to error.
+    Acquires the process lock, transitions to running, loads config, creates a
+    runner, and enters the scheduler loop.  Releases the lock on exit.
+    Handles unexpected failures by transitioning to error.
 
-    Raises ``click.ClickException`` if not in ``paused`` state.
+    Raises ``click.ClickException`` on lock contention or invalid state.
     """
-    store = StateStore(state_dir)
-    state = store.load()
+    lock = OrchestratorLock(state_dir)
 
-    if state.mode != OrchestratorMode.paused:
-        raise click.ClickException(
-            f"Cannot resume from {state.mode.value} state (must be paused)"
-        )
+    if not lock.acquire():
+        raise click.ClickException("Orchestrator is already running (lock held)")
 
     try:
+        store = StateStore(state_dir)
+        state = store.load()
+
+        if state.mode != OrchestratorMode.paused:
+            lock.release()
+            raise click.ClickException(
+                f"Cannot resume from {state.mode.value} state (must be paused)"
+            )
+
         store.transition(state, OrchestratorMode.running)
         events = EventLog(state_dir)
         events.record(EventType.state_changed, {"from": "paused", "to": "running"})
         click.echo("Orchestrator resumed")
 
         config = load_config(repo_root)
-        runner = StubAmpRunner()  # TODO: replace with RealAmpRunner
-        run_loop(repo_root, state_dir, config, runner)
+        runner = RealAmpRunner(mode=config.amp_mode)
+        evaluator = AmpEvaluatorRunner(
+            mode=config.evaluation_mode or config.amp_mode,
+            timeout=config.evaluation_timeout,
+        ) if config.enable_evaluation else None
+        run_loop(repo_root, state_dir, config, runner, evaluator=evaluator)
     except Exception:
         try:
             store = StateStore(state_dir)
@@ -138,6 +157,8 @@ def resume_orchestrator(repo_root: Path, state_dir: Path) -> None:
         except Exception:
             pass
         raise
+    finally:
+        lock.release()
 
 
 def stop_orchestrator(state_dir: Path) -> None:

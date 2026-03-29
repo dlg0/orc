@@ -19,6 +19,9 @@ class EventType(Enum):
     stop_requested = "stop_requested"
     error = "error"
     state_changed = "state_changed"
+    evaluation_started = "evaluation_started"
+    evaluation_finished = "evaluation_finished"
+    issue_needs_rework = "issue_needs_rework"
 
 
 class EventLog:
