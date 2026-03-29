@@ -105,6 +105,29 @@ EVENT_COLORS: dict[str, str] = {
     "conflict_resolution_finished": "green",
 }
 
+# Severity classification for event types
+EVENT_SEVERITY: dict[str, str] = {
+    "error": "ERR",
+    "conflict_detected": "ERR",
+    "issue_needs_rework": "WARN",
+    "pause_requested": "WARN",
+    "stop_requested": "WARN",
+    "conflict_resolution_started": "WARN",
+}
+# Default severity is "INFO" for any event type not listed above.
+
+
+def _event_severity(event_type: str) -> str:
+    """Return the severity tag for an event type."""
+    return EVENT_SEVERITY.get(event_type, "INFO")
+
+
+_SEVERITY_STYLE: dict[str, str] = {
+    "ERR": "bold red",
+    "WARN": "yellow",
+    "INFO": "dim",
+}
+
 
 def _human_message(event_type: str, data: dict | None) -> str:
     """Convert raw event_type + data into a human-readable message."""
@@ -261,6 +284,7 @@ class StatusPanel(Static):
         yield Label("[grey]○ IDLE[/]", id="mode-badge")
         yield Label("[dim]Last updated: —[/]", id="last-updated")
         yield Label("Queue: 0 issue(s)", id="queue-count")
+        yield Label("", id="event-severity-counts")
         yield Label("", id="failed-count")
         yield Label("", id="last-completed")
         yield Label("", id="last-error")
@@ -272,6 +296,7 @@ class StatusPanel(Static):
         )
         self.query_one("#last-updated", Label).update("")
         self.query_one("#queue-count", Label).update(NO_PROJECT_PLACEHOLDER)
+        self.query_one("#event-severity-counts", Label).update("")
         self.query_one("#failed-count", Label).update("")
         self.query_one("#last-completed", Label).update("")
         self.query_one("#last-error", Label).update("")
@@ -304,6 +329,24 @@ class StatusPanel(Static):
             self.query_one("#queue-count", Label).update(
                 f"Queue: {len(snap.ready_issues)} issue(s)"
             )
+
+        # Event severity counts
+        sev_label = self.query_one("#event-severity-counts", Label)
+        err_count = sum(
+            1 for e in snap.recent_events if _event_severity(e.get("event_type", "")) == "ERR"
+        )
+        warn_count = sum(
+            1 for e in snap.recent_events if _event_severity(e.get("event_type", "")) == "WARN"
+        )
+        if err_count or warn_count:
+            parts: list[str] = []
+            if err_count:
+                parts.append(f"[bold red]{err_count} error(s)[/]")
+            if warn_count:
+                parts.append(f"[yellow]{warn_count} warning(s)[/]")
+            sev_label.update("Events: " + ", ".join(parts))
+        else:
+            sev_label.update("")
 
         # Held issues by category
         fc = self.query_one("#failed-count", Label)
@@ -622,8 +665,10 @@ class EventsLog(Static):
         etype = entry.get("event_type", "?")
         data = entry.get("data")
         color = EVENT_COLORS.get(etype, "white")
+        severity = _event_severity(etype)
+        sev_style = _SEVERITY_STYLE.get(severity, "dim")
         message = _human_message(etype, data)
-        return f"[dim]{ts}[/] [{color}]{message}[/]"
+        return f"[dim]{ts}[/] [{sev_style}][{severity}][/] [{color}]{message}[/]"
 
     def compose(self) -> ComposeResult:
         yield Label("Events", classes="panel-title")
