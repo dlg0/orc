@@ -62,90 +62,6 @@ def _format_run_timestamp(ts: str) -> str:
         return ts
 
 
-class SummaryStrip(Static):
-    """One-line summary strip for at-a-glance orchestrator status."""
-
-    DEFAULT_CSS = """
-    SummaryStrip {
-        height: 1;
-        background: $surface;
-        color: white;
-        padding: 0 1;
-    }
-    """
-
-    def compose(self) -> ComposeResult:
-        yield Label("○ IDLE", id="summary-strip-text")
-
-    def update_snapshot(self, snap: DashboardSnapshot) -> None:
-        color, text = MODE_STYLES.get(
-            snap.state.mode, ("bold white", snap.state.mode.value)
-        )
-        parts: list[str] = [f"[{color}]{text}[/]"]
-
-        # Active agents
-        active = 1 if snap.state.active_issue_id else 0
-        if active:
-            parts.append(f"[bold]{active} active[/]")
-
-        # Queued (only available on full snapshots)
-        if not snap.is_fast and snap.ready_issues is not None:
-            parts.append(f"{len(snap.ready_issues)} queued")
-
-        # Held issues
-        held = len(snap.state.issue_failures)
-        if held:
-            parts.append(f"[bold bright_yellow]{held} held[/]")
-
-        # Error count from events
-        err_count = sum(
-            1 for e in snap.recent_events if _event_severity(e.get("event_type", "")) == "ERR"
-        )
-        if err_count:
-            parts.append(f"[bold red]{err_count} error{'s' if err_count != 1 else ''}[/]")
-
-        # Last refresh time (convert UTC ISO timestamp to local time)
-        try:
-            ts_raw = snap.recent_events[-1].get("timestamp", "") if snap.recent_events else ""
-            if ts_raw and "T" in ts_raw:
-                from datetime import datetime as _dt, timezone as _tz
-                utc_dt = _dt.fromisoformat(ts_raw.replace("Z", "+00:00"))
-                local_str = utc_dt.astimezone().strftime("%H:%M:%S")
-                parts.append(f"[italic]updated {local_str}[/]")
-            elif ts_raw:
-                parts.append(f"[italic]updated {ts_raw}[/]")
-        except (IndexError, AttributeError, ValueError):
-            pass
-
-        self.query_one("#summary-strip-text", Label).update(" | ".join(parts))
-
-    def show_no_project(self) -> None:
-        self.query_one("#summary-strip-text", Label).update(
-            "[bold red]⚠ NOT CONNECTED[/]"
-        )
-
-    def show_transitional(self, text: str) -> None:
-        self.query_one("#summary-strip-text", Label).update(
-            f"[bright_yellow]{text}[/]"
-        )
-
-    def show_frozen(self) -> None:
-        """Prepend a FROZEN badge to the current summary text."""
-        label = self.query_one("#summary-strip-text", Label)
-        current = str(label.renderable)
-        # Avoid stacking multiple FROZEN badges
-        if "FROZEN" not in current:
-            label.update(f"[bold bright_cyan on #003344]❄ FROZEN[/] {current}")
-
-    def hide_frozen(self) -> None:
-        """Remove the FROZEN badge (next update_snapshot will rebuild cleanly)."""
-        label = self.query_one("#summary-strip-text", Label)
-        current = str(label.renderable)
-        # Strip the frozen prefix if present
-        import re
-        label.update(re.sub(r"\[bold bright_cyan on #003344\]❄ FROZEN\[/\] ?", "", current))
-
-
 class StaleBanner(Static):
     """Banner shown when dashboard data is stale or refresh has failed."""
 
@@ -401,14 +317,17 @@ class StatusPanel(Static):
     }
     """
 
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._frozen: bool = False
+
     def compose(self) -> ComposeResult:
         yield Label("Status", classes="panel-title")
         yield Label("[bold white]○ IDLE[/]", id="mode-badge")
         yield Label("[italic]Last refresh: —[/]", id="last-updated")
         yield Label("[italic]Queue last refreshed: —[/]", id="queue-last-refreshed")
-        yield Label("Ready Queue: 0 issue(s)", id="queue-count")
+        yield Label("Ready: 0 | In-progress: 0 | Held: 0", id="counts-summary")
         yield Label("[italic]Events: —[/]", id="event-severity-counts")
-        yield Label("[italic]Held: —[/]", id="failed-count")
         yield Label("[italic]Last completed: —[/]", id="last-completed")
         yield Label("[italic]Last error: —[/]", id="last-error")
         yield ErrorAlert()
@@ -419,9 +338,8 @@ class StatusPanel(Static):
         )
         self.query_one("#last-updated", Label).update("[italic]Last refresh: —[/]")
         self.query_one("#queue-last-refreshed", Label).update("[italic]Queue last refreshed: —[/]")
-        self.query_one("#queue-count", Label).update(NO_PROJECT_PLACEHOLDER)
+        self.query_one("#counts-summary", Label).update(NO_PROJECT_PLACEHOLDER)
         self.query_one("#event-severity-counts", Label).update("[italic]Events: —[/]")
-        self.query_one("#failed-count", Label).update("[italic]Held: —[/]")
         self.query_one("#last-completed", Label).update("[italic]Last completed: —[/]")
         self.query_one("#last-error", Label).update("[italic]Last error: —[/]")
         self.query_one(ErrorAlert).set_error("")
@@ -454,22 +372,52 @@ class StatusPanel(Static):
         """Show a transitional status like 'Starting…' or 'Pausing…'."""
         self.query_one("#mode-badge", Label).update(f"[bright_yellow]{text}[/]")
 
+    def show_frozen(self) -> None:
+        """Show a FROZEN badge on the mode line."""
+        self._frozen = True
+        badge = self.query_one("#mode-badge", Label)
+        current = str(badge.renderable)
+        if "FROZEN" not in current:
+            badge.update(f"[bold bright_cyan on #003344]❄ FROZEN[/] {current}")
+
+    def hide_frozen(self) -> None:
+        """Remove the FROZEN badge (next update_snapshot will rebuild cleanly)."""
+        self._frozen = False
+
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         color, text = MODE_STYLES.get(
             snap.state.mode, ("bold white", snap.state.mode.value)
         )
         badge = self.query_one("#mode-badge", Label)
-        badge.update(f"[{color}]{text}[/]")
+        mode_text = f"[{color}]{text}[/]"
+        if self._frozen:
+            mode_text = f"[bold bright_cyan on #003344]❄ FROZEN[/] {mode_text}"
+        badge.update(mode_text)
 
         if snap.state.mode == OrchestratorMode.error:
             self.add_class("error-state")
         else:
             self.remove_class("error-state")
 
+        # Consolidated counts: Ready | In-progress | Held
+        active = 1 if snap.state.active_issue_id else 0
+        held = len(snap.state.issue_failures)
+        counts = self.query_one("#counts-summary", Label)
         if not snap.is_fast:
-            self.query_one("#queue-count", Label).update(
-                f"Ready Queue: {len(snap.ready_issues)} issue(s)"
-            )
+            ready = len(snap.ready_issues) if snap.ready_issues is not None else 0
+            held_part = f"[bold bright_yellow]{held}[/]" if held else "0"
+            active_part = f"[bold]{active}[/]" if active else "0"
+            counts.update(f"Ready: {ready} | In-progress: {active_part} | Held: {held_part}")
+        else:
+            # Fast refresh: update active and held only (ready unchanged)
+            current = str(counts.renderable)
+            # Extract the current ready count from the label
+            import re
+            m = re.search(r"Ready: (\d+)", current)
+            ready_str = m.group(1) if m else "?"
+            held_part = f"[bold bright_yellow]{held}[/]" if held else "0"
+            active_part = f"[bold]{active}[/]" if active else "0"
+            counts.update(f"Ready: {ready_str} | In-progress: {active_part} | Held: {held_part}")
 
         # Event severity counts
         sev_label = self.query_one("#event-severity-counts", Label)
@@ -488,18 +436,6 @@ class StatusPanel(Static):
             sev_label.update("Events: " + ", ".join(parts))
         else:
             sev_label.update("[italic]Events: —[/]")
-
-        # Held issues by category
-        fc = self.query_one("#failed-count", Label)
-        if snap.state.issue_failures:
-            by_cat: dict[str, int] = {}
-            for info in snap.state.issue_failures.values():
-                cat = info.get("category", "unknown") if isinstance(info, dict) else "unknown"
-                by_cat[cat] = by_cat.get(cat, 0) + 1
-            parts = ", ".join(f"{_CATEGORY_LABELS.get(cat, cat)}: {n}" for cat, n in sorted(by_cat.items()))
-            fc.update(f"[bold red]⚠ Held: {len(snap.state.issue_failures)} ({parts})[/]")
-        else:
-            fc.update("[italic]Held: —[/]")
 
         lc = self.query_one("#last-completed", Label)
         if snap.state.last_completed_issue:
