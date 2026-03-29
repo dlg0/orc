@@ -215,6 +215,7 @@ class OrchestratorApp(App):
         """Manual refresh triggered by 'r' key."""
         was_frozen = self._frozen
         self._frozen = False
+        self.notify("Refreshing\u2026")
         self._do_full_refresh()
         self._frozen = was_frozen
         if was_frozen:
