@@ -90,3 +90,11 @@ def test_history_table_composes() -> None:
     panel = HistoryTable()
     children = list(panel.compose())
     assert len(children) == 2  # Label + DataTable
+
+
+def test_inspect_modal_init() -> None:
+    from amp_orchestrator.tui.modals import InspectModal
+
+    modal = InspectModal(title="Test Title", body="Body text")
+    assert modal._title == "Test Title"
+    assert modal._body == "Body text"

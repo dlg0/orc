@@ -7,7 +7,7 @@ from unittest.mock import patch
 from amp_orchestrator.config import OrchestratorConfig
 from amp_orchestrator.queue import BdIssue
 from amp_orchestrator.state import OrchestratorMode, OrchestratorState, StateStore
-from amp_orchestrator.tui.snapshot import DashboardSnapshot, load_snapshot
+from amp_orchestrator.tui.snapshot import DashboardSnapshot, load_snapshot, load_snapshot_fast
 
 
 def test_load_snapshot_defaults(tmp_path: Path) -> None:
@@ -74,3 +74,43 @@ def test_load_snapshot_config_error_uses_default(tmp_path: Path) -> None:
         snap = load_snapshot(tmp_path, state_dir)
 
     assert snap.config.base_branch == "main"
+
+
+def test_load_snapshot_fast_defaults(tmp_path: Path) -> None:
+    """Fast snapshot returns state and events, no queue."""
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir()
+
+    snap = load_snapshot_fast(state_dir)
+
+    assert snap.state.mode == OrchestratorMode.idle
+    assert snap.ready_issues == []
+    assert snap.recent_events == []
+    assert isinstance(snap.config, OrchestratorConfig)
+
+
+def test_load_snapshot_fast_with_config(tmp_path: Path) -> None:
+    """Fast snapshot uses provided config."""
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir()
+
+    config = OrchestratorConfig(base_branch="develop")
+    snap = load_snapshot_fast(state_dir, config)
+
+    assert snap.config.base_branch == "develop"
+
+
+def test_load_snapshot_fast_with_events(tmp_path: Path) -> None:
+    """Fast snapshot includes recent events."""
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir()
+
+    from amp_orchestrator.events import EventLog, EventType
+
+    events = EventLog(state_dir)
+    events.record(EventType.state_changed, {"to": "running"})
+
+    snap = load_snapshot_fast(state_dir)
+
+    assert len(snap.recent_events) == 1
+    assert snap.ready_issues == []

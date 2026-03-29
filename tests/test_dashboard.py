@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
+from textual.widgets import DataTable
+
 from amp_orchestrator.config import OrchestratorConfig
 from amp_orchestrator.queue import BdIssue
 from amp_orchestrator.state import OrchestratorMode, OrchestratorState, StateStore
@@ -108,6 +110,93 @@ async def test_apply_snapshot_error_state() -> None:
         )
         app._apply_snapshot(snap)
         await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_refresh_binding_no_crash() -> None:
+    """Pressing 'r' triggers action_refresh without error."""
+    app = OrchestratorApp()
+    async with app.run_test() as pilot:
+        await pilot.press("r")
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_app_no_timers_without_paths() -> None:
+    """App without repo_root/state_dir should not start timers."""
+    app = OrchestratorApp()
+    async with app.run_test() as pilot:
+        assert app.query_one(StatusPanel)
+        assert app._config is not None
+
+
+@pytest.mark.asyncio
+async def test_inspect_queue_item() -> None:
+    app = OrchestratorApp()
+    async with app.run_test() as pilot:
+        snap = _make_snap(
+            ready_issues=[
+                BdIssue(
+                    id="bz1",
+                    title="Fix bug",
+                    priority=1,
+                    created="2026-01-01",
+                    description="Some long desc",
+                    acceptance_criteria="It works",
+                ),
+            ],
+        )
+        app._apply_snapshot(snap)
+        await pilot.pause()
+
+        table = app.query_one("#queue-datatable", DataTable)
+        table.focus()
+        await pilot.pause()
+        await pilot.press("i")
+        await pilot.pause()
+
+        from amp_orchestrator.tui.modals import InspectModal
+
+        assert isinstance(app.screen, InspectModal)
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, InspectModal)
+
+
+@pytest.mark.asyncio
+async def test_inspect_history_item() -> None:
+    app = OrchestratorApp()
+    async with app.run_test() as pilot:
+        snap = _make_snap(
+            state=OrchestratorState(
+                run_history=[
+                    {
+                        "issue_id": "bz1",
+                        "result": "completed",
+                        "summary": "done",
+                        "timestamp": "2026-01-01T10:00:00",
+                        "branch": "amp/bz1",
+                    },
+                ],
+            ),
+        )
+        app._apply_snapshot(snap)
+        await pilot.pause()
+
+        table = app.query_one("#history-datatable", DataTable)
+        table.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        from amp_orchestrator.tui.modals import InspectModal
+
+        assert isinstance(app.screen, InspectModal)
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, InspectModal)
 
 
 @pytest.mark.asyncio

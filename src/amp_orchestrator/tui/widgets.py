@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.events import Key
 from textual.widgets import DataTable, Label, RichLog, Static
 
+from amp_orchestrator.queue import BdIssue
 from amp_orchestrator.state import OrchestratorMode
 from amp_orchestrator.tui.snapshot import DashboardSnapshot
 
@@ -156,6 +158,10 @@ class QueueTable(Static):
 
     can_focus = True
 
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._issues: list[BdIssue] = []
+
     def compose(self) -> ComposeResult:
         yield Label("Ready Queue", classes="panel-title")
         yield DataTable(id="queue-datatable", cursor_type="row")
@@ -165,11 +171,43 @@ class QueueTable(Static):
         table.add_columns("Pri", "ID", "Title", "Created")
 
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
+        self._issues = list(snap.ready_issues)
         table = self.query_one("#queue-datatable", DataTable)
         table.clear()
         for issue in snap.ready_issues:
             pri = str(issue.priority) if issue.priority else "-"
             table.add_row(pri, issue.id, issue.title, issue.created)
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        self._show_inspect()
+
+    def on_key(self, event: Key) -> None:
+        if event.key == "i":
+            self._show_inspect()
+
+    def _show_inspect(self) -> None:
+        table = self.query_one("#queue-datatable", DataTable)
+        if not self._issues or table.row_count == 0:
+            return
+        row_idx = table.cursor_row
+        if row_idx < 0 or row_idx >= len(self._issues):
+            return
+        issue = self._issues[row_idx]
+        title = f"Issue: {issue.id}"
+        lines = [
+            f"[bold]Title:[/] {issue.title}",
+            f"[bold]Priority:[/] {issue.priority}",
+            f"[bold]Created:[/] {issue.created}",
+        ]
+        if issue.description:
+            lines.append(f"\n[bold]Description:[/]\n{issue.description}")
+        if issue.acceptance_criteria:
+            lines.append(
+                f"\n[bold]Acceptance Criteria:[/]\n{issue.acceptance_criteria}"
+            )
+        from amp_orchestrator.tui.modals import InspectModal
+
+        self.app.push_screen(InspectModal(title=title, body="\n".join(lines)))
 
 
 class EventsLog(Static):
@@ -224,6 +262,10 @@ class HistoryTable(Static):
 
     can_focus = True
 
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._runs: list[dict] = []
+
     def compose(self) -> ComposeResult:
         yield Label("Run History", classes="panel-title")
         yield DataTable(id="history-datatable", cursor_type="row")
@@ -233,9 +275,10 @@ class HistoryTable(Static):
         table.add_columns("Timestamp", "Issue", "Result", "Branch", "Summary")
 
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
+        self._runs = list(reversed(snap.state.run_history))
         table = self.query_one("#history-datatable", DataTable)
         table.clear()
-        for run in reversed(snap.state.run_history):
+        for run in self._runs:
             ts = run.get("timestamp", "")
             if "T" in ts:
                 ts = ts.split("T")[0]
@@ -244,3 +287,34 @@ class HistoryTable(Static):
             branch = run.get("branch", "")
             summary = run.get("summary", "")
             table.add_row(ts, issue_id, result, branch, summary)
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        self._show_inspect()
+
+    def on_key(self, event: Key) -> None:
+        if event.key == "i":
+            self._show_inspect()
+
+    def _show_inspect(self) -> None:
+        table = self.query_one("#history-datatable", DataTable)
+        if not self._runs or table.row_count == 0:
+            return
+        row_idx = table.cursor_row
+        if row_idx < 0 or row_idx >= len(self._runs):
+            return
+        run = self._runs[row_idx]
+        title = f"Run: {run.get('issue_id', '?')}"
+        lines = [
+            f"[bold]Issue:[/] {run.get('issue_id', '')}",
+            f"[bold]Result:[/] {run.get('result', '')}",
+            f"[bold]Timestamp:[/] {run.get('timestamp', '')}",
+        ]
+        if run.get("branch"):
+            lines.append(f"[bold]Branch:[/] {run['branch']}")
+        if run.get("worktree_path"):
+            lines.append(f"[bold]Worktree:[/] {run['worktree_path']}")
+        if run.get("summary"):
+            lines.append(f"\n[bold]Summary:[/]\n{run['summary']}")
+        from amp_orchestrator.tui.modals import InspectModal
+
+        self.app.push_screen(InspectModal(title=title, body="\n".join(lines)))
