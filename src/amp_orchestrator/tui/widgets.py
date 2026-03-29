@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.events import Key
 from textual.widgets import Button, DataTable, Label, RichLog, Static
 
 from amp_orchestrator.queue import BdIssue
@@ -275,13 +275,18 @@ class QueueTable(Static):
 
     can_focus = True
 
+    BINDINGS = [
+        Binding("enter", "inspect", "Inspect", show=True),
+        Binding("i", "inspect", "Inspect", show=False),
+    ]
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._issues: list[BdIssue] = []
         self._row_key: list[str] = []
 
     def compose(self) -> ComposeResult:
-        yield Label("Ready Queue", classes="panel-title")
+        yield Label("Ready Queue (Enter/i to inspect)", classes="panel-title")
         yield DataTable(id="queue-datatable", cursor_type="row")
 
     def on_mount(self) -> None:
@@ -311,12 +316,8 @@ class QueueTable(Static):
         if table.row_count > 0:
             table.move_cursor(row=min(saved_cursor, table.row_count - 1))
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    def action_inspect(self) -> None:
         self._show_inspect()
-
-    def on_key(self, event: Key) -> None:
-        if event.key == "i":
-            self._show_inspect()
 
     def _show_inspect(self) -> None:
         table = self.query_one("#queue-datatable", DataTable)
@@ -431,13 +432,18 @@ class HistoryTable(Static):
 
     can_focus = True
 
+    BINDINGS = [
+        Binding("enter", "inspect", "Inspect", show=True),
+        Binding("i", "inspect", "Inspect", show=False),
+    ]
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._runs: list[dict] = []
         self._row_key: list[str] = []
 
     def compose(self) -> ComposeResult:
-        yield Label("Run History", classes="panel-title")
+        yield Label("Run History (Enter/i to inspect)", classes="panel-title")
         yield DataTable(id="history-datatable", cursor_type="row")
 
     def on_mount(self) -> None:
@@ -481,12 +487,8 @@ class HistoryTable(Static):
         if table.row_count > 0:
             table.move_cursor(row=min(saved_cursor, table.row_count - 1))
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    def action_inspect(self) -> None:
         self._show_inspect()
-
-    def on_key(self, event: Key) -> None:
-        if event.key == "i":
-            self._show_inspect()
 
     def _show_inspect(self) -> None:
         table = self.query_one("#history-datatable", DataTable)

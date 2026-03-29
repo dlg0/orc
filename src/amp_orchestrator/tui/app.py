@@ -51,8 +51,8 @@ class OrchestratorApp(App):
         ("p", "pause", "Pause"),
         ("u", "resume", "Resume"),
         ("x", "stop", "Stop"),
-        ("tab", "focus_next", "Next Panel"),
-        ("shift+tab", "focus_previous", "Prev Panel"),
+        ("tab", "focus_next", "Next Focus"),
+        ("shift+tab", "focus_previous", "Previous Focus"),
         ("c", "toggle_config", "Config"),
         ("question_mark", "help", "Help"),
     ]

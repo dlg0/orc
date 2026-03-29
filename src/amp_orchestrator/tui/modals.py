@@ -99,8 +99,8 @@ _HELP_BINDINGS = [
     ("u", "Resume orchestrator"),
     ("x", "Stop orchestrator"),
     ("i / Enter", "Inspect selected item"),
-    ("Tab", "Next panel"),
-    ("Shift+Tab", "Previous panel"),
+    ("Tab", "Next focus"),
+    ("Shift+Tab", "Previous focus"),
     ("?", "Toggle this help"),
 ]
 
