@@ -245,13 +245,15 @@ def test_app_refresh_tracking_fields() -> None:
 
 
 def test_help_modal_has_bindings() -> None:
-    from amp_orchestrator.tui.modals import _HELP_BINDINGS
+    from amp_orchestrator.tui.modals import get_help_bindings
 
-    assert len(_HELP_BINDINGS) >= 9
-    keys = [k for k, _ in _HELP_BINDINGS]
+    bindings = get_help_bindings()
+    assert len(bindings) >= 9
+    keys = [k for k, _ in bindings]
     assert "q" in keys
     assert "r" in keys
     assert "?" in keys
+    assert "c" in keys  # toggle_config must appear in help
 
 
 # --- _event_severity tests ---

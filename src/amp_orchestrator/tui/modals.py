@@ -103,18 +103,35 @@ class ConfirmStopModal(ModalScreen[bool]):
         self.dismiss(False)
 
 
-_HELP_BINDINGS = [
-    ("q", "Quit"),
-    ("r", "Refresh"),
-    ("s", "Start orchestrator"),
-    ("p", "Pause orchestrator"),
-    ("u", "Resume orchestrator"),
-    ("x", "Stop orchestrator"),
-    ("i / Enter", "Inspect selected item"),
-    ("Tab", "Next focus"),
-    ("Shift+Tab", "Previous focus"),
-    ("?", "Show this help"),
-]
+def _build_help_bindings() -> list[tuple[str, str]]:
+    """Generate help bindings from OrchestratorApp.BINDINGS.
+
+    This keeps the help modal always in sync with actual keybindings.
+    """
+    from amp_orchestrator.tui.app import OrchestratorApp
+
+    # Friendly display names for Textual key identifiers
+    _KEY_DISPLAY: dict[str, str] = {
+        "question_mark": "?",
+        "tab": "Tab",
+        "shift+tab": "Shift+Tab",
+    }
+
+    bindings: list[tuple[str, str]] = []
+    for binding in OrchestratorApp.BINDINGS:
+        if isinstance(binding, tuple):
+            key, _action, description = binding
+        else:
+            key = binding.key
+            description = binding.description or binding.action
+        display_key = _KEY_DISPLAY.get(key, key)
+        bindings.append((display_key, description))
+    return bindings
+
+
+def get_help_bindings() -> list[tuple[str, str]]:
+    """Public accessor for the generated help bindings list."""
+    return _build_help_bindings()
 
 
 class HelpModal(ModalScreen[None]):
@@ -146,5 +163,5 @@ class HelpModal(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="help-dialog"):
             yield Label("Key Bindings", id="help-title")
-            for key, desc in _HELP_BINDINGS:
+            for key, desc in _build_help_bindings():
                 yield Static(f"  [bold]{key:<16}[/] {desc}")
