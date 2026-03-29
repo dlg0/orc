@@ -78,12 +78,13 @@ def status() -> None:
 
 
 @main.command()
-def start() -> None:
+@click.option("--fail-fast", is_flag=True, default=False, help="Stop on the first issue failure instead of continuing.")
+def start(fail_fast: bool) -> None:
     """Begin processing ready issues."""
     project = detect_project()
     repo_root = project.repo_root
     state_dir = repo_root / CONFIG_DIR
-    start_orchestrator(repo_root, state_dir)
+    start_orchestrator(repo_root, state_dir, fail_fast=fail_fast)
 
 
 @main.command()
@@ -94,12 +95,13 @@ def pause() -> None:
 
 
 @main.command()
-def resume() -> None:
+@click.option("--fail-fast", is_flag=True, default=False, help="Stop on the first issue failure instead of continuing.")
+def resume(fail_fast: bool) -> None:
     """Continue from paused state."""
     project = detect_project()
     repo_root = project.repo_root
     state_dir = repo_root / CONFIG_DIR
-    resume_orchestrator(repo_root, state_dir)
+    resume_orchestrator(repo_root, state_dir, fail_fast=fail_fast)
 
 
 @main.command()

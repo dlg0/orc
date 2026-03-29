@@ -35,6 +35,7 @@ class OrchestratorConfig:
     context_window_warn_threshold: float = 0.85
     summary_mode: str = "self-report"  # "self-report" | "rush-extract" | "stream-json"
     summary_amp_mode: str = "rush"
+    fail_fast: bool = False
 
 
 CONFIG_DIR = ".amp-orchestrator"
@@ -118,6 +119,7 @@ def create_default_config(repo_root: Path) -> Path:
         "context_window_warn_threshold": config.context_window_warn_threshold,
         "summary_mode": config.summary_mode,
         "summary_amp_mode": config.summary_amp_mode,
+        "fail_fast": config.fail_fast,
     }
 
     config_path = config_dir / CONFIG_FILE

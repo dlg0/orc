@@ -87,6 +87,7 @@ def run_loop(
     config: OrchestratorConfig,
     runner: AmpRunner,
     evaluator: IssueEvaluator | None = None,
+    fail_fast: bool = False,
 ) -> None:
     """Run the main scheduler loop until the queue is empty or stopped."""
     store = StateStore(state_dir)
@@ -94,6 +95,8 @@ def run_loop(
     worktree_mgr = WorktreeManager(repo_root, config.base_branch)
     state = store.load()
     issue_num = 0
+    # CLI flag takes precedence; fall back to config file setting
+    fail_fast = fail_fast or config.fail_fast
 
     while True:
         state = store.load()
@@ -160,6 +163,11 @@ def run_loop(
             wt_category = FailureCategory.transient_external if isinstance(exc, OSError) else FailureCategory.fatal_run_error
             _record_failure(store, state, issue.id, wt_category, "worktree", str(exc))
             _record_run(store, state, issue.id, "failed", str(exc), amp_mode=config.amp_mode)
+            if fail_fast:
+                click.echo("[SCHEDULER] Fail-fast: stopping after worktree failure")
+                store.transition(state, OrchestratorMode.idle)
+                events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
+                return
             continue
 
         click.echo(f"[WORKTREE] {issue.id} branch={wt_info.branch_name}")
@@ -205,6 +213,11 @@ def run_loop(
             _clear_active(store, state)
             _record_run(store, state, issue.id, "failed", str(exc), worktree_path=str(wt_info.worktree_path), amp_mode=config.amp_mode)
             _try_cleanup(worktree_mgr, wt_info)
+            if fail_fast:
+                click.echo("[SCHEDULER] Fail-fast: stopping after amp failure")
+                store.transition(state, OrchestratorMode.idle)
+                events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
+                return
             continue
 
         amp_finished_data: dict = {
@@ -267,6 +280,11 @@ def run_loop(
             _clear_active(store, state)
             _record_run(store, state, issue.id, "decomposed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
+            if fail_fast:
+                click.echo("[SCHEDULER] Fail-fast: stopping after decomposed result")
+                store.transition(state, OrchestratorMode.idle)
+                events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
+                return
             continue
 
         if result.result == ResultType.blocked:
@@ -278,6 +296,11 @@ def run_loop(
             _clear_active(store, state)
             _record_run(store, state, issue.id, result.result.value, result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
+            if fail_fast:
+                click.echo("[SCHEDULER] Fail-fast: stopping after blocked result")
+                store.transition(state, OrchestratorMode.idle)
+                events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
+                return
             continue
 
         if result.result in (ResultType.failed, ResultType.needs_human):
@@ -289,6 +312,11 @@ def run_loop(
             _clear_active(store, state)
             _record_run(store, state, issue.id, result.result.value, result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
+            if fail_fast:
+                click.echo(f"[SCHEDULER] Fail-fast: stopping after {result.result.value} result")
+                store.transition(state, OrchestratorMode.idle)
+                events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
+                return
             continue
 
         if not result.merge_ready:
@@ -299,6 +327,11 @@ def run_loop(
             )
             _clear_active(store, state)
             _record_run(store, state, issue.id, "completed_no_merge", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
+            if fail_fast:
+                click.echo("[SCHEDULER] Fail-fast: stopping after completed_no_merge result")
+                store.transition(state, OrchestratorMode.idle)
+                events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
+                return
             continue
 
         # Independent evaluation
@@ -348,6 +381,11 @@ def run_loop(
                     wt_info.branch_name, wt_path, amp_mode=config.amp_mode,
                     extra=rework_extra,
                 )
+                if fail_fast:
+                    click.echo("[SCHEDULER] Fail-fast: stopping after evaluation failure")
+                    store.transition(state, OrchestratorMode.idle)
+                    events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
+                    return
                 continue
 
         # Verify and merge
@@ -398,6 +436,11 @@ def run_loop(
             # Preserve worktree for conflict failures
             if not preserve:
                 _try_cleanup(worktree_mgr, wt_info)
+            if fail_fast:
+                click.echo("[SCHEDULER] Fail-fast: stopping after merge failure")
+                store.transition(state, OrchestratorMode.idle)
+                events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
+                return
 
 
 def _clear_active(store: StateStore, state: OrchestratorState) -> None:

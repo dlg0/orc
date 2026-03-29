@@ -18,7 +18,7 @@ from amp_orchestrator.scheduler import run_loop
 from amp_orchestrator.state import OrchestratorMode, StateStore
 
 
-def start_orchestrator(repo_root: Path, state_dir: Path) -> None:
+def start_orchestrator(repo_root: Path, state_dir: Path, *, fail_fast: bool = False) -> None:
     """Begin processing ready issues.
 
     Acquires the process lock, handles crash recovery, transitions to running,
@@ -80,7 +80,7 @@ def start_orchestrator(repo_root: Path, state_dir: Path) -> None:
             mode=config.evaluation_mode or config.amp_mode,
             timeout=config.evaluation_timeout,
         ) if config.enable_evaluation else None
-        run_loop(repo_root, state_dir, config, runner, evaluator=evaluator)
+        run_loop(repo_root, state_dir, config, runner, evaluator=evaluator, fail_fast=fail_fast)
     except Exception:
         # Ensure state goes back to error on unexpected failure
         try:
@@ -114,7 +114,7 @@ def pause_orchestrator(state_dir: Path) -> None:
     click.echo("[SCHEDULER] Pause requested -- will pause after current issue completes")
 
 
-def resume_orchestrator(repo_root: Path, state_dir: Path) -> None:
+def resume_orchestrator(repo_root: Path, state_dir: Path, *, fail_fast: bool = False) -> None:
     """Resume from paused state.
 
     Acquires the process lock, transitions to running, loads config, creates a
@@ -149,7 +149,7 @@ def resume_orchestrator(repo_root: Path, state_dir: Path) -> None:
             mode=config.evaluation_mode or config.amp_mode,
             timeout=config.evaluation_timeout,
         ) if config.enable_evaluation else None
-        run_loop(repo_root, state_dir, config, runner, evaluator=evaluator)
+        run_loop(repo_root, state_dir, config, runner, evaluator=evaluator, fail_fast=fail_fast)
     except Exception:
         try:
             store = StateStore(state_dir)

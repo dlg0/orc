@@ -1073,3 +1073,174 @@ def test_completed_no_merge_records_issue_needs_rework(repo_root: Path, state_di
     assert "test-1" in state.issue_failures
     assert state.issue_failures["test-1"]["category"] == "issue_needs_rework"
     assert state.run_history[0]["result"] == "completed_no_merge"
+
+
+# --- fail-fast tests ---
+
+
+def test_fail_fast_stops_on_failed_issue(repo_root: Path, state_dir: Path) -> None:
+    """With fail_fast=True, a failed issue stops the loop instead of continuing."""
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+
+    issue1 = _make_issue("fail-1", "Failing issue")
+    issue2 = _make_issue("ok-2", "Good issue")
+
+    runner = MagicMock()
+    runner.run.return_value = AmpResult(result=ResultType.failed, summary="boom")
+
+    def fake_ready(cwd=None):
+        return QueueResult(issues=[issue1, issue2])
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "fail-1"
+    mock_wt_info.branch_name = "amp/fail-1"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, config, runner, fail_fast=True)
+
+    state = StateStore(state_dir).load()
+    assert state.mode == OrchestratorMode.idle
+    # Only one issue processed — the second was never attempted
+    assert len(state.run_history) == 1
+    assert state.run_history[0]["issue_id"] == "fail-1"
+    assert "fail-1" in state.issue_failures
+
+
+def test_fail_fast_stops_on_merge_failure(repo_root: Path, state_dir: Path) -> None:
+    """With fail_fast=True, a merge failure stops the loop."""
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    runner = StubAmpRunner.completed()
+    issue = _make_issue()
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return QueueResult(issues=[issue])
+        return QueueResult()
+
+    mock_merge = MagicMock()
+    mock_merge.return_value = MagicMock(
+        success=False, stage="rebase", error="conflict detected",
+    )
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
+    mock_wt_info.branch_name = "amp/test-1"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, config, runner, fail_fast=True)
+
+    state = StateStore(state_dir).load()
+    assert state.mode == OrchestratorMode.idle
+    assert "test-1" in state.issue_failures
+
+
+def test_fail_fast_stops_on_evaluation_failure(repo_root: Path, state_dir: Path) -> None:
+    """With fail_fast=True, an evaluation failure stops the loop."""
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    runner = StubAmpRunner.completed()
+    evaluator = StubEvaluator.failed()
+    issue = _make_issue()
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return QueueResult(issues=[issue])
+        return QueueResult()
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
+    mock_wt_info.branch_name = "amp/test-1"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, config, runner, evaluator=evaluator, fail_fast=True)
+
+    state = StateStore(state_dir).load()
+    assert state.mode == OrchestratorMode.idle
+    assert "test-1" in state.issue_failures
+    assert len(state.run_history) == 1
+
+
+def test_fail_fast_from_config(repo_root: Path, state_dir: Path) -> None:
+    """fail_fast=True in config has the same effect as the CLI flag."""
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig(fail_fast=True)
+
+    runner = MagicMock()
+    runner.run.return_value = AmpResult(result=ResultType.failed, summary="boom")
+
+    def fake_ready(cwd=None):
+        return QueueResult(issues=[_make_issue()])
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
+    mock_wt_info.branch_name = "amp/test-1"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, config, runner)
+
+    state = StateStore(state_dir).load()
+    assert state.mode == OrchestratorMode.idle
+    assert len(state.run_history) == 1
+
+
+def test_fail_fast_records_event(repo_root: Path, state_dir: Path) -> None:
+    """Fail-fast stop records a state_changed event with reason=fail_fast."""
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+
+    runner = MagicMock()
+    runner.run.return_value = AmpResult(result=ResultType.failed, summary="boom")
+
+    def fake_ready(cwd=None):
+        return QueueResult(issues=[_make_issue()])
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
+    mock_wt_info.branch_name = "amp/test-1"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, config, runner, fail_fast=True)
+
+    events = EventLog(state_dir).all()
+    fail_fast_events = [
+        e for e in events
+        if e.get("event_type") == "state_changed"
+        and e.get("data", {}).get("reason") == "fail_fast"
+    ]
+    assert len(fail_fast_events) == 1
