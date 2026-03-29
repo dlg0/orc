@@ -183,6 +183,7 @@ class ConfigPanel(Static):
             f"Base branch: {cfg.base_branch}",
             f"Auto push: {cfg.auto_push}",
             f"Amp mode: {cfg.amp_mode}",
+            f"Summary: {cfg.summary_mode}",
         ]
         if cfg.verification_commands:
             lines.append(f"Verify: {', '.join(cfg.verification_commands)}")
@@ -491,6 +492,8 @@ class HistoryTable(Static):
             lines.append(f"[bold]Branch:[/] {run['branch']}")
         if run.get("worktree_path"):
             lines.append(f"[bold]Worktree:[/] {run['worktree_path']}")
+        if run.get("thread_id"):
+            lines.append(f"[bold]Thread:[/] {run['thread_id']}")
         if run.get("summary"):
             lines.append(f"\n[bold]Summary:[/]\n{run['summary']}")
         from amp_orchestrator.tui.modals import InspectModal

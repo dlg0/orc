@@ -87,6 +87,30 @@ def test_create_default_config_includes_context_window_warn_threshold(tmp_path: 
     assert data["context_window_warn_threshold"] == 0.85
 
 
+def test_summary_mode_defaults() -> None:
+    config = OrchestratorConfig()
+    assert config.summary_mode == "self-report"
+    assert config.summary_amp_mode == "rush"
+
+
+def test_summary_mode_from_yaml(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".amp-orchestrator"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.yaml").write_text(
+        yaml.dump({"summary_mode": "rush-extract", "summary_amp_mode": "smart"})
+    )
+    config = load_config(tmp_path)
+    assert config.summary_mode == "rush-extract"
+    assert config.summary_amp_mode == "smart"
+
+
+def test_create_default_config_includes_summary_fields(tmp_path: Path) -> None:
+    path = create_default_config(tmp_path)
+    data = yaml.safe_load(path.read_text())
+    assert data["summary_mode"] == "self-report"
+    assert data["summary_amp_mode"] == "rush"
+
+
 def test_max_workers_gt_1_rejected(tmp_path: Path) -> None:
     cfg_dir = tmp_path / ".amp-orchestrator"
     cfg_dir.mkdir()

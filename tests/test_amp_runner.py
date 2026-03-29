@@ -233,3 +233,103 @@ def test_real_runner_passes_worktree_env(mock_env, mock_run, mock_which) -> None
     # The first subprocess.run call is the amp invocation
     amp_call = mock_run.call_args_list[0]
     assert amp_call[1]["env"] is fake_env
+
+
+# --- AmpResult thread_id ---
+
+
+def test_amp_result_thread_id_default_none() -> None:
+    r = AmpResult(result=ResultType.completed, summary="done")
+    assert r.thread_id is None
+
+
+def test_amp_result_thread_id_set() -> None:
+    r = AmpResult(result=ResultType.completed, summary="done", thread_id="abc-123")
+    assert r.thread_id == "abc-123"
+
+
+# --- Stream JSON thread_id extraction ---
+
+
+def test_parse_stream_json_captures_thread_id() -> None:
+    import subprocess as _sp
+
+    stream_output = (
+        '{"type":"session_start","thread_id":"T-aaa-bbb-ccc"}\n'
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"```json\\n{\\"result\\": \\"completed\\", \\"summary\\": \\"done\\", \\"merge_ready\\": false}\\n```"}]}}\n'
+        '{"type":"result","is_error":false,"usage":{"input_tokens":100,"max_tokens":1000}}\n'
+    )
+    proc = _sp.CompletedProcess(args=["amp"], returncode=0, stdout=stream_output, stderr="")
+    runner = RealAmpRunner()
+    result = runner._parse_stream_json(proc, Path("/tmp/worktree"))
+    assert result.thread_id == "T-aaa-bbb-ccc"
+
+
+def test_parse_stream_json_no_thread_id() -> None:
+    import subprocess as _sp
+
+    stream_output = (
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"```json\\n{\\"result\\": \\"completed\\", \\"summary\\": \\"done\\", \\"merge_ready\\": false}\\n```"}]}}\n'
+        '{"type":"result","is_error":false}\n'
+    )
+    proc = _sp.CompletedProcess(args=["amp"], returncode=0, stdout=stream_output, stderr="")
+    runner = RealAmpRunner()
+    result = runner._parse_stream_json(proc, Path("/tmp/worktree"))
+    assert result.thread_id is None
+
+
+def test_parse_stream_json_thread_id_on_error() -> None:
+    import subprocess as _sp
+
+    stream_output = '{"type":"session_start","thread_id":"T-err-111"}\n{"type":"result","is_error":true,"error":"oops"}\n'
+    proc = _sp.CompletedProcess(args=["amp"], returncode=0, stdout=stream_output, stderr="")
+    runner = RealAmpRunner()
+    result = runner._parse_stream_json(proc, Path("/tmp/worktree"))
+    assert result.thread_id == "T-err-111"
+    assert result.result == ResultType.failed
+
+
+# --- Rush summary extraction ---
+
+
+@patch("amp_orchestrator.amp_runner.shutil.which", return_value="/usr/bin/amp")
+@patch("amp_orchestrator.amp_runner.subprocess.run")
+def test_extract_rush_summary_success(mock_run, mock_which) -> None:
+    import subprocess as _sp
+
+    mock_run.return_value = _sp.CompletedProcess(
+        args=["amp"], returncode=0,
+        stdout="Implemented authentication module with JWT tokens.\n",
+        stderr="",
+    )
+    result = RealAmpRunner.extract_rush_summary("aaa-bbb", Path("/tmp"))
+    assert result == "Implemented authentication module with JWT tokens."
+    # Verify --archive flag is passed
+    cmd = mock_run.call_args[0][0]
+    assert "--archive" in cmd
+    assert "--mode" in cmd
+
+
+@patch("amp_orchestrator.amp_runner.shutil.which", return_value="/usr/bin/amp")
+@patch("amp_orchestrator.amp_runner.subprocess.run")
+def test_extract_rush_summary_failure(mock_run, mock_which) -> None:
+    import subprocess as _sp
+
+    mock_run.return_value = _sp.CompletedProcess(
+        args=["amp"], returncode=1, stdout="", stderr="error",
+    )
+    result = RealAmpRunner.extract_rush_summary("aaa-bbb", Path("/tmp"))
+    assert result is None
+
+
+@patch("amp_orchestrator.amp_runner.shutil.which", return_value=None)
+def test_extract_rush_summary_no_amp(mock_which) -> None:
+    result = RealAmpRunner.extract_rush_summary("aaa-bbb", Path("/tmp"))
+    assert result is None
+
+
+@patch("amp_orchestrator.amp_runner.shutil.which", return_value="/usr/bin/amp")
+@patch("amp_orchestrator.amp_runner.subprocess.run", side_effect=__import__("subprocess").TimeoutExpired(cmd="amp", timeout=120))
+def test_extract_rush_summary_timeout(mock_run, mock_which) -> None:
+    result = RealAmpRunner.extract_rush_summary("aaa-bbb", Path("/tmp"))
+    assert result is None
