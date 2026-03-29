@@ -15,6 +15,7 @@ from amp_orchestrator.tui.widgets import (
     MODE_STYLES,
     NO_PROJECT_PLACEHOLDER,
     _ACTION_ENABLED,
+    _human_message,
     ActiveIssuePanel,
     ConfigPanel,
     ControlsPanel,
@@ -171,3 +172,42 @@ def test_help_modal_has_bindings() -> None:
     assert "q" in keys
     assert "r" in keys
     assert "?" in keys
+
+
+# --- _human_message tests ---
+
+
+@pytest.mark.parametrize(
+    "event_type, data, expected_substring",
+    [
+        ("issue_selected", {"issue_id": "X-1", "title": "Fix bug"}, "Selected issue X-1: Fix bug"),
+        ("issue_selected", {"issue_id": "X-1"}, "Selected issue X-1"),
+        ("amp_started", {"issue_id": "X-2"}, "Agent started on X-2"),
+        ("amp_started", None, "Agent started"),
+        (
+            "amp_finished",
+            {"issue_id": "X-3", "result": "completed", "summary": "done"},
+            "Agent finished X-3 (completed)",
+        ),
+        ("amp_finished", {}, "Agent finished"),
+        ("verification_run", {"issue_id": "X-4", "command": "pytest", "result": "pass"}, "Verification on X-4: pytest [pass]"),
+        ("merge_attempt", {"issue_id": "X-5"}, "Merge attempt for X-5"),
+        ("issue_closed", {"issue_id": "X-6"}, "Issue X-6 closed"),
+        ("pause_requested", None, "Pause requested"),
+        ("stop_requested", None, "Stop requested"),
+        ("state_changed", {"from": "paused", "to": "running"}, "State paused → running"),
+        ("state_changed", {"to": "idle", "reason": "queue_empty"}, "State → idle (queue_empty)"),
+        ("error", {"issue_id": "X-7", "stage": "amp", "error": "timeout"}, "Error on X-7 [amp]: timeout"),
+        ("evaluation_started", {"issue_id": "X-8"}, "Evaluation started for X-8"),
+        ("evaluation_finished", {"issue_id": "X-9"}, "Evaluation finished for X-9"),
+        ("issue_needs_rework", {"issue_id": "X-10"}, "Issue X-10 needs rework"),
+        ("conflict_detected", {"issue_id": "X-11", "branch": "feat/x"}, "Conflict detected on X-11 (branch: feat/x)"),
+        ("conflict_resolution_started", {"issue_id": "X-12"}, "Conflict resolution started for X-12"),
+        ("conflict_resolution_finished", {"issue_id": "X-13", "result": "success"}, "Conflict resolution finished for X-13 (success)"),
+        ("unknown_event", {"foo": "bar"}, "unknown_event"),
+        ("unknown_event", None, "unknown_event"),
+    ],
+)
+def test_human_message(event_type: str, data: dict | None, expected_substring: str) -> None:
+    result = _human_message(event_type, data)
+    assert expected_substring in result
