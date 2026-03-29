@@ -13,9 +13,9 @@ from amp_orchestrator.tui.snapshot import DashboardSnapshot
 
 MODE_STYLES: dict[OrchestratorMode, tuple[str, str]] = {
     OrchestratorMode.running: ("green", "● RUNNING"),
-    OrchestratorMode.paused: ("yellow", "⏸ PAUSED"),
+    OrchestratorMode.paused: ("dark_orange", "⏸ PAUSED"),
     OrchestratorMode.pause_requested: ("yellow", "⏸ PAUSE REQUESTED"),
-    OrchestratorMode.stopping: ("yellow", "■ STOPPING"),
+    OrchestratorMode.stopping: ("orange1", "■ STOPPING"),
     OrchestratorMode.error: ("red", "✖ ERROR"),
     OrchestratorMode.idle: ("grey", "○ IDLE"),
 }
@@ -43,6 +43,9 @@ class StatusPanel(Static):
         border: solid grey;
         padding: 0 1;
     }
+    StatusPanel.error-state {
+        border: solid red;
+    }
     StatusPanel .panel-title {
         text-style: bold;
     }
@@ -50,7 +53,7 @@ class StatusPanel(Static):
 
     def compose(self) -> ComposeResult:
         yield Label("Status", classes="panel-title")
-        yield Label("○ IDLE", id="mode-badge")
+        yield Label("[grey]○ IDLE[/]", id="mode-badge")
         yield Label("Queue: 0 issue(s)", id="queue-count")
         yield Label("", id="last-completed")
         yield Label("", id="last-error")
@@ -62,13 +65,18 @@ class StatusPanel(Static):
         badge = self.query_one("#mode-badge", Label)
         badge.update(f"[{color}]{text}[/]")
 
+        if snap.state.mode == OrchestratorMode.error:
+            self.add_class("error-state")
+        else:
+            self.remove_class("error-state")
+
         self.query_one("#queue-count", Label).update(
             f"Queue: {len(snap.ready_issues)} issue(s)"
         )
 
         lc = self.query_one("#last-completed", Label)
         if snap.state.last_completed_issue:
-            lc.update(f"Last completed: {snap.state.last_completed_issue}")
+            lc.update(f"[green]Last completed: {snap.state.last_completed_issue}[/]")
         else:
             lc.update("")
 
@@ -95,7 +103,7 @@ class ActiveIssuePanel(Static):
 
     def compose(self) -> ComposeResult:
         yield Label("Active Issue", classes="panel-title")
-        yield Label("No active issue", id="active-detail")
+        yield Label("[dim]No active issue[/]", id="active-detail")
 
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         detail = self.query_one("#active-detail", Label)
@@ -109,7 +117,7 @@ class ActiveIssuePanel(Static):
                 lines.append(f"  Worktree: {snap.state.active_worktree_path}")
             detail.update("\n".join(lines))
         else:
-            detail.update("No active issue")
+            detail.update("[dim]No active issue[/]")
 
 
 class ConfigPanel(Static):
@@ -223,6 +231,9 @@ class QueueTable(Static):
         self._issues = list(snap.ready_issues)
         table = self.query_one("#queue-datatable", DataTable)
         table.clear()
+        if not snap.ready_issues:
+            table.add_row("-", "-", "[dim]No issues in queue[/]", "-")
+            return
         for issue in snap.ready_issues:
             pri = str(issue.priority) if issue.priority else "-"
             table.add_row(pri, issue.id, issue.title, issue.created)
@@ -282,6 +293,9 @@ class EventsLog(Static):
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         log = self.query_one("#events-richlog", RichLog)
         log.clear()
+        if not snap.recent_events:
+            log.write("[dim]No events yet[/]")
+            return
         for entry in snap.recent_events:
             ts = entry.get("timestamp", "?")
             if "T" in ts:
@@ -327,12 +341,18 @@ class HistoryTable(Static):
         self._runs = list(reversed(snap.state.run_history))
         table = self.query_one("#history-datatable", DataTable)
         table.clear()
+        if not self._runs:
+            table.add_row("-", "-", "[dim]No run history[/]", "-", "-")
+            return
         for run in self._runs:
             ts = run.get("timestamp", "")
             if "T" in ts:
                 ts = ts.split("T")[0]
             issue_id = run.get("issue_id", "")
-            result = run.get("result", "")
+            raw_result = run.get("result", "")
+            result_colors = {"completed": "green", "failed": "red", "error": "red"}
+            rc = result_colors.get(raw_result, "white")
+            result = f"[{rc}]{raw_result}[/]"
             branch = run.get("branch", "")
             summary = run.get("summary", "")
             table.add_row(ts, issue_id, result, branch, summary)

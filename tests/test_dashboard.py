@@ -77,7 +77,7 @@ async def test_apply_snapshot_running() -> None:
         assert queue_table.row_count == 2
 
         history_table = app.query_one("#history-datatable")
-        assert history_table.row_count == 0
+        assert history_table.row_count == 1  # empty-state placeholder row
 
 
 @pytest.mark.asyncio
