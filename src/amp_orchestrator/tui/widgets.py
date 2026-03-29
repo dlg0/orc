@@ -361,7 +361,7 @@ class StatusPanel(Static):
     def show_stale(self) -> None:
         """Show STALE badge on the last-refresh label."""
         label = self.query_one("#last-updated", Label)
-        current = str(label.renderable)
+        current = str(label.render())
         if "STALE" not in current:
             # Extract time from current text
             label.update(
@@ -376,7 +376,7 @@ class StatusPanel(Static):
         """Show a FROZEN badge on the mode line."""
         self._frozen = True
         badge = self.query_one("#mode-badge", Label)
-        current = str(badge.renderable)
+        current = str(badge.render())
         if "FROZEN" not in current:
             badge.update(f"[bold bright_cyan on #003344]❄ FROZEN[/] {current}")
 
@@ -411,7 +411,7 @@ class StatusPanel(Static):
             counts.update(f"Ready: {ready_part} | In-progress: {active_part} | Held: {held_part}")
         else:
             # Fast refresh: update active and held only (ready unchanged)
-            current = str(counts.renderable)
+            current = str(counts.render())
             # Extract the current ready count from the label
             import re
             m = re.search(r"Ready: (\d+)", current)
