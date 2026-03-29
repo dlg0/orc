@@ -143,7 +143,10 @@ def tui() -> None:
     """Launch the TUI dashboard."""
     from amp_orchestrator.tui.app import OrchestratorApp
 
-    app = OrchestratorApp()
+    project = detect_project()
+    repo_root = project.repo_root
+    state_dir = repo_root / CONFIG_DIR
+    app = OrchestratorApp(repo_root=repo_root, state_dir=state_dir)
     app.run()
 
 
