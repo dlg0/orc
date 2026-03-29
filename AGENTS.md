@@ -36,6 +36,17 @@ cp -rf source dest          # NOT: cp -r source dest
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
+## Testing in a Target Repository
+
+When testing `amp-orchestrator` against a real project (e.g., a testing repo), use `uvx --reinstall --from` to install and run the CLI from the local source tree. **Do NOT** activate or run from the `.venv` directly.
+
+```bash
+# Run amp-orchestrator from local source in the target repo
+uvx --reinstall --from /path/to/amp-orchestrator amp-orchestrator [args...]
+```
+
+This ensures the tool is installed as a proper package (with correct entry points and dependencies) rather than relying on the development virtualenv, which may have path or isolation differences.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
 
