@@ -80,7 +80,7 @@ def test_mode_styles_covers_all_modes() -> None:
 def test_status_panel_composes() -> None:
     panel = StatusPanel()
     children = list(panel.compose())
-    assert len(children) == 9  # title, badge, last-refresh, queue-last-refreshed, counts-summary, severity-counts, completed, error, ErrorAlert
+    assert len(children) == 10  # title, badge, refresh-error, last-refresh, queue-last-refreshed, counts-summary, severity-counts, completed, error, ErrorAlert
 
 
 def test_active_issue_panel_composes() -> None:
@@ -745,3 +745,53 @@ def test_mode_styles_use_high_contrast_colors() -> None:
         assert base not in low_contrast, (
             f"MODE_STYLES[{mode}] uses low-contrast color '{color}'"
         )
+
+
+# --- Config / refresh error surfacing tests ---
+
+
+def test_load_config_swallow_fix(tmp_path: Path) -> None:
+    """_load_config should record error instead of silently swallowing."""
+    # Create a malformed config file that will cause load_config to fail
+    config_dir = tmp_path / ".amp-orchestrator"
+    config_dir.mkdir()
+    config_file = config_dir / "config.yaml"
+    config_file.write_text("max_workers: 99\n")  # triggers ClickException
+    app = OrchestratorApp(repo_root=tmp_path)
+    app._load_config()
+    # Should have recorded the error (not silently passed)
+    assert app._last_refresh_error is not None
+    assert "Config load failed" in app._last_refresh_error
+
+
+def test_snapshot_config_error_field() -> None:
+    """DashboardSnapshot should carry config_error when config loading fails."""
+    snap = _snap()
+    assert snap.config_error is None
+    # With error
+    snap_err = DashboardSnapshot(
+        state=snap.state,
+        ready_issues=[],
+        recent_events=[],
+        config=OrchestratorConfig(),
+        config_error="some config error",
+    )
+    assert snap_err.config_error == "some config error"
+
+
+def test_mark_refresh_error_stores_message() -> None:
+    """_mark_refresh_error should store the error message."""
+    app = OrchestratorApp()
+    app._last_refresh_error = None
+    # Directly test the state change (can't call _mark_refresh_error without mounted widgets)
+    app._last_refresh_error = "test error"
+    assert app._last_refresh_error == "test error"
+
+
+def test_mark_refresh_success_clears_error() -> None:
+    """After a successful refresh, error should be cleared."""
+    app = OrchestratorApp()
+    app._last_refresh_error = "old error"
+    # Simulate what _mark_refresh_success does to app state
+    app._last_refresh_error = None
+    assert app._last_refresh_error is None

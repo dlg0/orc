@@ -137,8 +137,11 @@ class OrchestratorApp(App):
             from amp_orchestrator.config import load_config
 
             self._config = load_config(self._repo_root)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._last_refresh_error = f"Config load failed: {exc}"
+            self.notify(
+                f"Config load failed: {exc}", severity="warning"
+            )
 
     @work(thread=True)
     def _do_fast_refresh(self) -> None:
@@ -183,14 +186,16 @@ class OrchestratorApp(App):
         self._last_refresh_error = None
         status_panel = self.query_one(StatusPanel)
         status_panel.update_last_refreshed(now)
+        status_panel.hide_refresh_error()
         if includes_queue:
             self._last_queue_refresh = now
             status_panel.update_queue_last_refreshed(now)
         self.query_one(StaleBanner).hide()
 
     def _mark_refresh_error(self, message: str) -> None:
-        """Record a failed refresh."""
+        """Record a failed refresh and show warning in StatusPanel."""
         self._last_refresh_error = message
+        self.query_one(StatusPanel).show_refresh_error(message)
 
     def _check_staleness(self) -> None:
         """Show/hide the stale banner based on time since last successful refresh."""
@@ -274,6 +279,10 @@ class OrchestratorApp(App):
         if not suppress:
             self.query_one(StatusPanel).update_snapshot(snap)
             self.query_one(ControlsPanel).update_snapshot(snap)
+        if snap.config_error:
+            self.query_one(StatusPanel).show_refresh_error(
+                f"Config: {snap.config_error}"
+            )
         self.query_one(ActiveIssuePanel).update_snapshot(snap)
         self.query_one(ConfigPanel).update_snapshot(snap)
         self.query_one(QueueTable).update_snapshot(snap)
