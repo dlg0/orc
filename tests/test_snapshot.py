@@ -22,6 +22,7 @@ def test_load_snapshot_defaults(tmp_path: Path) -> None:
     assert snap.ready_issues == []
     assert snap.recent_events == []
     assert isinstance(snap.config, OrchestratorConfig)
+    assert snap.is_fast is False
 
 
 def test_load_snapshot_with_state(tmp_path: Path) -> None:
@@ -87,6 +88,7 @@ def test_load_snapshot_fast_defaults(tmp_path: Path) -> None:
     assert snap.ready_issues == []
     assert snap.recent_events == []
     assert isinstance(snap.config, OrchestratorConfig)
+    assert snap.is_fast is True
 
 
 def test_load_snapshot_fast_with_config(tmp_path: Path) -> None:
