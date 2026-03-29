@@ -18,6 +18,7 @@ from amp_orchestrator.tui.widgets import (
     ActiveIssuePanel,
     ConfigPanel,
     ControlsPanel,
+    ErrorAlert,
     EventsLog,
     HistoryTable,
     NotConnectedBanner,
@@ -64,7 +65,7 @@ def test_mode_styles_covers_all_modes() -> None:
 def test_status_panel_composes() -> None:
     panel = StatusPanel()
     children = list(panel.compose())
-    assert len(children) == 5
+    assert len(children) == 7  # title, badge, queue, failed, completed, error, ErrorAlert
 
 
 def test_active_issue_panel_composes() -> None:
@@ -132,6 +133,34 @@ def test_app_no_project_state() -> None:
     app = OrchestratorApp()
     assert app._repo_root is None
     assert app._state_dir is None
+
+
+def test_error_alert_composes() -> None:
+    alert = ErrorAlert()
+    children = list(alert.compose())
+    assert len(children) == 1  # Label
+
+
+def test_error_alert_has_inspect_bindings() -> None:
+    alert = ErrorAlert()
+    binding_keys = [b.key for b in alert.BINDINGS]
+    assert "enter" in binding_keys
+    assert "i" in binding_keys
+
+
+def test_snap_with_failed_runs() -> None:
+    """Snapshot with failed runs should produce a non-zero failed count."""
+    snap = _snap(
+        run_history=[
+            {"issue_id": "A-1", "result": "completed"},
+            {"issue_id": "A-2", "result": "failed"},
+            {"issue_id": "A-3", "result": "error"},
+        ],
+    )
+    failed = sum(
+        1 for r in snap.state.run_history if r.get("result") in ("failed", "error")
+    )
+    assert failed == 2
 
 
 def test_help_modal_has_bindings() -> None:
