@@ -19,3 +19,6 @@ htmlcov/
 
 # Temporary worktree parent used by the orchestrator
 .worktrees/
+
+# bv (beads viewer) local config and caches
+.bv/
