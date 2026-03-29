@@ -15,15 +15,15 @@ from amp_orchestrator.tui.snapshot import DashboardSnapshot
 
 MODE_STYLES: dict[OrchestratorMode, tuple[str, str]] = {
     OrchestratorMode.running: ("green", "● RUNNING"),
-    OrchestratorMode.paused: ("dark_orange", "⏸ PAUSED"),
+    OrchestratorMode.paused: ("bold yellow", "⏸ PAUSED"),
     OrchestratorMode.pause_requested: ("yellow", "⏸ PAUSE REQUESTED"),
-    OrchestratorMode.stopping: ("orange1", "■ STOPPING"),
-    OrchestratorMode.error: ("red", "✖ ERROR"),
-    OrchestratorMode.idle: ("grey", "○ IDLE"),
+    OrchestratorMode.stopping: ("bold orange1", "■ STOPPING"),
+    OrchestratorMode.error: ("bold red", "✖ ERROR"),
+    OrchestratorMode.idle: ("bold white", "○ IDLE"),
 }
 
 NO_PROJECT_MSG = "[bold red]⚠ Not connected to repo/state directory[/]"
-NO_PROJECT_PLACEHOLDER = "[dim]Not available — no project detected[/]"
+NO_PROJECT_PLACEHOLDER = "[italic]Not available — no project detected[/]"
 
 class StaleBanner(Static):
     """Banner shown when dashboard data is stale or refresh has failed."""
@@ -95,11 +95,11 @@ EVENT_COLORS: dict[str, str] = {
     "issue_closed": "green bold",
     "pause_requested": "yellow",
     "stop_requested": "yellow",
-    "state_changed": "grey",
+    "state_changed": "white",
     "verification_run": "blue",
     "evaluation_started": "blue",
     "evaluation_finished": "green",
-    "issue_needs_rework": "dark_orange",
+    "issue_needs_rework": "bold yellow",
     "conflict_detected": "red",
     "conflict_resolution_started": "yellow",
     "conflict_resolution_finished": "green",
@@ -125,7 +125,7 @@ def _event_severity(event_type: str) -> str:
 _SEVERITY_STYLE: dict[str, str] = {
     "ERR": "bold red",
     "WARN": "yellow",
-    "INFO": "dim",
+    "INFO": "white",
 }
 
 
@@ -245,7 +245,7 @@ class ErrorAlert(Static):
         if error:
             truncated = error if len(error) <= 120 else error[:117] + "…"
             self.query_one("#error-alert-text", Label).update(
-                f"[bold red on #4a0000]⚠ ERROR: {truncated}[/]  [dim](Enter/i to inspect)[/]"
+                f"[bold red on #4a0000]⚠ ERROR: {truncated}[/]  [italic](Enter/i to inspect)[/]"
             )
             self.add_class("visible")
         else:
@@ -282,32 +282,32 @@ class StatusPanel(Static):
 
     def compose(self) -> ComposeResult:
         yield Label("Status", classes="panel-title")
-        yield Label("[grey]○ IDLE[/]", id="mode-badge")
-        yield Label("[dim]Last updated: —[/]", id="last-updated")
+        yield Label("[bold white]○ IDLE[/]", id="mode-badge")
+        yield Label("[italic]Last updated: —[/]", id="last-updated")
         yield Label("Queue: 0 issue(s)", id="queue-count")
-        yield Label("[dim]Events: —[/]", id="event-severity-counts")
-        yield Label("[dim]Held: —[/]", id="failed-count")
-        yield Label("[dim]Last completed: —[/]", id="last-completed")
-        yield Label("[dim]Last error: —[/]", id="last-error")
+        yield Label("[italic]Events: —[/]", id="event-severity-counts")
+        yield Label("[italic]Held: —[/]", id="failed-count")
+        yield Label("[italic]Last completed: —[/]", id="last-completed")
+        yield Label("[italic]Last error: —[/]", id="last-error")
         yield ErrorAlert()
 
     def show_no_project(self) -> None:
         self.query_one("#mode-badge", Label).update(
             "[bold red]⚠ NOT CONNECTED[/]"
         )
-        self.query_one("#last-updated", Label).update("[dim]Last updated: —[/]")
+        self.query_one("#last-updated", Label).update("[italic]Last updated: —[/]")
         self.query_one("#queue-count", Label).update(NO_PROJECT_PLACEHOLDER)
-        self.query_one("#event-severity-counts", Label).update("[dim]Events: —[/]")
-        self.query_one("#failed-count", Label).update("[dim]Held: —[/]")
-        self.query_one("#last-completed", Label).update("[dim]Last completed: —[/]")
-        self.query_one("#last-error", Label).update("[dim]Last error: —[/]")
+        self.query_one("#event-severity-counts", Label).update("[italic]Events: —[/]")
+        self.query_one("#failed-count", Label).update("[italic]Held: —[/]")
+        self.query_one("#last-completed", Label).update("[italic]Last completed: —[/]")
+        self.query_one("#last-error", Label).update("[italic]Last error: —[/]")
         self.query_one(ErrorAlert).set_error("")
 
     def update_last_refreshed(self, ts: datetime) -> None:
         """Update the 'Last updated' display with the given timestamp."""
         time_str = ts.strftime("%H:%M:%S")
         self.query_one("#last-updated", Label).update(
-            f"[dim]Last updated: {time_str}[/]"
+            f"[italic]Last updated: {time_str}[/]"
         )
 
     def show_transitional(self, text: str) -> None:
@@ -316,7 +316,7 @@ class StatusPanel(Static):
 
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         color, text = MODE_STYLES.get(
-            snap.state.mode, ("grey", snap.state.mode.value)
+            snap.state.mode, ("bold white", snap.state.mode.value)
         )
         badge = self.query_one("#mode-badge", Label)
         badge.update(f"[{color}]{text}[/]")
@@ -347,7 +347,7 @@ class StatusPanel(Static):
                 parts.append(f"[yellow]{warn_count} warning(s)[/]")
             sev_label.update("Events: " + ", ".join(parts))
         else:
-            sev_label.update("[dim]Events: —[/]")
+            sev_label.update("[italic]Events: —[/]")
 
         # Held issues by category
         fc = self.query_one("#failed-count", Label)
@@ -359,19 +359,19 @@ class StatusPanel(Static):
             parts = ", ".join(f"{cat}: {n}" for cat, n in sorted(by_cat.items()))
             fc.update(f"[bold red]Held: {len(snap.state.issue_failures)} ({parts})[/]")
         else:
-            fc.update("[dim]Held: —[/]")
+            fc.update("[italic]Held: —[/]")
 
         lc = self.query_one("#last-completed", Label)
         if snap.state.last_completed_issue:
             lc.update(f"[green]Last completed: {snap.state.last_completed_issue}[/]")
         else:
-            lc.update("[dim]Last completed: —[/]")
+            lc.update("[italic]Last completed: —[/]")
 
         le = self.query_one("#last-error", Label)
         if snap.state.last_error:
             le.update(f"[red]Last error: {snap.state.last_error}[/]")
         else:
-            le.update("[dim]Last error: —[/]")
+            le.update("[italic]Last error: —[/]")
 
         # Persistent error alert
         self.query_one(ErrorAlert).set_error(snap.state.last_error or "")
@@ -432,7 +432,7 @@ class ActiveIssuePanel(Static):
 
     def compose(self) -> ComposeResult:
         yield Label("Active Issue (Enter/i to inspect)", classes="panel-title")
-        yield Label("[dim]No active issue[/]", id="active-detail")
+        yield Label("[italic]No active issue[/]", id="active-detail")
 
     def show_no_project(self) -> None:
         self.query_one("#active-detail", Label).update(NO_PROJECT_PLACEHOLDER)
@@ -459,7 +459,7 @@ class ActiveIssuePanel(Static):
                 lines.append(f"  Worktree: {snap.state.active_worktree_path}")
             detail.update("\n".join(lines))
         else:
-            detail.update("[dim]No active issue[/]")
+            detail.update("[italic]No active issue[/]")
 
     def action_inspect(self) -> None:
         self._show_inspect()
@@ -639,7 +639,7 @@ class QueueTable(Static):
         self._row_key = new_keys
         table.clear()
         if not snap.ready_issues:
-            table.add_row("-", "-", "[dim]No issues in queue[/]", "-")
+            table.add_row("-", "-", "[italic]No issues in queue[/]", "-")
             return
         for issue in snap.ready_issues:
             pri = str(issue.priority) if issue.priority else "-"
@@ -709,9 +709,9 @@ class EventsLog(Static):
         data = entry.get("data")
         color = EVENT_COLORS.get(etype, "white")
         severity = _event_severity(etype)
-        sev_style = _SEVERITY_STYLE.get(severity, "dim")
+        sev_style = _SEVERITY_STYLE.get(severity, "white")
         message = _human_message(etype, data)
-        return f"[dim]{ts}[/] [{sev_style}][{severity}][/] [{color}]{message}[/]"
+        return f"[italic]{ts}[/] [{sev_style}][{severity}][/] [{color}]{message}[/]"
 
     def compose(self) -> ComposeResult:
         yield Label("Events", classes="panel-title")
@@ -730,7 +730,7 @@ class EventsLog(Static):
         if not snap.recent_events:
             if self._last_event_keys:
                 log.clear()
-                log.write("[dim]No events yet[/]")
+                log.write("[italic]No events yet[/]")
                 self._last_event_keys = []
                 self._seen_count = 0
             return
@@ -801,7 +801,7 @@ class HistoryTable(Static):
         self._row_key = new_keys
         table.clear()
         if not self._runs:
-            table.add_row("-", "-", "[dim]No run history[/]", "-", "-")
+            table.add_row("-", "-", "[italic]No run history[/]", "-", "-")
             return
         for run in self._runs:
             ts = run.get("timestamp", "")
@@ -817,7 +817,7 @@ class HistoryTable(Static):
                 cat = failure_info.get("category", "")
                 category_colors = {
                     "transient_external": "yellow",
-                    "stale_or_conflicted": "dark_orange",
+                    "stale_or_conflicted": "bold yellow",
                     "issue_needs_rework": "red",
                     "blocked_by_dependency": "magenta",
                     "fatal_run_error": "bold red",
