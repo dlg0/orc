@@ -16,6 +16,7 @@ class DashboardSnapshot:
     ready_issues: list[BdIssue]
     recent_events: list[dict]
     config: OrchestratorConfig
+    is_fast: bool = False
 
 
 def load_snapshot_fast(
@@ -29,6 +30,7 @@ def load_snapshot_fast(
         ready_issues=[],
         recent_events=recent_events,
         config=config or OrchestratorConfig(),
+        is_fast=True,
     )
 
 

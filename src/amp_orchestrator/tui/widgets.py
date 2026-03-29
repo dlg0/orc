@@ -250,9 +250,10 @@ class StatusPanel(Static):
         else:
             self.remove_class("error-state")
 
-        self.query_one("#queue-count", Label).update(
-            f"Queue: {len(snap.ready_issues)} issue(s)"
-        )
+        if not snap.is_fast:
+            self.query_one("#queue-count", Label).update(
+                f"Queue: {len(snap.ready_issues)} issue(s)"
+            )
 
         # Held issues by category
         fc = self.query_one("#failed-count", Label)
