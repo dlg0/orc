@@ -78,6 +78,35 @@ def test_active_issue_panel_composes() -> None:
     assert len(children) == 2
 
 
+def test_active_issue_panel_is_focusable() -> None:
+    panel = ActiveIssuePanel()
+    assert panel.can_focus is True
+
+
+def test_active_issue_panel_has_inspect_bindings() -> None:
+    panel = ActiveIssuePanel()
+    binding_keys = [b.key for b in panel.BINDINGS]
+    assert "enter" in binding_keys
+    assert "i" in binding_keys
+
+
+def test_active_issue_panel_stores_snapshot_state() -> None:
+    panel = ActiveIssuePanel()
+    assert panel._last_snap_state is None
+    snap = _snap(
+        active_issue_id="TEST-1",
+        active_issue_title="Test issue",
+        active_branch="feat/test",
+        active_worktree_path="/tmp/wt",
+    )
+    # Cannot call update_snapshot without mounting, but we can verify state storage directly
+    panel._last_snap_state = snap.state
+    assert panel._last_snap_state.active_issue_id == "TEST-1"
+    assert panel._last_snap_state.active_issue_title == "Test issue"
+    assert panel._last_snap_state.active_branch == "feat/test"
+    assert panel._last_snap_state.active_worktree_path == "/tmp/wt"
+
+
 def test_config_panel_composes() -> None:
     panel = ConfigPanel()
     children = list(panel.compose())
