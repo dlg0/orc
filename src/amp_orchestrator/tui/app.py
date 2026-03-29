@@ -11,7 +11,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Footer, Header
 
 from amp_orchestrator.config import OrchestratorConfig
-from amp_orchestrator.state import OrchestratorMode
+from amp_orchestrator.state import OrchestratorMode, StateStore
 from amp_orchestrator.tui.snapshot import (
     DashboardSnapshot,
     load_snapshot,
@@ -23,6 +23,7 @@ from amp_orchestrator.tui.widgets import (
     ConfigPanel,
     ControlsPanel,
     EventsLog,
+    HeldIssuesTable,
     HistoryTable,
     NotConnectedBanner,
     QueueTable,
@@ -103,6 +104,7 @@ class OrchestratorApp(App):
                 yield ControlsPanel()
             with Vertical(id="right-col"):
                 yield QueueTable()
+                yield HeldIssuesTable()
                 yield EventsLog()
                 yield HistoryTable()
         yield Footer()
@@ -126,6 +128,7 @@ class OrchestratorApp(App):
         self.query_one(ConfigPanel).show_no_project()
         self.query_one(ControlsPanel).show_no_project()
         self.query_one(QueueTable).show_no_project()
+        self.query_one(HeldIssuesTable).show_no_project()
         self.query_one(EventsLog).show_no_project()
         self.query_one(HistoryTable).show_no_project()
 
@@ -263,6 +266,7 @@ class OrchestratorApp(App):
             self.query_one(StatusPanel).update_snapshot(snap)
             self.query_one(ControlsPanel).update_snapshot(snap)
         self.query_one(ActiveIssuePanel).update_snapshot(snap)
+        self.query_one(HeldIssuesTable).update_snapshot(snap)
         self.query_one(EventsLog).update_snapshot(snap)
         self.query_one(HistoryTable).update_snapshot(snap)
 
@@ -277,6 +281,7 @@ class OrchestratorApp(App):
         self.query_one(ActiveIssuePanel).update_snapshot(snap)
         self.query_one(ConfigPanel).update_snapshot(snap)
         self.query_one(QueueTable).update_snapshot(snap)
+        self.query_one(HeldIssuesTable).update_snapshot(snap)
         self.query_one(EventsLog).update_snapshot(snap)
         self.query_one(HistoryTable).update_snapshot(snap)
 
@@ -347,6 +352,34 @@ class OrchestratorApp(App):
     def _on_stop_confirmed(self, confirmed: bool) -> None:
         if confirmed:
             self._run_control_action("stop")
+
+    def retry_held_issue(self, issue_id: str) -> None:
+        """Clear held/failed status for an issue so it gets re-queued."""
+        if not self._state_dir:
+            self.notify("No project detected", severity="error")
+            return
+        self._do_retry_held_issue(issue_id)
+
+    @work(thread=True)
+    def _do_retry_held_issue(self, issue_id: str) -> None:
+        try:
+            store = StateStore(self._state_dir)  # type: ignore[arg-type]
+            state = store.load()
+            if issue_id not in state.issue_failures:
+                self.call_from_thread(
+                    self.notify, f"{issue_id} is not in held/failed state", severity="warning"
+                )
+                return
+            del state.issue_failures[issue_id]
+            store.save(state)
+            self.call_from_thread(
+                self.notify, f"Cleared failure status for {issue_id} — will be re-queued"
+            )
+            self.call_from_thread(self._do_full_refresh)
+        except Exception as exc:
+            self.call_from_thread(
+                self.notify, f"Retry failed: {exc}", severity="error"
+            )
 
     _ACTION_LABELS: dict[str, tuple[str, str]] = {
         "start": ("Starting\u2026", "Orchestrator started"),
