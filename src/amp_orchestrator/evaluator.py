@@ -29,6 +29,7 @@ class EvaluationResult:
     tests_run: list[str] = field(default_factory=list)
     gaps: list[str] = field(default_factory=list)
     task_too_large_signal: bool = False
+    context_window_usage_pct: float | None = None
 
     @property
     def passed(self) -> bool:
@@ -46,6 +47,7 @@ class EvaluationResult:
             "tests_run": self.tests_run,
             "gaps": self.gaps,
             "task_too_large_signal": self.task_too_large_signal,
+            "context_window_usage_pct": self.context_window_usage_pct,
         }
 
 
@@ -220,6 +222,19 @@ class AmpEvaluatorRunner:
     # Output parsing
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _parse_context_usage(text: str) -> float | None:
+        """Best-effort extraction of context window usage percentage from evaluator output."""
+        m = re.search(r'[Cc]ontext\s+(?:window\s+)?usage[:\s]+(\d+(?:\.\d+)?)\s*%', text)
+        if m:
+            return float(m.group(1))
+        m = re.search(r'tokens?\s+used[:\s]+(\d+)\s*/\s*(\d+)', text)
+        if m:
+            used, total = int(m.group(1)), int(m.group(2))
+            if total > 0:
+                return round(used / total * 100, 1)
+        return None
+
     def _parse_output(self, proc: subprocess.CompletedProcess[str]) -> EvaluationResult:
         if proc.returncode != 0:
             return EvaluationResult.fail(
@@ -230,22 +245,32 @@ class AmpEvaluatorRunner:
 
         json_block = self._extract_json_block(stdout)
         if json_block is not None:
-            return self._json_to_result(json_block)
+            result = self._json_to_result(json_block)
+        else:
+            result = None
+            # Try bare JSON object on a single line
+            for line in reversed(stdout.splitlines()):
+                line = line.strip()
+                if line.startswith("{") and line.endswith("}"):
+                    try:
+                        data = json.loads(line)
+                        if "verdict" in data:
+                            result = self._json_to_result(data)
+                            break
+                    except json.JSONDecodeError:
+                        continue
 
-        # Try bare JSON object on a single line
-        for line in reversed(stdout.splitlines()):
-            line = line.strip()
-            if line.startswith("{") and line.endswith("}"):
-                try:
-                    data = json.loads(line)
-                    if "verdict" in data:
-                        return self._json_to_result(data)
-                except json.JSONDecodeError:
-                    continue
+        if result is None:
+            return EvaluationResult.fail(
+                "Evaluator produced no structured result",
+            )
 
-        return EvaluationResult.fail(
-            "Evaluator produced no structured result",
-        )
+        # Best-effort context window usage extraction
+        combined = stdout + "\n" + (proc.stderr or "")
+        if result.context_window_usage_pct is None:
+            result.context_window_usage_pct = self._parse_context_usage(combined)
+
+        return result
 
     @staticmethod
     def _extract_json_block(text: str) -> dict | None:
@@ -277,4 +302,5 @@ class AmpEvaluatorRunner:
             task_too_large_signal=raw
             if isinstance((raw := data.get("task_too_large_signal", False)), bool)
             else False,
+            context_window_usage_pct=data.get("context_window_usage_pct"),
         )

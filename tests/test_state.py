@@ -83,6 +83,38 @@ def test_load_backward_compat_missing_fields(tmp_path) -> None:
     assert state.active_issue_title is None
 
 
+def test_needs_rework_round_trip(tmp_path) -> None:
+    store = StateStore(tmp_path)
+    state = OrchestratorState(
+        needs_rework={
+            "ISSUE-10": {"summary": "Missing tests", "timestamp": "2026-01-01T00:00:00+00:00"},
+        },
+    )
+    store.save(state)
+    loaded = store.load()
+    assert loaded.needs_rework == {
+        "ISSUE-10": {"summary": "Missing tests", "timestamp": "2026-01-01T00:00:00+00:00"},
+    }
+
+
+def test_load_backward_compat_missing_needs_rework(tmp_path) -> None:
+    """Old state.json without needs_rework loads as empty dict."""
+    import json
+    state_file = tmp_path / "state.json"
+    state_file.write_text(json.dumps({
+        "mode": "idle",
+        "active_issue_id": None,
+        "active_branch": None,
+        "active_worktree_path": None,
+        "last_completed_issue": None,
+        "last_error": None,
+        "run_history": [],
+    }))
+    store = StateStore(tmp_path)
+    state = store.load()
+    assert state.needs_rework == {}
+
+
 def test_active_issue_title_round_trip(tmp_path) -> None:
     store = StateStore(tmp_path)
     state = OrchestratorState(

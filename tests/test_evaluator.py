@@ -62,7 +62,23 @@ def test_to_dict_round_trip() -> None:
         "tests_run": ["pytest"],
         "gaps": ["edge case"],
         "task_too_large_signal": True,
+        "context_window_usage_pct": None,
     }
+
+
+def test_to_dict_includes_context_window_usage_pct() -> None:
+    result = EvaluationResult(
+        verdict=EvaluationVerdict.passed,
+        summary="ok",
+        context_window_usage_pct=88.3,
+    )
+    d = result.to_dict()
+    assert d["context_window_usage_pct"] == 88.3
+
+
+def test_context_window_usage_pct_default_none() -> None:
+    result = EvaluationResult(verdict=EvaluationVerdict.passed, summary="ok")
+    assert result.context_window_usage_pct is None
 
 
 # --- StubEvaluator ---
@@ -175,6 +191,28 @@ def test_json_to_result_fail_verdict() -> None:
 def test_json_to_result_invalid_verdict_defaults_to_failed() -> None:
     result = AmpEvaluatorRunner._json_to_result({"verdict": "maybe", "summary": "idk"})
     assert result.verdict is EvaluationVerdict.failed
+
+
+def test_json_to_result_parses_context_window_usage_pct() -> None:
+    data = {
+        "verdict": "pass",
+        "summary": "done",
+        "context_window_usage_pct": 72.5,
+    }
+    result = AmpEvaluatorRunner._json_to_result(data)
+    assert result.context_window_usage_pct == 72.5
+
+
+def test_evaluator_parse_context_usage_percentage() -> None:
+    assert AmpEvaluatorRunner._parse_context_usage("Context window usage: 65%") == 65.0
+
+
+def test_evaluator_parse_context_usage_tokens() -> None:
+    assert AmpEvaluatorRunner._parse_context_usage("tokens used: 80000/100000") == 80.0
+
+
+def test_evaluator_parse_context_usage_no_match() -> None:
+    assert AmpEvaluatorRunner._parse_context_usage("nothing here") is None
 
 
 def test_json_to_result_extracts_all_fields() -> None:

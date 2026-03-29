@@ -27,7 +27,8 @@ def run_loop(
     store = StateStore(state_dir)
     events = EventLog(state_dir)
     worktree_mgr = WorktreeManager(repo_root, config.base_branch)
-    failed_ids: set[str] = set()
+    state = store.load()
+    failed_ids: set[str] = set(state.needs_rework.keys())
 
     while True:
         state = store.load()
@@ -103,12 +104,18 @@ def run_loop(
             _try_cleanup(worktree_mgr, wt_info)
             continue
 
-        events.record(EventType.amp_finished, {
+        amp_finished_data: dict = {
             "issue_id": issue.id,
             "result": result.result.value,
             "summary": result.summary,
-        })
+        }
+        if result.context_window_usage_pct is not None:
+            amp_finished_data["context_window_usage_pct"] = result.context_window_usage_pct
+        events.record(EventType.amp_finished, amp_finished_data)
         click.echo(f"Amp result: {result.result.value} — {result.summary}")
+        if result.context_window_usage_pct is not None and result.context_window_usage_pct >= config.context_window_warn_threshold * 100:
+            click.echo(f"  ⚠ Context window usage high: {result.context_window_usage_pct}%")
+
         if result.merge_ready:
             click.echo("  ✓ Merge ready")
         else:
@@ -116,11 +123,16 @@ def run_loop(
 
         wt_path = str(wt_info.worktree_path)
 
+        # Build extra dict with context usage if available
+        ctx_extra: dict = {}
+        if result.context_window_usage_pct is not None:
+            ctx_extra["context_window_usage_pct"] = result.context_window_usage_pct
+
         # Handle non-merge outcomes
         if result.result == ResultType.decomposed:
             click.echo(f"Issue {issue.id} was decomposed — skipping merge.")
             _clear_active(store, state)
-            _record_run(store, state, issue.id, "decomposed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode)
+            _record_run(store, state, issue.id, "decomposed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
             continue
 
@@ -128,7 +140,7 @@ def run_loop(
             click.echo(f"Issue {issue.id}: {result.result.value} — moving on.")
             failed_ids.add(issue.id)
             _clear_active(store, state)
-            _record_run(store, state, issue.id, result.result.value, result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode)
+            _record_run(store, state, issue.id, result.result.value, result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
             continue
 
@@ -136,7 +148,7 @@ def run_loop(
             click.echo(f"Issue {issue.id}: completed but not merge-ready — skipping merge.")
             failed_ids.add(issue.id)
             _clear_active(store, state)
-            _record_run(store, state, issue.id, "completed_no_merge", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode)
+            _record_run(store, state, issue.id, "completed_no_merge", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             continue
 
         # Independent evaluation
@@ -154,27 +166,38 @@ def run_loop(
                 from amp_orchestrator.evaluator import EvaluationResult
                 eval_result = EvaluationResult.fail(f"Evaluator crashed: {exc}")
 
-            events.record(EventType.evaluation_finished, {
+            eval_finished_data: dict = {
                 "issue_id": issue.id,
                 "verdict": eval_result.verdict.value,
                 "summary": eval_result.summary,
                 "task_too_large_signal": eval_result.task_too_large_signal,
-            })
+            }
+            if eval_result.context_window_usage_pct is not None:
+                eval_finished_data["context_window_usage_pct"] = eval_result.context_window_usage_pct
+            events.record(EventType.evaluation_finished, eval_finished_data)
 
             if eval_result.passed:
                 click.echo(f"  ✓ Evaluation passed: {eval_result.summary}")
             else:
+                from datetime import datetime, timezone
+
                 click.echo(f"  ✗ Evaluation failed: {eval_result.summary}")
                 events.record(EventType.issue_needs_rework, {
                     "issue_id": issue.id,
                     "summary": eval_result.summary,
                 })
                 failed_ids.add(issue.id)
+                state.needs_rework[issue.id] = {
+                    "summary": eval_result.summary,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
                 _clear_active(store, state)
+                rework_extra = {"evaluation": eval_result.to_dict()}
+                rework_extra.update(ctx_extra)
                 _record_run(
                     store, state, issue.id, "needs_rework", eval_result.summary,
                     wt_info.branch_name, wt_path, amp_mode=config.amp_mode,
-                    extra={"evaluation": eval_result.to_dict()},
+                    extra=rework_extra,
                 )
                 continue
 
@@ -195,7 +218,7 @@ def run_loop(
             events.record(EventType.issue_closed, {"issue_id": issue.id})
             state.last_completed_issue = issue.id
             _clear_active(store, state)
-            _record_run(store, state, issue.id, "completed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode)
+            _record_run(store, state, issue.id, "completed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
         else:
             click.echo(f"Merge failed for {issue.id} at stage {merge_result.stage}: {merge_result.error}")
@@ -207,7 +230,7 @@ def run_loop(
             failed_ids.add(issue.id)
             state.last_error = f"{issue.id}: merge failed at {merge_result.stage}"
             _clear_active(store, state)
-            _record_run(store, state, issue.id, "failed", f"merge failed at {merge_result.stage}", wt_info.branch_name, wt_path, amp_mode=config.amp_mode)
+            _record_run(store, state, issue.id, "failed", f"merge failed at {merge_result.stage}", wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
 
 
 def _clear_active(store: StateStore, state: OrchestratorState) -> None:

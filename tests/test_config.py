@@ -76,6 +76,17 @@ def test_create_default_config_writes_file(tmp_path: Path) -> None:
     assert data["amp_mode"] == "smart"
 
 
+def test_context_window_warn_threshold_default(tmp_path: Path) -> None:
+    config = OrchestratorConfig()
+    assert config.context_window_warn_threshold == 0.85
+
+
+def test_create_default_config_includes_context_window_warn_threshold(tmp_path: Path) -> None:
+    path = create_default_config(tmp_path)
+    data = yaml.safe_load(path.read_text())
+    assert data["context_window_warn_threshold"] == 0.85
+
+
 def test_max_workers_gt_1_rejected(tmp_path: Path) -> None:
     cfg_dir = tmp_path / ".amp-orchestrator"
     cfg_dir.mkdir()

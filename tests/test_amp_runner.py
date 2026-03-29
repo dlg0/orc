@@ -8,6 +8,7 @@ from amp_orchestrator.amp_runner import (
     AmpResult,
     AmpRunner,
     IssueContext,
+    RealAmpRunner,
     ResultType,
     StubAmpRunner,
 )
@@ -142,6 +143,50 @@ def test_factory_needs_human() -> None:
     result = stub.run(_make_context())
     assert result.result is ResultType.needs_human
     assert result.summary == "help me"
+
+
+# --- Context passthrough ---
+
+
+# --- AmpResult context_window_usage_pct default ---
+
+
+def test_amp_result_context_window_usage_pct_default_none() -> None:
+    r = AmpResult(result=ResultType.completed, summary="done")
+    assert r.context_window_usage_pct is None
+
+
+# --- RealAmpRunner._parse_context_usage ---
+
+
+def test_parse_context_usage_percentage_pattern() -> None:
+    assert RealAmpRunner._parse_context_usage("Context window usage: 73%") == 73.0
+
+
+def test_parse_context_usage_percentage_with_decimal() -> None:
+    assert RealAmpRunner._parse_context_usage("Context usage: 85.5%") == 85.5
+
+
+def test_parse_context_usage_token_fraction() -> None:
+    assert RealAmpRunner._parse_context_usage("tokens used: 150000/200000") == 75.0
+
+
+def test_parse_context_usage_no_match() -> None:
+    assert RealAmpRunner._parse_context_usage("no usage info here") is None
+
+
+def test_parse_context_usage_lowercase_context() -> None:
+    assert RealAmpRunner._parse_context_usage("context usage: 42%") == 42.0
+
+
+def test_json_to_result_includes_context_window_usage_pct() -> None:
+    data = {
+        "result": "completed",
+        "summary": "done",
+        "context_window_usage_pct": 91.2,
+    }
+    result = RealAmpRunner._json_to_result(data)
+    assert result.context_window_usage_pct == 91.2
 
 
 # --- Context passthrough ---

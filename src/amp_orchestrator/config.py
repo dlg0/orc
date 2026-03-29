@@ -32,6 +32,7 @@ class OrchestratorConfig:
     enable_evaluation: bool = True
     evaluation_mode: str | None = None
     evaluation_timeout: int = 900
+    context_window_warn_threshold: float = 0.85
 
 
 CONFIG_DIR = ".amp-orchestrator"
@@ -112,6 +113,7 @@ def create_default_config(repo_root: Path) -> Path:
         "enable_evaluation": config.enable_evaluation,
         "evaluation_mode": config.evaluation_mode,
         "evaluation_timeout": config.evaluation_timeout,
+        "context_window_warn_threshold": config.context_window_warn_threshold,
     }
 
     config_path = config_dir / CONFIG_FILE

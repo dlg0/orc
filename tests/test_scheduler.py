@@ -421,3 +421,83 @@ def test_evaluation_events_recorded(repo_root: Path, state_dir: Path) -> None:
     event_types = [e["event_type"] for e in events]
     assert "evaluation_started" in event_types
     assert "evaluation_finished" in event_types
+
+
+def test_evaluation_failure_persists_needs_rework(repo_root: Path, state_dir: Path) -> None:
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    runner = StubAmpRunner.completed()
+    evaluator = StubEvaluator.failed(summary="Missing tests")
+    issue = _make_issue()
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return [issue]
+        return []
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
+    mock_wt_info.branch_name = "amp/test-1-test-issue"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("amp_orchestrator.scheduler.verify_and_merge"),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, config, runner, evaluator=evaluator)
+
+    state = StateStore(state_dir).load()
+    assert "test-1" in state.needs_rework
+    assert state.needs_rework["test-1"]["summary"] == "Missing tests"
+    assert "timestamp" in state.needs_rework["test-1"]
+
+
+def test_needs_rework_skipped_on_restart(repo_root: Path, state_dir: Path) -> None:
+    store = StateStore(state_dir)
+    state = OrchestratorState(
+        mode=OrchestratorMode.running,
+        needs_rework={"rework-1": {"summary": "bad", "timestamp": "2026-01-01T00:00:00+00:00"}},
+    )
+    store.save(state)
+
+    issue_rework = _make_issue("rework-1", "Rework issue")
+    issue_ok = _make_issue("ok-2", "Good issue")
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return [issue_rework, issue_ok]
+        return []
+
+    runner_mock = MagicMock()
+    runner_mock.run.return_value = AmpResult(result=ResultType.completed, summary="done", merge_ready=True)
+
+    mock_merge = MagicMock()
+    mock_merge.return_value = MagicMock(success=True, stage="complete")
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "x"
+    mock_wt_info.branch_name = "amp/x"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, config=OrchestratorConfig(), runner=runner_mock)
+
+    state = StateStore(state_dir).load()
+    # rework-1 should have been skipped, only ok-2 processed
+    assert len(state.run_history) == 1
+    assert state.run_history[0]["issue_id"] == "ok-2"

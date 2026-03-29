@@ -23,7 +23,7 @@ def test_help_shows_all_commands() -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["--help"])
     assert result.exit_code == 0
-    for cmd in ["status", "start", "pause", "resume", "stop", "inspect", "logs", "init-config", "tui"]:
+    for cmd in ["status", "start", "pause", "resume", "stop", "inspect", "logs", "init-config", "tui", "retry"]:
         assert cmd in result.output
 
 
@@ -176,6 +176,60 @@ def test_logs_empty(tmp_path: Path) -> None:
         result = runner.invoke(main, ["logs"])
         assert result.exit_code == 0
         assert "No events" in result.output
+
+
+def test_retry_clears_rework(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir(parents=True)
+    store = StateStore(state_dir)
+    state = OrchestratorState(
+        mode=OrchestratorMode.idle,
+        needs_rework={"bz5": {"summary": "Missing tests", "timestamp": "2026-01-01T00:00:00+00:00"}},
+    )
+    store.save(state)
+
+    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+        runner = CliRunner()
+        result = runner.invoke(main, ["retry", "bz5"])
+        assert result.exit_code == 0
+        assert "Cleared rework status for bz5" in result.output
+
+    reloaded = store.load()
+    assert "bz5" not in reloaded.needs_rework
+
+
+def test_retry_not_in_rework(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir(parents=True)
+    store = StateStore(state_dir)
+    store.save(OrchestratorState(mode=OrchestratorMode.idle))
+
+    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+        runner = CliRunner()
+        result = runner.invoke(main, ["retry", "bz99"])
+        assert result.exit_code != 0
+        assert "not in rework state" in result.output
+
+
+def test_status_shows_rework(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir(parents=True)
+    store = StateStore(state_dir)
+    state = OrchestratorState(
+        mode=OrchestratorMode.idle,
+        needs_rework={
+            "bz7": {"summary": "Tests failing", "timestamp": "2026-01-01T00:00:00+00:00"},
+        },
+    )
+    store.save(state)
+
+    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+        with patch("amp_orchestrator.cli.get_ready_issues", return_value=[]):
+            runner = CliRunner()
+            result = runner.invoke(main, ["status"])
+            assert result.exit_code == 0
+            assert "Rework: 1 issue(s) need rework" in result.output
+            assert "bz7: Tests failing" in result.output
 
 
 def test_inspect_not_found(tmp_path: Path) -> None:

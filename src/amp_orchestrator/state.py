@@ -53,6 +53,7 @@ class OrchestratorState:
     last_completed_issue: str | None = None
     last_error: str | None = None
     run_history: list[dict] = field(default_factory=list)
+    needs_rework: dict[str, dict] = field(default_factory=dict)
 
 
 class StateStore:

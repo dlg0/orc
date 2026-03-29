@@ -40,7 +40,10 @@ def status() -> None:
     click.echo(f"Mode: {state.mode.value}")
 
     if state.active_issue_id:
-        click.echo(f"Active issue: {state.active_issue_id}")
+        label = state.active_issue_id
+        if state.active_issue_title:
+            label += f" — {state.active_issue_title}"
+        click.echo(f"Active issue: {label}")
     if state.last_completed_issue:
         click.echo(f"Last completed: {state.last_completed_issue}")
     if state.last_error:
@@ -48,6 +51,11 @@ def status() -> None:
 
     ready = get_ready_issues(state_dir.parent)
     click.echo(f"Queue: {len(ready)} issue(s) ready")
+
+    if state.needs_rework:
+        click.echo(f"Rework: {len(state.needs_rework)} issue(s) need rework")
+        for rid, info in state.needs_rework.items():
+            click.echo(f"  {rid}: {info.get('summary', '(no summary)')}")
 
     if state.mode == OrchestratorMode.running and state.active_issue_id:
         if state.active_worktree_path:
@@ -86,6 +94,20 @@ def stop() -> None:
     """Stop after the current issue reaches a safe checkpoint."""
     state_dir = _get_state_dir()
     stop_orchestrator(state_dir)
+
+
+@main.command()
+@click.argument("issue_id")
+def retry(issue_id: str) -> None:
+    """Clear rework status for ISSUE_ID and re-queue it."""
+    state_dir = _get_state_dir()
+    store = StateStore(state_dir)
+    state = store.load()
+    if issue_id not in state.needs_rework:
+        raise click.ClickException(f"{issue_id} is not in rework state")
+    del state.needs_rework[issue_id]
+    store.save(state)
+    click.echo(f"Cleared rework status for {issue_id} — will be re-queued on next run")
 
 
 @main.command()
