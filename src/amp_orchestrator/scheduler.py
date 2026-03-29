@@ -170,6 +170,8 @@ def run_loop(
         state.active_issue_title = issue.title
         state.active_branch = wt_info.branch_name
         state.active_worktree_path = str(wt_info.worktree_path)
+        state.active_stage = "claiming"
+        state.active_started_at = _now_iso()
         store.save(state)
 
         # Claim the issue in bd so it shows as in-progress
@@ -178,6 +180,8 @@ def run_loop(
             events.record(EventType.error, {"issue_id": issue.id, "stage": "claim", "error": "bd update --claim failed"})
 
         # Invoke Amp
+        state.active_stage = "running agent"
+        store.save(state)
         ctx = IssueContext(
             issue_id=issue.id,
             title=issue.title,
@@ -299,6 +303,8 @@ def run_loop(
 
         # Independent evaluation
         if evaluator is not None:
+            state.active_stage = "evaluating"
+            store.save(state)
             events.record(EventType.evaluation_started, {"issue_id": issue.id})
             click.echo(f"[EVAL] {issue.id} running ...")
 
@@ -345,6 +351,8 @@ def run_loop(
                 continue
 
         # Verify and merge
+        state.active_stage = "merging"
+        store.save(state)
         click.echo(f"[MERGE] {issue.id} starting verify-and-merge ...")
         events.record(EventType.merge_attempt, {"issue_id": issue.id})
         merge_result = verify_and_merge(
@@ -398,6 +406,8 @@ def _clear_active(store: StateStore, state: OrchestratorState) -> None:
     state.active_issue_title = None
     state.active_branch = None
     state.active_worktree_path = None
+    state.active_stage = None
+    state.active_started_at = None
     store.save(state)
 
 

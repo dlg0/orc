@@ -67,6 +67,10 @@ def status() -> None:
                 click.echo(f"    {rid}: {info.get('summary', '(no summary)')}")
 
     if state.mode == OrchestratorMode.running and state.active_issue_id:
+        if state.active_stage:
+            click.echo(f"Stage: {state.active_stage}")
+        if state.active_started_at:
+            click.echo(f"Started at: {state.active_started_at}")
         if state.active_worktree_path:
             click.echo(f"Worktree: {state.active_worktree_path}")
         if state.active_branch:

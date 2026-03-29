@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -283,8 +285,35 @@ class StatusPanel(Static):
         self.query_one(ErrorAlert).set_error(snap.state.last_error or "")
 
 
+def _format_elapsed(started_at: str) -> str:
+    """Return a human-readable elapsed string like '2m 35s'."""
+    try:
+        start = datetime.fromisoformat(started_at)
+        delta = datetime.now(timezone.utc) - start
+        total_secs = int(delta.total_seconds())
+        if total_secs < 0:
+            return "0s"
+        hours, remainder = divmod(total_secs, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours}h {minutes}m {seconds}s"
+        if minutes:
+            return f"{minutes}m {seconds}s"
+        return f"{seconds}s"
+    except (ValueError, TypeError):
+        return "?"
+
+
+_STAGE_STYLES: dict[str, tuple[str, str]] = {
+    "claiming": ("cyan", "⏳ Claiming"),
+    "running agent": ("blue", "🤖 Running Agent"),
+    "evaluating": ("magenta", "🔍 Evaluating"),
+    "merging": ("green", "🔀 Merging"),
+}
+
+
 class ActiveIssuePanel(Static):
-    """Active issue panel: id, title, branch, worktree."""
+    """Active issue panel: id, title, stage, elapsed, branch, worktree."""
 
     DEFAULT_CSS = """
     ActiveIssuePanel {
@@ -311,6 +340,15 @@ class ActiveIssuePanel(Static):
             lines = [f"[bold]{snap.state.active_issue_id}[/]"]
             if snap.state.active_issue_title:
                 lines.append(f"  {snap.state.active_issue_title}")
+            if snap.state.active_stage:
+                color, label = _STAGE_STYLES.get(
+                    snap.state.active_stage,
+                    ("yellow", snap.state.active_stage),
+                )
+                elapsed = ""
+                if snap.state.active_started_at:
+                    elapsed = f" ({_format_elapsed(snap.state.active_started_at)})"
+                lines.append(f"  Stage: [{color}]{label}[/]{elapsed}")
             if snap.state.active_branch:
                 lines.append(f"  Branch: {snap.state.active_branch}")
             if snap.state.active_worktree_path:
