@@ -15,7 +15,7 @@ from amp_orchestrator.control import (
 )
 from amp_orchestrator.events import EventLog
 from amp_orchestrator.queue import get_ready_issues
-from amp_orchestrator.state import OrchestratorMode, StateStore
+from amp_orchestrator.state import FailureCategory, IssueFailure, OrchestratorMode, StateStore
 
 
 def _get_state_dir(path: Path | None = None) -> Path:
@@ -56,9 +56,15 @@ def status() -> None:
         click.echo(f"Queue: error fetching issues ({queue_result.error})")
 
     if state.issue_failures:
-        click.echo(f"Rework: {len(state.issue_failures)} issue(s) need rework")
+        click.echo(f"Held issues: {len(state.issue_failures)}")
+        by_category: dict[str, list[tuple[str, dict]]] = {}
         for rid, info in state.issue_failures.items():
-            click.echo(f"  {rid}: {info.get('summary', '(no summary)')}")
+            cat = info.get("category", "unknown")
+            by_category.setdefault(cat, []).append((rid, info))
+        for cat, items in by_category.items():
+            click.echo(f"  [{cat}] ({len(items)})")
+            for rid, info in items:
+                click.echo(f"    {rid}: {info.get('summary', '(no summary)')}")
 
     if state.mode == OrchestratorMode.running and state.active_issue_id:
         if state.active_worktree_path:
@@ -102,15 +108,15 @@ def stop() -> None:
 @main.command()
 @click.argument("issue_id")
 def retry(issue_id: str) -> None:
-    """Clear rework status for ISSUE_ID and re-queue it."""
+    """Clear held/failed status for ISSUE_ID and re-queue it."""
     state_dir = _get_state_dir()
     store = StateStore(state_dir)
     state = store.load()
     if issue_id not in state.issue_failures:
-        raise click.ClickException(f"{issue_id} is not in rework state")
+        raise click.ClickException(f"{issue_id} is not in held/failed state")
     del state.issue_failures[issue_id]
     store.save(state)
-    click.echo(f"Cleared rework status for {issue_id} — will be re-queued on next run")
+    click.echo(f"Cleared failure status for {issue_id} — will be re-queued on next run")
 
 
 @main.command()
@@ -121,6 +127,23 @@ def inspect(issue_id: str) -> None:
     store = StateStore(state_dir)
     state = store.load()
 
+    # Check issue_failures first for richer detail
+    failure_info = state.issue_failures.get(issue_id)
+    if failure_info is not None:
+        click.echo(f"Issue: {issue_id}")
+        click.echo(f"Status: held/failed")
+        click.echo(f"Category: {failure_info.get('category', 'unknown')}")
+        click.echo(f"Stage: {failure_info.get('stage', 'unknown')}")
+        click.echo(f"Attempts: {failure_info.get('attempts', 1)}")
+        if failure_info.get("branch"):
+            click.echo(f"Branch: {failure_info['branch']}")
+        if failure_info.get("worktree_path"):
+            click.echo(f"Worktree: {failure_info['worktree_path']}")
+        if failure_info.get("summary"):
+            click.echo(f"Summary: {failure_info['summary']}")
+        return
+
+    # Fall back to run_history
     entry = None
     for run in reversed(state.run_history):
         if run.get("issue_id") == issue_id:

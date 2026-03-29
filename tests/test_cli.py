@@ -179,13 +179,20 @@ def test_logs_empty(tmp_path: Path) -> None:
         assert "No events" in result.output
 
 
-def test_retry_clears_rework(tmp_path: Path) -> None:
+def test_retry_clears_failure(tmp_path: Path) -> None:
     state_dir = tmp_path / ".amp-orchestrator"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     state = OrchestratorState(
         mode=OrchestratorMode.idle,
-        issue_failures={"bz5": {"summary": "Missing tests", "timestamp": "2026-01-01T00:00:00+00:00"}},
+        issue_failures={"bz5": {
+            "category": "issue_needs_rework",
+            "action": "hold_for_retry",
+            "stage": "evaluation",
+            "summary": "Missing tests",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "attempts": 1,
+        }},
     )
     store.save(state)
 
@@ -193,13 +200,13 @@ def test_retry_clears_rework(tmp_path: Path) -> None:
         runner = CliRunner()
         result = runner.invoke(main, ["retry", "bz5"])
         assert result.exit_code == 0
-        assert "Cleared rework status for bz5" in result.output
+        assert "Cleared failure status for bz5" in result.output
 
     reloaded = store.load()
     assert "bz5" not in reloaded.issue_failures
 
 
-def test_retry_not_in_rework(tmp_path: Path) -> None:
+def test_retry_not_in_failures(tmp_path: Path) -> None:
     state_dir = tmp_path / ".amp-orchestrator"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
@@ -209,17 +216,24 @@ def test_retry_not_in_rework(tmp_path: Path) -> None:
         runner = CliRunner()
         result = runner.invoke(main, ["retry", "bz99"])
         assert result.exit_code != 0
-        assert "not in rework state" in result.output
+        assert "not in held/failed state" in result.output
 
 
-def test_status_shows_rework(tmp_path: Path) -> None:
+def test_status_shows_held_issues(tmp_path: Path) -> None:
     state_dir = tmp_path / ".amp-orchestrator"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     state = OrchestratorState(
         mode=OrchestratorMode.idle,
         issue_failures={
-            "bz7": {"summary": "Tests failing", "timestamp": "2026-01-01T00:00:00+00:00"},
+            "bz7": {
+                "category": "issue_needs_rework",
+                "action": "hold_for_retry",
+                "stage": "evaluation",
+                "summary": "Tests failing",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "attempts": 1,
+            },
         },
     )
     store.save(state)
@@ -229,8 +243,42 @@ def test_status_shows_rework(tmp_path: Path) -> None:
             runner = CliRunner()
             result = runner.invoke(main, ["status"])
             assert result.exit_code == 0
-            assert "Rework: 1 issue(s) need rework" in result.output
+            assert "Held issues: 1" in result.output
+            assert "[issue_needs_rework]" in result.output
             assert "bz7: Tests failing" in result.output
+
+
+def test_inspect_shows_failure_details(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir(parents=True)
+    store = StateStore(state_dir)
+    state = OrchestratorState(
+        mode=OrchestratorMode.idle,
+        issue_failures={
+            "bz10": {
+                "category": "transient_external",
+                "action": "hold_for_retry",
+                "stage": "amp_run",
+                "summary": "Rate limited",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "attempts": 3,
+                "branch": "amp/bz10-fix",
+                "worktree_path": "/tmp/wt-bz10",
+            },
+        },
+    )
+    store.save(state)
+
+    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+        runner = CliRunner()
+        result = runner.invoke(main, ["inspect", "bz10"])
+        assert result.exit_code == 0
+        assert "Category: transient_external" in result.output
+        assert "Stage: amp_run" in result.output
+        assert "Attempts: 3" in result.output
+        assert "Branch: amp/bz10-fix" in result.output
+        assert "Worktree: /tmp/wt-bz10" in result.output
+        assert "Summary: Rate limited" in result.output
 
 
 def test_inspect_not_found(tmp_path: Path) -> None:
