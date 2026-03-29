@@ -18,6 +18,65 @@ class OrchestratorMode(Enum):
     error = "error"
 
 
+class FailureCategory(Enum):
+    transient_external = "transient_external"
+    stale_or_conflicted = "stale_or_conflicted"
+    issue_needs_rework = "issue_needs_rework"
+    blocked_by_dependency = "blocked_by_dependency"
+    fatal_run_error = "fatal_run_error"
+
+
+class FailureAction(Enum):
+    auto_retry = "auto_retry"
+    hold_for_retry = "hold_for_retry"
+    hold_until_backlog_changes = "hold_until_backlog_changes"
+    pause_orchestrator = "pause_orchestrator"
+
+
+@dataclass
+class IssueFailure:
+    category: FailureCategory
+    action: FailureAction
+    stage: str
+    summary: str
+    timestamp: str
+    attempts: int = 1
+    branch: str | None = None
+    worktree_path: str | None = None
+    preserve_worktree: bool = False
+    extra: dict | None = None
+
+    def to_dict(self) -> dict:
+        d: dict = {
+            "category": self.category.value,
+            "action": self.action.value,
+            "stage": self.stage,
+            "summary": self.summary,
+            "timestamp": self.timestamp,
+            "attempts": self.attempts,
+            "branch": self.branch,
+            "worktree_path": self.worktree_path,
+            "preserve_worktree": self.preserve_worktree,
+            "extra": self.extra,
+        }
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> IssueFailure:
+        return cls(
+            category=FailureCategory(data["category"]),
+            action=FailureAction(data["action"]),
+            stage=data["stage"],
+            summary=data["summary"],
+            timestamp=data["timestamp"],
+            attempts=data.get("attempts", 1),
+            branch=data.get("branch"),
+            worktree_path=data.get("worktree_path"),
+            preserve_worktree=data.get("preserve_worktree", False),
+            extra=data.get("extra"),
+        )
+
+
 VALID_TRANSITIONS: dict[OrchestratorMode, set[OrchestratorMode]] = {
     OrchestratorMode.idle: {OrchestratorMode.running},
     OrchestratorMode.running: {
@@ -53,7 +112,7 @@ class OrchestratorState:
     last_completed_issue: str | None = None
     last_error: str | None = None
     run_history: list[dict] = field(default_factory=list)
-    needs_rework: dict[str, dict] = field(default_factory=dict)
+    issue_failures: dict[str, dict] = field(default_factory=dict)
 
 
 class StateStore:
@@ -66,6 +125,10 @@ class StateStore:
             return OrchestratorState()
         raw = json.loads(self._state_file.read_text())
         raw["mode"] = OrchestratorMode(raw["mode"])
+        # Migrate legacy needs_rework → issue_failures
+        if "needs_rework" in raw and "issue_failures" not in raw:
+            raw["issue_failures"] = raw.pop("needs_rework")
+        raw.pop("needs_rework", None)
         # Drop unknown keys and let missing fields use defaults (backward compat)
         known = {f.name for f in OrchestratorState.__dataclass_fields__.values()}
         raw = {k: v for k, v in raw.items() if k in known}
