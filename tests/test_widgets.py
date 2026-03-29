@@ -117,6 +117,27 @@ def test_config_panel_composes() -> None:
     assert len(children) == 2
 
 
+def test_config_panel_is_focusable() -> None:
+    panel = ConfigPanel()
+    assert panel.can_focus is True
+
+
+def test_config_panel_has_inspect_bindings() -> None:
+    panel = ConfigPanel()
+    binding_keys = [b.key for b in panel.BINDINGS]
+    assert "enter" in binding_keys
+    assert "i" in binding_keys
+
+
+def test_config_panel_stores_config() -> None:
+    panel = ConfigPanel()
+    assert panel._last_config is None
+    cfg = OrchestratorConfig(base_branch="develop", auto_push=False)
+    panel._last_config = cfg
+    assert panel._last_config.base_branch == "develop"
+    assert panel._last_config.auto_push is False
+
+
 def test_action_enabled_covers_all_actions() -> None:
     assert set(_ACTION_ENABLED.keys()) == {"start", "pause", "resume", "stop"}
 
