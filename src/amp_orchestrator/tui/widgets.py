@@ -218,6 +218,7 @@ class QueueTable(Static):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._issues: list[BdIssue] = []
+        self._row_key: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield Label("Ready Queue", classes="panel-title")
@@ -228,8 +229,13 @@ class QueueTable(Static):
         table.add_columns("Pri", "ID", "Title", "Created")
 
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
-        self._issues = list(snap.ready_issues)
+        new_keys = [issue.id for issue in snap.ready_issues]
+        if new_keys == self._row_key:
+            return
         table = self.query_one("#queue-datatable", DataTable)
+        saved_cursor = table.cursor_row
+        self._issues = list(snap.ready_issues)
+        self._row_key = new_keys
         table.clear()
         if not snap.ready_issues:
             table.add_row("-", "-", "[dim]No issues in queue[/]", "-")
@@ -237,6 +243,8 @@ class QueueTable(Static):
         for issue in snap.ready_issues:
             pri = str(issue.priority) if issue.priority else "-"
             table.add_row(pri, issue.id, issue.title, issue.created)
+        if table.row_count > 0:
+            table.move_cursor(row=min(saved_cursor, table.row_count - 1))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self._show_inspect()
@@ -271,7 +279,7 @@ class QueueTable(Static):
 
 
 class EventsLog(Static):
-    """Live events log with auto-scrolling."""
+    """Live events log with delta-based appending."""
 
     DEFAULT_CSS = """
     EventsLog {
@@ -286,27 +294,55 @@ class EventsLog(Static):
 
     can_focus = True
 
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._seen_count: int = 0
+        self._last_event_keys: list[str] = []
+
+    @staticmethod
+    def _event_key(entry: dict) -> str:
+        return f"{entry.get('timestamp', '')}:{entry.get('event_type', '')}"
+
+    @staticmethod
+    def _format_entry(entry: dict) -> str:
+        ts = entry.get("timestamp", "?")
+        if "T" in ts:
+            ts = ts.split("T")[1][:8]
+        etype = entry.get("event_type", "?")
+        data = entry.get("data")
+        color = EVENT_COLORS.get(etype, "white")
+        line = f"[dim]{ts}[/] [{color}]{etype}[/]"
+        if data:
+            line += f"  {data}"
+        return line
+
     def compose(self) -> ComposeResult:
         yield Label("Events", classes="panel-title")
         yield RichLog(id="events-richlog", wrap=True, max_lines=200)
 
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         log = self.query_one("#events-richlog", RichLog)
-        log.clear()
-        if not snap.recent_events:
-            log.write("[dim]No events yet[/]")
+        new_keys = [self._event_key(e) for e in snap.recent_events]
+        if new_keys == self._last_event_keys:
             return
-        for entry in snap.recent_events:
-            ts = entry.get("timestamp", "?")
-            if "T" in ts:
-                ts = ts.split("T")[1][:8]
-            etype = entry.get("event_type", "?")
-            data = entry.get("data")
-            color = EVENT_COLORS.get(etype, "white")
-            line = f"[dim]{ts}[/] [{color}]{etype}[/]"
-            if data:
-                line += f"  {data}"
-            log.write(line)
+        if not snap.recent_events:
+            if self._last_event_keys:
+                log.clear()
+                log.write("[dim]No events yet[/]")
+                self._last_event_keys = []
+                self._seen_count = 0
+            return
+        # If the log was empty or events were reset, do a full write
+        if not self._last_event_keys or new_keys[: len(self._last_event_keys)] != self._last_event_keys:
+            log.clear()
+            for entry in snap.recent_events:
+                log.write(self._format_entry(entry))
+        else:
+            # Append only new entries (delta)
+            for entry in snap.recent_events[len(self._last_event_keys) :]:
+                log.write(self._format_entry(entry))
+        self._last_event_keys = new_keys
+        self._seen_count = len(snap.recent_events)
 
 
 class HistoryTable(Static):
@@ -328,6 +364,7 @@ class HistoryTable(Static):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._runs: list[dict] = []
+        self._row_key: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield Label("Run History", classes="panel-title")
@@ -337,9 +374,19 @@ class HistoryTable(Static):
         table = self.query_one("#history-datatable", DataTable)
         table.add_columns("Timestamp", "Issue", "Result", "Branch", "Summary")
 
+    @staticmethod
+    def _run_key(run: dict) -> str:
+        return f"{run.get('timestamp', '')}:{run.get('issue_id', '')}:{run.get('result', '')}"
+
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
-        self._runs = list(reversed(snap.state.run_history))
+        runs = list(reversed(snap.state.run_history))
+        new_keys = [self._run_key(r) for r in runs]
+        if new_keys == self._row_key:
+            return
         table = self.query_one("#history-datatable", DataTable)
+        saved_cursor = table.cursor_row
+        self._runs = runs
+        self._row_key = new_keys
         table.clear()
         if not self._runs:
             table.add_row("-", "-", "[dim]No run history[/]", "-", "-")
@@ -356,6 +403,8 @@ class HistoryTable(Static):
             branch = run.get("branch", "")
             summary = run.get("summary", "")
             table.add_row(ts, issue_id, result, branch, summary)
+        if table.row_count > 0:
+            table.move_cursor(row=min(saved_cursor, table.row_count - 1))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self._show_inspect()
