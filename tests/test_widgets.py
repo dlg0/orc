@@ -112,3 +112,13 @@ def test_inspect_modal_init() -> None:
     modal = InspectModal(title="Test Title", body="Body text")
     assert modal._title == "Test Title"
     assert modal._body == "Body text"
+
+
+def test_help_modal_has_bindings() -> None:
+    from amp_orchestrator.tui.modals import _HELP_BINDINGS
+
+    assert len(_HELP_BINDINGS) >= 9
+    keys = [k for k, _ in _HELP_BINDINGS]
+    assert "q" in keys
+    assert "r" in keys
+    assert "?" in keys

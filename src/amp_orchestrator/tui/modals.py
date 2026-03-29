@@ -89,3 +89,50 @@ class ConfirmStopModal(ModalScreen[bool]):
 
     def action_cancel(self) -> None:
         self.dismiss(False)
+
+
+_HELP_BINDINGS = [
+    ("q", "Quit"),
+    ("r", "Refresh"),
+    ("s", "Start orchestrator"),
+    ("p", "Pause orchestrator"),
+    ("u", "Resume orchestrator"),
+    ("x", "Stop orchestrator"),
+    ("i / Enter", "Inspect selected item"),
+    ("Tab", "Next panel"),
+    ("Shift+Tab", "Previous panel"),
+    ("?", "Toggle this help"),
+]
+
+
+class HelpModal(ModalScreen[None]):
+    """Overlay showing all key bindings."""
+
+    DEFAULT_CSS = """
+    HelpModal {
+        align: center middle;
+    }
+    #help-dialog {
+        width: 60;
+        height: auto;
+        max-height: 80%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #help-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "dismiss", "Close"),
+        ("question_mark", "dismiss", "Close"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="help-dialog"):
+            yield Label("Key Bindings", id="help-title")
+            for key, desc in _HELP_BINDINGS:
+                yield Static(f"  [bold]{key:<16}[/] {desc}")

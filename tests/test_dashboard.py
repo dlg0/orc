@@ -277,6 +277,40 @@ async def test_stop_shows_confirmation_modal() -> None:
 
 
 @pytest.mark.asyncio
+async def test_help_overlay_opens_and_closes() -> None:
+    """Pressing '?' shows the HelpModal, pressing Escape closes it."""
+    app = OrchestratorApp()
+    async with app.run_test() as pilot:
+        await pilot.press("question_mark")
+        await pilot.pause()
+
+        from amp_orchestrator.tui.modals import HelpModal
+
+        assert isinstance(app.screen, HelpModal)
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, HelpModal)
+
+
+@pytest.mark.asyncio
+async def test_help_overlay_closes_with_question_mark() -> None:
+    """Pressing '?' again dismisses the HelpModal."""
+    app = OrchestratorApp()
+    async with app.run_test() as pilot:
+        await pilot.press("question_mark")
+        await pilot.pause()
+
+        from amp_orchestrator.tui.modals import HelpModal
+
+        assert isinstance(app.screen, HelpModal)
+
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert not isinstance(app.screen, HelpModal)
+
+
+@pytest.mark.asyncio
 async def test_pause_no_project_shows_notification() -> None:
     """Pressing 'p' with no state_dir should show an error notification."""
     app = OrchestratorApp()
