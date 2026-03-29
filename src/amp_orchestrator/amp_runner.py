@@ -35,6 +35,7 @@ class AmpResult:
     blockers: list[str] = field(default_factory=list)
     merge_ready: bool = False
     context_window_usage_pct: float | None = None
+    thread_id: str | None = None
 
 
 @dataclass
@@ -92,6 +93,7 @@ class StubAmpRunner:
 
 
 _DEFAULT_TIMEOUT = 1800  # 30 minutes
+_SUMMARY_TIMEOUT = 120  # 2 minutes for rush-mode summary extraction
 
 
 class RealAmpRunner:
@@ -226,6 +228,7 @@ class RealAmpRunner:
         # Parse all stream JSON messages
         result_msg: dict | None = None
         assistant_texts: list[str] = []
+        thread_id: str | None = None
 
         for line in stdout.splitlines():
             line = line.strip()
@@ -237,6 +240,12 @@ class RealAmpRunner:
                 continue
 
             msg_type = msg.get("type")
+
+            # Capture thread ID from any message that carries it
+            if thread_id is None:
+                tid = msg.get("thread_id") or msg.get("threadId")
+                if tid and isinstance(tid, str):
+                    thread_id = tid
 
             if msg_type == "result":
                 result_msg = msg
@@ -263,6 +272,7 @@ class RealAmpRunner:
                 result=ResultType.failed,
                 summary=error_text,
                 context_window_usage_pct=context_usage,
+                thread_id=thread_id,
             )
 
         # If no result message found and process failed, treat as error
@@ -271,6 +281,7 @@ class RealAmpRunner:
                 result=ResultType.failed,
                 summary=f"Amp exited with code {proc.returncode}",
                 context_window_usage_pct=context_usage,
+                thread_id=thread_id,
             )
 
         # Try to extract our custom orchestrator JSON from assistant text
@@ -300,6 +311,9 @@ class RealAmpRunner:
         # Override context_window_usage_pct from stream JSON usage (authoritative source)
         if context_usage is not None:
             result.context_window_usage_pct = context_usage
+
+        # Attach thread ID captured from stream JSON
+        result.thread_id = thread_id
 
         # If heuristic said not merge_ready, check for actual commits
         if not result.merge_ready and result.result == ResultType.completed:
@@ -369,6 +383,71 @@ class RealAmpRunner:
             summary="Amp completed (no structured result found)",
             merge_ready=False,
         )
+
+    # ------------------------------------------------------------------
+    # Rush-mode summary extraction
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def extract_rush_summary(
+        thread_id: str,
+        cwd: Path,
+        mode: str = "rush",
+        timeout: int = _SUMMARY_TIMEOUT,
+    ) -> str | None:
+        """Spawn a rush-mode amp thread to produce a one-line summary of another thread.
+
+        Returns the summary string, or ``None`` on failure.
+        """
+        amp_path = shutil.which("amp")
+        if amp_path is None:
+            logger.warning("Cannot extract rush summary: amp CLI not found")
+            return None
+
+        prompt = (
+            f"Read the thread @T-{thread_id} and produce a one-line summary "
+            "of what was accomplished. Output ONLY the summary line, nothing else."
+        )
+        cmd = [
+            amp_path,
+            "-x",
+            prompt,
+            "--mode",
+            mode,
+            "--dangerously-allow-all",
+            "--no-notifications",
+            "--no-color",
+            "--archive",
+        ]
+
+        logger.info("Extracting rush summary for thread %s", thread_id)
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("Rush summary timed out for thread %s", thread_id)
+            return None
+
+        if proc.returncode != 0:
+            logger.warning(
+                "Rush summary failed (exit %d) for thread %s",
+                proc.returncode,
+                thread_id,
+            )
+            return None
+
+        # Extract the last non-empty line from stdout as the summary
+        stdout = proc.stdout or ""
+        for line in reversed(stdout.strip().splitlines()):
+            line = line.strip()
+            if line:
+                return line
+        return None
 
     @staticmethod
     def _detect_commits(worktree_path: Path) -> dict | None:

@@ -124,10 +124,34 @@ def run_loop(
             "result": result.result.value,
             "summary": result.summary,
         }
+        if result.thread_id:
+            amp_finished_data["thread_id"] = result.thread_id
         if result.context_window_usage_pct is not None:
             amp_finished_data["context_window_usage_pct"] = result.context_window_usage_pct
         events.record(EventType.amp_finished, amp_finished_data)
         click.echo(f"[AMP] {issue.id} result={result.result.value} -- {result.summary}")
+        if result.thread_id:
+            click.echo(f"[AMP] {issue.id} thread_id={result.thread_id}")
+
+        # Optional rush-mode summary extraction
+        if (
+            config.summary_mode == "rush-extract"
+            and result.thread_id
+            and result.result == ResultType.completed
+        ):
+            from amp_orchestrator.amp_runner import RealAmpRunner
+
+            click.echo(f"[SUMMARY] {issue.id} extracting rush summary ...")
+            rush_summary = RealAmpRunner.extract_rush_summary(
+                thread_id=result.thread_id,
+                cwd=wt_info.worktree_path,
+                mode=config.summary_amp_mode,
+            )
+            if rush_summary:
+                click.echo(f"[SUMMARY] {issue.id} {rush_summary}")
+                result.summary = rush_summary
+            else:
+                click.echo(f"[SUMMARY] {issue.id} rush extraction failed, using self-report")
         if result.context_window_usage_pct is not None and result.context_window_usage_pct >= config.context_window_warn_threshold * 100:
             click.echo(f"[AMP] {issue.id} WARNING: context window usage high: {result.context_window_usage_pct}%")
 
@@ -138,10 +162,12 @@ def run_loop(
 
         wt_path = str(wt_info.worktree_path)
 
-        # Build extra dict with context usage if available
+        # Build extra dict with context usage and thread ID if available
         ctx_extra: dict = {}
         if result.context_window_usage_pct is not None:
             ctx_extra["context_window_usage_pct"] = result.context_window_usage_pct
+        if result.thread_id:
+            ctx_extra["thread_id"] = result.thread_id
 
         # Handle non-merge outcomes
         if result.result == ResultType.decomposed:

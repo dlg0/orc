@@ -33,6 +33,8 @@ class OrchestratorConfig:
     evaluation_mode: str | None = None
     evaluation_timeout: int = 900
     context_window_warn_threshold: float = 0.85
+    summary_mode: str = "self-report"  # "self-report" | "rush-extract" | "stream-json"
+    summary_amp_mode: str = "rush"
 
 
 CONFIG_DIR = ".amp-orchestrator"
@@ -114,6 +116,8 @@ def create_default_config(repo_root: Path) -> Path:
         "evaluation_mode": config.evaluation_mode,
         "evaluation_timeout": config.evaluation_timeout,
         "context_window_warn_threshold": config.context_window_warn_threshold,
+        "summary_mode": config.summary_mode,
+        "summary_amp_mode": config.summary_amp_mode,
     }
 
     config_path = config_dir / CONFIG_FILE
