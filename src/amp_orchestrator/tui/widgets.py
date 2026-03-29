@@ -284,7 +284,7 @@ class StatusPanel(Static):
         yield Label("Status", classes="panel-title")
         yield Label("[bold white]○ IDLE[/]", id="mode-badge")
         yield Label("[italic]Last updated: —[/]", id="last-updated")
-        yield Label("Queue: 0 issue(s)", id="queue-count")
+        yield Label("Ready Queue: 0 issue(s)", id="queue-count")
         yield Label("[italic]Events: —[/]", id="event-severity-counts")
         yield Label("[italic]Held: —[/]", id="failed-count")
         yield Label("[italic]Last completed: —[/]", id="last-completed")
@@ -328,7 +328,7 @@ class StatusPanel(Static):
 
         if not snap.is_fast:
             self.query_one("#queue-count", Label).update(
-                f"Queue: {len(snap.ready_issues)} issue(s)"
+                f"Ready Queue: {len(snap.ready_issues)} issue(s)"
             )
 
         # Event severity counts

@@ -113,7 +113,7 @@ _HELP_BINDINGS = [
     ("i / Enter", "Inspect selected item"),
     ("Tab", "Next focus"),
     ("Shift+Tab", "Previous focus"),
-    ("?", "Toggle this help"),
+    ("?", "Show this help"),
 ]
 
 
