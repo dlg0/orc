@@ -31,6 +31,7 @@ from amp_orchestrator.tui.widgets import (
     QueueTable,
     StaleBanner,
     StatusPanel,
+    SummaryStrip,
 )
 
 
@@ -229,6 +230,12 @@ def test_pending_action_none_does_not_suppress() -> None:
     app = OrchestratorApp()
     snap = _snap(mode=OrchestratorMode.idle)
     assert app._check_pending_action(snap) is False
+
+
+def test_summary_strip_composes() -> None:
+    strip = SummaryStrip()
+    children = list(strip.compose())
+    assert len(children) == 1  # Label
 
 
 def test_stale_banner_composes() -> None:
