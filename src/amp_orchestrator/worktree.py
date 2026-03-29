@@ -69,7 +69,7 @@ class WorktreeManager:
         subprocess.run(
             [
                 "git", "worktree", "add",
-                "-b", branch_name,
+                "-B", branch_name,
                 str(worktree_path),
                 f"origin/{self.base_branch}",
             ],
