@@ -51,6 +51,71 @@ def _format_run_timestamp(ts: str) -> str:
         return ts
 
 
+class SummaryStrip(Static):
+    """One-line summary strip for at-a-glance orchestrator status."""
+
+    DEFAULT_CSS = """
+    SummaryStrip {
+        height: 1;
+        background: $surface;
+        color: white;
+        padding: 0 1;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Label("○ IDLE", id="summary-strip-text")
+
+    def update_snapshot(self, snap: DashboardSnapshot) -> None:
+        color, text = MODE_STYLES.get(
+            snap.state.mode, ("bold white", snap.state.mode.value)
+        )
+        parts: list[str] = [f"[{color}]{text}[/]"]
+
+        # Active agents
+        active = 1 if snap.state.active_issue_id else 0
+        if active:
+            parts.append(f"[bold]{active} active[/]")
+
+        # Queued (only available on full snapshots)
+        if not snap.is_fast and snap.ready_issues is not None:
+            parts.append(f"{len(snap.ready_issues)} queued")
+
+        # Held issues
+        held = len(snap.state.issue_failures)
+        if held:
+            parts.append(f"[bold bright_yellow]{held} held[/]")
+
+        # Error count from events
+        err_count = sum(
+            1 for e in snap.recent_events if _event_severity(e.get("event_type", "")) == "ERR"
+        )
+        if err_count:
+            parts.append(f"[bold red]{err_count} error{'s' if err_count != 1 else ''}[/]")
+
+        # Last refresh time
+        try:
+            ts = snap.recent_events[-1].get("timestamp", "") if snap.recent_events else ""
+            if "T" in ts:
+                ts = ts.split("T")[1][:8]
+            if ts:
+                parts.append(f"[italic]updated {ts}[/]")
+        except (IndexError, AttributeError):
+            pass
+
+        self.query_one("#summary-strip-text", Label).update(" | ".join(parts))
+
+    def show_no_project(self) -> None:
+        self.query_one("#summary-strip-text", Label).update(
+            "[bold red]⚠ NOT CONNECTED[/]"
+        )
+
+    def show_transitional(self, text: str) -> None:
+        self.query_one("#summary-strip-text", Label).update(
+            f"[bright_yellow]{text}[/]"
+        )
+
+
 class StaleBanner(Static):
     """Banner shown when dashboard data is stale or refresh has failed."""
 

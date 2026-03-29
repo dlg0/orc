@@ -28,6 +28,7 @@ from amp_orchestrator.tui.widgets import (
     QueueTable,
     StaleBanner,
     StatusPanel,
+    SummaryStrip,
 )
 
 
@@ -88,6 +89,7 @@ class OrchestratorApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield SummaryStrip()
         yield NotConnectedBanner()
         yield StaleBanner()
         with Horizontal(id="main-area"):
@@ -115,6 +117,7 @@ class OrchestratorApp(App):
     def _show_no_project(self) -> None:
         """Switch all panels to the no-project placeholder state."""
         self.query_one(NotConnectedBanner).add_class("visible")
+        self.query_one(SummaryStrip).show_no_project()
         self.query_one(StatusPanel).show_no_project()
         self.query_one(ActiveIssuePanel).show_no_project()
         self.query_one(ConfigPanel).show_no_project()
@@ -228,6 +231,7 @@ class OrchestratorApp(App):
         self._orch_mode = snap.state.mode
         suppress = self._check_pending_action(snap)
         if not suppress:
+            self.query_one(SummaryStrip).update_snapshot(snap)
             self.query_one(StatusPanel).update_snapshot(snap)
             self.query_one(ControlsPanel).update_snapshot(snap)
         self.query_one(ActiveIssuePanel).update_snapshot(snap)
@@ -239,6 +243,7 @@ class OrchestratorApp(App):
         self._orch_mode = snap.state.mode
         suppress = self._check_pending_action(snap)
         if not suppress:
+            self.query_one(SummaryStrip).update_snapshot(snap)
             self.query_one(StatusPanel).update_snapshot(snap)
             self.query_one(ControlsPanel).update_snapshot(snap)
         self.query_one(ActiveIssuePanel).update_snapshot(snap)
@@ -330,6 +335,7 @@ class OrchestratorApp(App):
         """Immediately disable controls and show transitional status."""
         self._pending_action = action
         label = self._ACTION_LABELS.get(action, (f"{action.capitalize()}\u2026",))[0]
+        self.query_one(SummaryStrip).show_transitional(label)
         self.query_one(StatusPanel).show_transitional(label)
         self.query_one(ControlsPanel).disable_all()
 
