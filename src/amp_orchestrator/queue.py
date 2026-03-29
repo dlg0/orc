@@ -136,11 +136,70 @@ def unclaim_issue(issue_id: str, cwd: Path | None = None) -> bool:
 def select_next_issue(
     issues: list[BdIssue],
     skip_ids: set[str] | None = None,
+    priority_id: str | None = None,
 ) -> BdIssue | None:
-    """Pick the highest-priority, oldest issue not in *skip_ids*."""
+    """Pick the highest-priority, oldest issue not in *skip_ids*.
+
+    If *priority_id* is set and present in *issues* (and not skipped),
+    it is returned immediately regardless of priority/date ordering.
+    This supports parent-promotion: when all children of a parent are
+    closed, the parent is force-selected as the next issue.
+    """
     skip = skip_ids or set()
     candidates = [i for i in issues if i.id not in skip]
     if not candidates:
         return None
+    if priority_id:
+        for c in candidates:
+            if c.id == priority_id:
+                return c
     candidates.sort(key=_sort_key)
     return candidates[0]
+
+
+def get_issue_parent(issue_id: str, cwd: Path | None = None) -> str | None:
+    """Return the parent issue ID for *issue_id*, or None if it has no parent.
+
+    Calls ``bd show <id> --json`` and reads the ``parent`` field.
+    """
+    try:
+        result = subprocess.run(
+            ["bd", "show", issue_id, "--json"],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout)
+        if isinstance(data, list) and len(data) > 0:
+            return data[0].get("parent") or None
+        return None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def get_children_all_closed(parent_id: str, cwd: Path | None = None) -> bool | None:
+    """Check whether all children of *parent_id* are closed.
+
+    Returns True if the parent has children and all are closed,
+    False if any child is not closed,
+    None if the parent has no children or the query fails.
+    """
+    try:
+        result = subprocess.run(
+            ["bd", "children", parent_id, "--json"],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout)
+        if not isinstance(data, list) or len(data) == 0:
+            return None
+        return all(child.get("status") == "closed" for child in data)
+    except (OSError, json.JSONDecodeError):
+        return None

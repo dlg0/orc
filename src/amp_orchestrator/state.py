@@ -179,6 +179,7 @@ class OrchestratorState:
     last_error: str | None = None
     run_history: list[dict] = field(default_factory=list)
     issue_failures: dict[str, dict] = field(default_factory=dict)
+    promoted_parent: str | None = None
 
     # --- Convenience accessors for backward compatibility ---
 
