@@ -268,6 +268,7 @@ class StatusPanel(Static):
     DEFAULT_CSS = """
     StatusPanel {
         height: auto;
+        min-height: 10;
         border: solid grey;
         padding: 0 1;
     }
@@ -284,22 +285,22 @@ class StatusPanel(Static):
         yield Label("[grey]○ IDLE[/]", id="mode-badge")
         yield Label("[dim]Last updated: —[/]", id="last-updated")
         yield Label("Queue: 0 issue(s)", id="queue-count")
-        yield Label("", id="event-severity-counts")
-        yield Label("", id="failed-count")
-        yield Label("", id="last-completed")
-        yield Label("", id="last-error")
+        yield Label("[dim]Events: —[/]", id="event-severity-counts")
+        yield Label("[dim]Held: —[/]", id="failed-count")
+        yield Label("[dim]Last completed: —[/]", id="last-completed")
+        yield Label("[dim]Last error: —[/]", id="last-error")
         yield ErrorAlert()
 
     def show_no_project(self) -> None:
         self.query_one("#mode-badge", Label).update(
             "[bold red]⚠ NOT CONNECTED[/]"
         )
-        self.query_one("#last-updated", Label).update("")
+        self.query_one("#last-updated", Label).update("[dim]Last updated: —[/]")
         self.query_one("#queue-count", Label).update(NO_PROJECT_PLACEHOLDER)
-        self.query_one("#event-severity-counts", Label).update("")
-        self.query_one("#failed-count", Label).update("")
-        self.query_one("#last-completed", Label).update("")
-        self.query_one("#last-error", Label).update("")
+        self.query_one("#event-severity-counts", Label).update("[dim]Events: —[/]")
+        self.query_one("#failed-count", Label).update("[dim]Held: —[/]")
+        self.query_one("#last-completed", Label).update("[dim]Last completed: —[/]")
+        self.query_one("#last-error", Label).update("[dim]Last error: —[/]")
         self.query_one(ErrorAlert).set_error("")
 
     def update_last_refreshed(self, ts: datetime) -> None:
@@ -346,7 +347,7 @@ class StatusPanel(Static):
                 parts.append(f"[yellow]{warn_count} warning(s)[/]")
             sev_label.update("Events: " + ", ".join(parts))
         else:
-            sev_label.update("")
+            sev_label.update("[dim]Events: —[/]")
 
         # Held issues by category
         fc = self.query_one("#failed-count", Label)
@@ -358,19 +359,19 @@ class StatusPanel(Static):
             parts = ", ".join(f"{cat}: {n}" for cat, n in sorted(by_cat.items()))
             fc.update(f"[bold red]Held: {len(snap.state.issue_failures)} ({parts})[/]")
         else:
-            fc.update("")
+            fc.update("[dim]Held: —[/]")
 
         lc = self.query_one("#last-completed", Label)
         if snap.state.last_completed_issue:
             lc.update(f"[green]Last completed: {snap.state.last_completed_issue}[/]")
         else:
-            lc.update("")
+            lc.update("[dim]Last completed: —[/]")
 
         le = self.query_one("#last-error", Label)
         if snap.state.last_error:
             le.update(f"[red]Last error: {snap.state.last_error}[/]")
         else:
-            le.update("")
+            le.update("[dim]Last error: —[/]")
 
         # Persistent error alert
         self.query_one(ErrorAlert).set_error(snap.state.last_error or "")
