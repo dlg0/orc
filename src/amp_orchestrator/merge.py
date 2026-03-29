@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from amp_orchestrator.events import EventLog, EventType
-from amp_orchestrator.worktree import WorktreeInfo
+from amp_orchestrator.worktree import WorktreeInfo, build_worktree_env
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +96,7 @@ def _resolve_conflicts_with_amp(
             capture_output=True,
             text=True,
             timeout=conflict_resolution_timeout,
+            env=build_worktree_env(worktree_path),
         )
     except subprocess.TimeoutExpired:
         logger.error("Conflict resolution timed out after %ds", conflict_resolution_timeout)
@@ -280,6 +281,7 @@ def verify_and_merge(
                 check=True,
                 capture_output=True,
                 shell=True,
+                env=build_worktree_env(worktree_info.worktree_path),
             )
         except subprocess.CalledProcessError as e:
             if events:

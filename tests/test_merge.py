@@ -12,7 +12,7 @@ from amp_orchestrator.merge import (
     _build_conflict_prompt,
     verify_and_merge,
 )
-from amp_orchestrator.worktree import WorktreeInfo
+from amp_orchestrator.worktree import WorktreeInfo, build_worktree_env
 
 
 WORKTREE_INFO = WorktreeInfo(
@@ -97,15 +97,15 @@ class TestVerifyAndMergeSuccess:
             ["git", "rebase", "origin/main"],
             cwd=WORKTREE_INFO.worktree_path, check=True, capture_output=True,
         )
-        # verify commands
-        assert calls[4] == call(
-            "make test",
-            cwd=WORKTREE_INFO.worktree_path, check=True, capture_output=True, shell=True,
-        )
-        assert calls[5] == call(
-            "make lint",
-            cwd=WORKTREE_INFO.worktree_path, check=True, capture_output=True, shell=True,
-        )
+        # verify commands (env= is set by build_worktree_env)
+        assert calls[4][0][0] == "make test"
+        assert calls[4][1]["cwd"] == WORKTREE_INFO.worktree_path
+        assert calls[4][1]["shell"] is True
+        assert "env" in calls[4][1]
+        assert calls[5][0][0] == "make lint"
+        assert calls[5][1]["cwd"] == WORKTREE_INFO.worktree_path
+        assert calls[5][1]["shell"] is True
+        assert "env" in calls[5][1]
         # checkout
         assert calls[6] == call(
             ["git", "checkout", "main"],
@@ -617,3 +617,69 @@ class TestMergeConflictResolution:
 
         assert result.success is True
         assert result.conflict_resolved is True
+
+
+class TestWorktreeEnvPassed:
+    @patch("amp_orchestrator.merge.build_worktree_env")
+    @patch("amp_orchestrator.merge.subprocess.run")
+    def test_verification_commands_pass_worktree_env(self, mock_run, mock_env) -> None:
+        """Verification subprocess calls pass env=build_worktree_env()."""
+        fake_env = {"PYTHONPATH": "/repo/.worktrees/ISSUE-1/src", "PATH": "/usr/bin"}
+        mock_env.return_value = fake_env
+        mock_run.side_effect = _preflight_side_effect
+
+        result = verify_and_merge(
+            worktree_info=WORKTREE_INFO,
+            repo_root=REPO_ROOT,
+            base_branch=BASE_BRANCH,
+            verification_commands=["make test"],
+            auto_push=False,
+            issue_id=ISSUE_ID,
+        )
+
+        assert result.success is True
+        shell_calls = [c for c in mock_run.call_args_list if c[1].get("shell")]
+        assert len(shell_calls) == 1
+        assert shell_calls[0][1]["env"] is fake_env
+
+    @patch("amp_orchestrator.merge.build_worktree_env")
+    @patch("amp_orchestrator.merge.shutil.which", return_value="/usr/bin/amp")
+    @patch("amp_orchestrator.merge.subprocess.run")
+    def test_conflict_resolution_passes_worktree_env(self, mock_run, mock_which, mock_env) -> None:
+        """Conflict resolution amp subprocess passes env=build_worktree_env()."""
+        fake_env = {"PYTHONPATH": "/repo/.worktrees/ISSUE-1/src", "PATH": "/usr/bin"}
+        mock_env.return_value = fake_env
+        conflict_attempt = [False]
+
+        def side_effect(*args, **kwargs):
+            cmd = args[0]
+            if isinstance(cmd, list) and cmd[:2] == ["git", "rebase"] and "--abort" not in cmd and "--continue" not in cmd:
+                if not conflict_attempt[0]:
+                    conflict_attempt[0] = True
+                    raise subprocess.CalledProcessError(1, cmd, stderr=b"CONFLICT")
+                return subprocess.CompletedProcess(cmd, 0)
+            if isinstance(cmd, list) and cmd[:3] == ["git", "diff", "--name-only"]:
+                if conflict_attempt[0] and kwargs.get("text"):
+                    return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+                return subprocess.CompletedProcess(cmd, 0, stdout="foo.py\n", stderr="")
+            if isinstance(cmd, list) and cmd[0].endswith("amp"):
+                return subprocess.CompletedProcess(cmd, 0)
+            if isinstance(cmd, list) and cmd[:2] == ["git", "rebase"] and "--continue" in cmd:
+                return subprocess.CompletedProcess(cmd, 0)
+            return _preflight_side_effect(*args, **kwargs)
+
+        mock_run.side_effect = side_effect
+
+        result = verify_and_merge(
+            worktree_info=WORKTREE_INFO,
+            repo_root=REPO_ROOT,
+            base_branch=BASE_BRANCH,
+            verification_commands=[],
+            auto_push=False,
+            issue_id=ISSUE_ID,
+        )
+
+        assert result.success is True
+        amp_calls = [c for c in mock_run.call_args_list if isinstance(c[0][0], list) and c[0][0][0].endswith("amp")]
+        assert len(amp_calls) == 1
+        assert amp_calls[0][1]["env"] is fake_env
