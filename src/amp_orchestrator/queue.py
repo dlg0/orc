@@ -80,6 +80,24 @@ def _sort_key(issue: BdIssue) -> tuple[int, str]:
     return (effective, issue.created)
 
 
+def claim_issue(issue_id: str, cwd: Path | None = None) -> bool:
+    """Run ``bd update <id> --claim`` to atomically claim an issue.
+
+    Returns True if the claim succeeded, False otherwise.
+    """
+    try:
+        result = subprocess.run(
+            ["bd", "update", issue_id, "--claim"],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            check=False,
+        )
+        return result.returncode == 0
+    except OSError:
+        return False
+
+
 def select_next_issue(
     issues: list[BdIssue],
     skip_ids: set[str] | None = None,

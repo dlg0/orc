@@ -458,6 +458,79 @@ def test_evaluation_failure_persists_needs_rework(repo_root: Path, state_dir: Pa
     assert "timestamp" in state.needs_rework["test-1"]
 
 
+def test_claim_issue_called_before_amp(repo_root: Path, state_dir: Path) -> None:
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    runner = StubAmpRunner.completed()
+    issue = _make_issue()
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return [issue]
+        return []
+
+    mock_merge = MagicMock()
+    mock_merge.return_value = MagicMock(success=True, stage="complete")
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
+    mock_wt_info.branch_name = "amp/test-1-test-issue"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("amp_orchestrator.scheduler.claim_issue", return_value=True) as mock_claim,
+    ):
+        run_loop(repo_root, state_dir, config, runner)
+
+    mock_claim.assert_called_once_with(issue.id, cwd=repo_root)
+
+
+def test_claim_failure_still_runs_amp(repo_root: Path, state_dir: Path) -> None:
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    runner = StubAmpRunner.completed()
+    issue = _make_issue()
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return [issue]
+        return []
+
+    mock_merge = MagicMock()
+    mock_merge.return_value = MagicMock(success=True, stage="complete")
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
+    mock_wt_info.branch_name = "amp/test-1-test-issue"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("amp_orchestrator.scheduler.claim_issue", return_value=False),
+    ):
+        run_loop(repo_root, state_dir, config, runner)
+
+    # Amp still ran and completed despite claim failure
+    state = StateStore(state_dir).load()
+    assert state.last_completed_issue == "test-1"
+    assert state.run_history[0]["result"] == "completed"
+
+
 def test_needs_rework_skipped_on_restart(repo_root: Path, state_dir: Path) -> None:
     store = StateStore(state_dir)
     state = OrchestratorState(
