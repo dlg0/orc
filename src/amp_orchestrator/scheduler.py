@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
@@ -12,11 +14,71 @@ from amp_orchestrator.evaluator import IssueEvaluator
 from amp_orchestrator.events import EventLog, EventType
 from amp_orchestrator.merge import verify_and_merge
 from amp_orchestrator.queue import claim_issue, get_ready_issues, select_next_issue
-from amp_orchestrator.state import OrchestratorMode, OrchestratorState, StateStore
+from amp_orchestrator.state import (
+    FailureAction,
+    FailureCategory,
+    IssueFailure,
+    OrchestratorMode,
+    OrchestratorState,
+    StateStore,
+)
 from amp_orchestrator.worktree import WorktreeManager
 
 
 _ISSUE_DIVIDER = "-" * 60
+_QUEUE_RETRY_MAX = 3
+_QUEUE_RETRY_DELAY = 5  # seconds
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _record_failure(
+    store: StateStore,
+    state: OrchestratorState,
+    issue_id: str,
+    category: FailureCategory,
+    stage: str,
+    summary: str,
+    branch: str | None = None,
+    worktree_path: str | None = None,
+    preserve_worktree: bool = False,
+    extra: dict | None = None,
+) -> IssueFailure:
+    """Persist an IssueFailure into state.issue_failures."""
+    action = _action_for_category(category)
+    existing = state.issue_failures.get(issue_id)
+    attempts = 1
+    if existing and isinstance(existing, dict) and "attempts" in existing:
+        attempts = existing["attempts"] + 1
+
+    failure = IssueFailure(
+        category=category,
+        action=action,
+        stage=stage,
+        summary=summary,
+        timestamp=_now_iso(),
+        attempts=attempts,
+        branch=branch,
+        worktree_path=worktree_path,
+        preserve_worktree=preserve_worktree,
+        extra=extra,
+    )
+    state.issue_failures[issue_id] = failure.to_dict()
+    store.save(state)
+    return failure
+
+
+def _action_for_category(category: FailureCategory) -> FailureAction:
+    """Map failure category to the default action."""
+    return {
+        FailureCategory.transient_external: FailureAction.auto_retry,
+        FailureCategory.stale_or_conflicted: FailureAction.hold_for_retry,
+        FailureCategory.issue_needs_rework: FailureAction.hold_until_backlog_changes,
+        FailureCategory.blocked_by_dependency: FailureAction.hold_until_backlog_changes,
+        FailureCategory.fatal_run_error: FailureAction.pause_orchestrator,
+    }[category]
 
 
 def run_loop(
@@ -31,7 +93,6 @@ def run_loop(
     events = EventLog(state_dir)
     worktree_mgr = WorktreeManager(repo_root, config.base_branch)
     state = store.load()
-    failed_ids: set[str] = set(state.issue_failures.keys())
     issue_num = 0
 
     while True:
@@ -54,11 +115,27 @@ def run_loop(
         if state.mode != OrchestratorMode.running:
             return
 
-        # Select next issue
-        queue_result = get_ready_issues(repo_root)
+        # Derive skip_ids from persisted issue_failures
+        failed_ids: set[str] = set(state.issue_failures.keys())
+
+        # Select next issue — with queue-failure retry
+        queue_result = None
+        for attempt in range(1, _QUEUE_RETRY_MAX + 1):
+            queue_result = get_ready_issues(repo_root)
+            if queue_result.success:
+                break
+            click.echo(f"[SCHEDULER] Queue fetch failed (attempt {attempt}/{_QUEUE_RETRY_MAX}): {queue_result.error}")
+            events.record(EventType.error, {"stage": "queue", "error": queue_result.error, "attempt": attempt})
+            if attempt < _QUEUE_RETRY_MAX:
+                time.sleep(_QUEUE_RETRY_DELAY)
+
+        assert queue_result is not None  # always set after loop
+
         if not queue_result.success:
-            click.echo(f"[SCHEDULER] Queue fetch failed: {queue_result.error}")
-            events.record(EventType.error, {"stage": "queue", "error": queue_result.error})
+            click.echo("[SCHEDULER] Queue fetch failed after retries — continuing loop")
+            events.record(EventType.error, {"stage": "queue", "error": queue_result.error, "retries_exhausted": True})
+            continue
+
         issue = select_next_issue(queue_result.issues, skip_ids=failed_ids)
 
         if issue is None:
@@ -80,7 +157,8 @@ def run_loop(
         except Exception as exc:
             click.echo(f"[WORKTREE] {issue.id} FAILED: {exc}")
             events.record(EventType.error, {"issue_id": issue.id, "stage": "worktree", "error": str(exc)})
-            failed_ids.add(issue.id)
+            wt_category = FailureCategory.transient_external if isinstance(exc, OSError) else FailureCategory.fatal_run_error
+            _record_failure(store, state, issue.id, wt_category, "worktree", str(exc))
             _record_run(store, state, issue.id, "failed", str(exc), amp_mode=config.amp_mode)
             continue
 
@@ -116,7 +194,10 @@ def run_loop(
         except Exception as exc:
             click.echo(f"[AMP] {issue.id} FAILED: {exc}")
             events.record(EventType.error, {"issue_id": issue.id, "stage": "amp", "error": str(exc)})
-            failed_ids.add(issue.id)
+            _record_failure(
+                store, state, issue.id, FailureCategory.issue_needs_rework, "amp",
+                str(exc), wt_info.branch_name, str(wt_info.worktree_path),
+            )
             _clear_active(store, state)
             _record_run(store, state, issue.id, "failed", str(exc), worktree_path=str(wt_info.worktree_path), amp_mode=config.amp_mode)
             _try_cleanup(worktree_mgr, wt_info)
@@ -175,14 +256,32 @@ def run_loop(
         # Handle non-merge outcomes
         if result.result == ResultType.decomposed:
             click.echo(f"[AMP] {issue.id} decomposed -- skipping merge")
+            _record_failure(
+                store, state, issue.id, FailureCategory.blocked_by_dependency, "amp",
+                result.summary, wt_info.branch_name, wt_path,
+            )
             _clear_active(store, state)
             _record_run(store, state, issue.id, "decomposed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
             continue
 
-        if result.result in (ResultType.failed, ResultType.blocked, ResultType.needs_human):
+        if result.result == ResultType.blocked:
             click.echo(f"[AMP] {issue.id} {result.result.value} -- moving on")
-            failed_ids.add(issue.id)
+            _record_failure(
+                store, state, issue.id, FailureCategory.blocked_by_dependency, "amp",
+                result.summary, wt_info.branch_name, wt_path,
+            )
+            _clear_active(store, state)
+            _record_run(store, state, issue.id, result.result.value, result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
+            _try_cleanup(worktree_mgr, wt_info)
+            continue
+
+        if result.result in (ResultType.failed, ResultType.needs_human):
+            click.echo(f"[AMP] {issue.id} {result.result.value} -- moving on")
+            _record_failure(
+                store, state, issue.id, FailureCategory.issue_needs_rework, "amp",
+                result.summary, wt_info.branch_name, wt_path,
+            )
             _clear_active(store, state)
             _record_run(store, state, issue.id, result.result.value, result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
@@ -190,7 +289,10 @@ def run_loop(
 
         if not result.merge_ready:
             click.echo(f"[AMP] {issue.id} completed but not merge-ready -- skipping merge")
-            failed_ids.add(issue.id)
+            _record_failure(
+                store, state, issue.id, FailureCategory.issue_needs_rework, "amp",
+                result.summary, wt_info.branch_name, wt_path,
+            )
             _clear_active(store, state)
             _record_run(store, state, issue.id, "completed_no_merge", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             continue
@@ -223,18 +325,15 @@ def run_loop(
             if eval_result.passed:
                 click.echo(f"[EVAL] {issue.id} PASSED: {eval_result.summary}")
             else:
-                from datetime import datetime, timezone
-
                 click.echo(f"[EVAL] {issue.id} FAILED: {eval_result.summary}")
                 events.record(EventType.issue_needs_rework, {
                     "issue_id": issue.id,
                     "summary": eval_result.summary,
                 })
-                failed_ids.add(issue.id)
-                state.issue_failures[issue.id] = {
-                    "summary": eval_result.summary,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
+                _record_failure(
+                    store, state, issue.id, FailureCategory.issue_needs_rework, "evaluation",
+                    eval_result.summary, wt_info.branch_name, wt_path,
+                )
                 _clear_active(store, state)
                 rework_extra = {"evaluation": eval_result.to_dict()}
                 rework_extra.update(ctx_extra)
@@ -265,6 +364,8 @@ def run_loop(
                 click.echo(f"[MERGE] {issue.id} OK")
             events.record(EventType.issue_closed, {"issue_id": issue.id})
             state.last_completed_issue = issue.id
+            # Clear failure record on success
+            state.issue_failures.pop(issue.id, None)
             _clear_active(store, state)
             _record_run(store, state, issue.id, "completed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
@@ -275,10 +376,20 @@ def run_loop(
                 "stage": merge_result.stage,
                 "error": merge_result.error,
             })
-            failed_ids.add(issue.id)
+            is_conflict = merge_result.stage in ("rebase", "merge") and merge_result.error and "conflict" in merge_result.error.lower()
+            merge_category = FailureCategory.stale_or_conflicted if is_conflict else FailureCategory.stale_or_conflicted
+            preserve = is_conflict
+            _record_failure(
+                store, state, issue.id, merge_category, f"merge/{merge_result.stage}",
+                f"merge failed at {merge_result.stage}", wt_info.branch_name, wt_path,
+                preserve_worktree=preserve,
+            )
             state.last_error = f"{issue.id}: merge failed at {merge_result.stage}"
             _clear_active(store, state)
             _record_run(store, state, issue.id, "failed", f"merge failed at {merge_result.stage}", wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
+            # Preserve worktree for conflict failures
+            if not preserve:
+                _try_cleanup(worktree_mgr, wt_info)
 
 
 def _clear_active(store: StateStore, state: OrchestratorState) -> None:
@@ -302,13 +413,11 @@ def _record_run(
     extra: dict | None = None,
 ) -> None:
     """Append a run record to history and save."""
-    from datetime import datetime, timezone
-
     entry: dict = {
         "issue_id": issue_id,
         "result": result,
         "summary": summary,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": _now_iso(),
     }
     if branch:
         entry["branch"] = branch
