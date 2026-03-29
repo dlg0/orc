@@ -418,14 +418,26 @@ class ActiveIssuePanel(Static):
     }
     """
 
+    can_focus = True
+
+    BINDINGS = [
+        Binding("enter", "inspect", "Inspect", show=True),
+        Binding("i", "inspect", "Inspect", show=False),
+    ]
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._last_snap_state: OrchestratorState | None = None
+
     def compose(self) -> ComposeResult:
-        yield Label("Active Issue", classes="panel-title")
+        yield Label("Active Issue (Enter/i to inspect)", classes="panel-title")
         yield Label("[dim]No active issue[/]", id="active-detail")
 
     def show_no_project(self) -> None:
         self.query_one("#active-detail", Label).update(NO_PROJECT_PLACEHOLDER)
 
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
+        self._last_snap_state = snap.state
         detail = self.query_one("#active-detail", Label)
         if snap.state.active_issue_id:
             lines = [f"[bold]{snap.state.active_issue_id}[/]"]
@@ -447,6 +459,36 @@ class ActiveIssuePanel(Static):
             detail.update("\n".join(lines))
         else:
             detail.update("[dim]No active issue[/]")
+
+    def action_inspect(self) -> None:
+        self._show_inspect()
+
+    def _show_inspect(self) -> None:
+        state = self._last_snap_state
+        if not state or not state.active_issue_id:
+            return
+        title = f"Active Issue: {state.active_issue_id}"
+        lines = [f"[bold]Issue ID:[/] {state.active_issue_id}"]
+        if state.active_issue_title:
+            lines.append(f"[bold]Title:[/] {state.active_issue_title}")
+        if state.active_stage:
+            color, label = _STAGE_STYLES.get(
+                state.active_stage,
+                ("yellow", state.active_stage),
+            )
+            elapsed = ""
+            if state.active_started_at:
+                elapsed = f" ({_format_elapsed(state.active_started_at)})"
+            lines.append(f"[bold]Stage:[/] [{color}]{label}[/]{elapsed}")
+        if state.active_started_at:
+            lines.append(f"[bold]Started At:[/] {state.active_started_at}")
+        if state.active_branch:
+            lines.append(f"[bold]Branch:[/] {state.active_branch}")
+        if state.active_worktree_path:
+            lines.append(f"[bold]Worktree:[/] {state.active_worktree_path}")
+        from amp_orchestrator.tui.modals import InspectModal
+
+        self.app.push_screen(InspectModal(title=title, body="\n".join(lines)))
 
 
 class ConfigPanel(Static):
