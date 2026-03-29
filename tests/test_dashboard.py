@@ -311,6 +311,25 @@ async def test_help_overlay_closes_with_question_mark() -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_launches_subprocess() -> None:
+    """Pressing 's' launches orchestrator via subprocess, not blocking call."""
+    app = OrchestratorApp(repo_root=Path("/tmp/repo"), state_dir=Path("/tmp/state"))
+    async with app.run_test(notifications=True) as pilot:
+        with patch(
+            "amp_orchestrator.subprocess_launcher.launch_orchestrator"
+        ) as mock_launch:
+            from unittest.mock import MagicMock
+
+            mock_launch.return_value = MagicMock(pid=42)
+            await pilot.press("s")
+            await pilot.pause()
+            await pilot.pause()  # extra pause for thread to complete
+            mock_launch.assert_called_once_with(
+                "start", Path("/tmp/repo"), Path("/tmp/state")
+            )
+
+
+@pytest.mark.asyncio
 async def test_pause_no_project_shows_notification() -> None:
     """Pressing 'p' with no state_dir should show an error notification."""
     app = OrchestratorApp()

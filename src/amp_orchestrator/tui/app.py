@@ -199,23 +199,34 @@ class OrchestratorApp(App):
         """Run a control action in a background thread."""
         import click
 
-        from amp_orchestrator.control import (
-            pause_orchestrator,
-            resume_orchestrator,
-            start_orchestrator,
-            stop_orchestrator,
-        )
-
         try:
-            if action == "start":
-                start_orchestrator(self._repo_root, self._state_dir)  # type: ignore[arg-type]
-            elif action == "pause":
-                pause_orchestrator(self._state_dir)  # type: ignore[arg-type]
-            elif action == "resume":
-                resume_orchestrator(self._repo_root, self._state_dir)  # type: ignore[arg-type]
-            elif action == "stop":
-                stop_orchestrator(self._state_dir)  # type: ignore[arg-type]
-            self.call_from_thread(self.notify, f"{action.capitalize()} succeeded")
+            if action in ("start", "resume"):
+                from amp_orchestrator.subprocess_launcher import (
+                    launch_orchestrator,
+                )
+
+                proc = launch_orchestrator(
+                    action,
+                    self._repo_root,  # type: ignore[arg-type]
+                    self._state_dir,  # type: ignore[arg-type]
+                )
+                self.call_from_thread(
+                    self.notify,
+                    f"Orchestrator {action}ed (pid {proc.pid})",
+                )
+            else:
+                from amp_orchestrator.control import (
+                    pause_orchestrator,
+                    stop_orchestrator,
+                )
+
+                if action == "pause":
+                    pause_orchestrator(self._state_dir)  # type: ignore[arg-type]
+                elif action == "stop":
+                    stop_orchestrator(self._state_dir)  # type: ignore[arg-type]
+                self.call_from_thread(
+                    self.notify, f"{action.capitalize()} succeeded"
+                )
         except click.ClickException as exc:
             self.call_from_thread(
                 self.notify, str(exc.message), severity="error"
