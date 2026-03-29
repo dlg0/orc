@@ -22,6 +22,9 @@ class EventType(Enum):
     evaluation_started = "evaluation_started"
     evaluation_finished = "evaluation_finished"
     issue_needs_rework = "issue_needs_rework"
+    conflict_detected = "conflict_detected"
+    conflict_resolution_started = "conflict_resolution_started"
+    conflict_resolution_finished = "conflict_resolution_finished"
 
 
 class EventLog:

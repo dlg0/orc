@@ -219,7 +219,10 @@ def run_loop(
         )
 
         if merge_result.success:
-            click.echo(f"Issue {issue.id} merged and closed successfully.")
+            if merge_result.conflict_resolved:
+                click.echo(f"Issue {issue.id} merged successfully (conflicts auto-resolved).")
+            else:
+                click.echo(f"Issue {issue.id} merged and closed successfully.")
             events.record(EventType.issue_closed, {"issue_id": issue.id})
             state.last_completed_issue = issue.id
             _clear_active(store, state)
