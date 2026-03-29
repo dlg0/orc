@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "amp_orchestrator",
+  "project_id": "5ea0cdba-736e-4a62-a108-95b0e003528d"
+}
