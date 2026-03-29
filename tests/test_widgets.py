@@ -32,7 +32,6 @@ from amp_orchestrator.tui.widgets import (
     QueueTable,
     StaleBanner,
     StatusPanel,
-    SummaryStrip,
 )
 
 
@@ -81,7 +80,7 @@ def test_mode_styles_covers_all_modes() -> None:
 def test_status_panel_composes() -> None:
     panel = StatusPanel()
     children = list(panel.compose())
-    assert len(children) == 10  # title, badge, last-refresh, queue-last-refreshed, queue, severity-counts, failed, completed, error, ErrorAlert
+    assert len(children) == 9  # title, badge, last-refresh, queue-last-refreshed, counts-summary, severity-counts, completed, error, ErrorAlert
 
 
 def test_active_issue_panel_composes() -> None:
@@ -259,12 +258,6 @@ def test_pending_action_none_does_not_suppress() -> None:
     app = OrchestratorApp()
     snap = _snap(mode=OrchestratorMode.idle)
     assert app._check_pending_action(snap) is False
-
-
-def test_summary_strip_composes() -> None:
-    strip = SummaryStrip()
-    children = list(strip.compose())
-    assert len(children) == 1  # Label
 
 
 def test_stale_banner_composes() -> None:
