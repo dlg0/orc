@@ -52,9 +52,9 @@ def status() -> None:
     ready = get_ready_issues(state_dir.parent)
     click.echo(f"Queue: {len(ready)} issue(s) ready")
 
-    if state.needs_rework:
-        click.echo(f"Rework: {len(state.needs_rework)} issue(s) need rework")
-        for rid, info in state.needs_rework.items():
+    if state.issue_failures:
+        click.echo(f"Rework: {len(state.issue_failures)} issue(s) need rework")
+        for rid, info in state.issue_failures.items():
             click.echo(f"  {rid}: {info.get('summary', '(no summary)')}")
 
     if state.mode == OrchestratorMode.running and state.active_issue_id:
@@ -103,9 +103,9 @@ def retry(issue_id: str) -> None:
     state_dir = _get_state_dir()
     store = StateStore(state_dir)
     state = store.load()
-    if issue_id not in state.needs_rework:
+    if issue_id not in state.issue_failures:
         raise click.ClickException(f"{issue_id} is not in rework state")
-    del state.needs_rework[issue_id]
+    del state.issue_failures[issue_id]
     store.save(state)
     click.echo(f"Cleared rework status for {issue_id} — will be re-queued on next run")
 

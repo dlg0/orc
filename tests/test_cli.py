@@ -184,7 +184,7 @@ def test_retry_clears_rework(tmp_path: Path) -> None:
     store = StateStore(state_dir)
     state = OrchestratorState(
         mode=OrchestratorMode.idle,
-        needs_rework={"bz5": {"summary": "Missing tests", "timestamp": "2026-01-01T00:00:00+00:00"}},
+        issue_failures={"bz5": {"summary": "Missing tests", "timestamp": "2026-01-01T00:00:00+00:00"}},
     )
     store.save(state)
 
@@ -195,7 +195,7 @@ def test_retry_clears_rework(tmp_path: Path) -> None:
         assert "Cleared rework status for bz5" in result.output
 
     reloaded = store.load()
-    assert "bz5" not in reloaded.needs_rework
+    assert "bz5" not in reloaded.issue_failures
 
 
 def test_retry_not_in_rework(tmp_path: Path) -> None:
@@ -217,7 +217,7 @@ def test_status_shows_rework(tmp_path: Path) -> None:
     store = StateStore(state_dir)
     state = OrchestratorState(
         mode=OrchestratorMode.idle,
-        needs_rework={
+        issue_failures={
             "bz7": {"summary": "Tests failing", "timestamp": "2026-01-01T00:00:00+00:00"},
         },
     )

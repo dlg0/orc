@@ -31,7 +31,7 @@ def run_loop(
     events = EventLog(state_dir)
     worktree_mgr = WorktreeManager(repo_root, config.base_branch)
     state = store.load()
-    failed_ids: set[str] = set(state.needs_rework.keys())
+    failed_ids: set[str] = set(state.issue_failures.keys())
     issue_num = 0
 
     while True:
@@ -228,7 +228,7 @@ def run_loop(
                     "summary": eval_result.summary,
                 })
                 failed_ids.add(issue.id)
-                state.needs_rework[issue.id] = {
+                state.issue_failures[issue.id] = {
                     "summary": eval_result.summary,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }

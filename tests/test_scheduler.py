@@ -453,9 +453,9 @@ def test_evaluation_failure_persists_needs_rework(repo_root: Path, state_dir: Pa
         run_loop(repo_root, state_dir, config, runner, evaluator=evaluator)
 
     state = StateStore(state_dir).load()
-    assert "test-1" in state.needs_rework
-    assert state.needs_rework["test-1"]["summary"] == "Missing tests"
-    assert "timestamp" in state.needs_rework["test-1"]
+    assert "test-1" in state.issue_failures
+    assert state.issue_failures["test-1"]["summary"] == "Missing tests"
+    assert "timestamp" in state.issue_failures["test-1"]
 
 
 def test_claim_issue_called_before_amp(repo_root: Path, state_dir: Path) -> None:
@@ -535,7 +535,7 @@ def test_needs_rework_skipped_on_restart(repo_root: Path, state_dir: Path) -> No
     store = StateStore(state_dir)
     state = OrchestratorState(
         mode=OrchestratorMode.running,
-        needs_rework={"rework-1": {"summary": "bad", "timestamp": "2026-01-01T00:00:00+00:00"}},
+        issue_failures={"rework-1": {"summary": "bad", "timestamp": "2026-01-01T00:00:00+00:00"}},
     )
     store.save(state)
 
