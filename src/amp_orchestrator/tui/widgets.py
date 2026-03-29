@@ -405,9 +405,10 @@ class StatusPanel(Static):
         counts = self.query_one("#counts-summary", Label)
         if not snap.is_fast:
             ready = len(snap.ready_issues) if snap.ready_issues is not None else 0
+            ready_part = f"[bold green]{ready}[/]" if ready else "0"
+            active_part = f"[bold dodger_blue]{active}[/]" if active else "0"
             held_part = f"[bold bright_yellow]{held}[/]" if held else "0"
-            active_part = f"[bold]{active}[/]" if active else "0"
-            counts.update(f"Ready: {ready} | In-progress: {active_part} | Held: {held_part}")
+            counts.update(f"Ready: {ready_part} | In-progress: {active_part} | Held: {held_part}")
         else:
             # Fast refresh: update active and held only (ready unchanged)
             current = str(counts.renderable)
@@ -415,9 +416,10 @@ class StatusPanel(Static):
             import re
             m = re.search(r"Ready: (\d+)", current)
             ready_str = m.group(1) if m else "?"
+            ready_part = f"[bold green]{ready_str}[/]" if ready_str != "0" else "0"
+            active_part = f"[bold dodger_blue]{active}[/]" if active else "0"
             held_part = f"[bold bright_yellow]{held}[/]" if held else "0"
-            active_part = f"[bold]{active}[/]" if active else "0"
-            counts.update(f"Ready: {ready_str} | In-progress: {active_part} | Held: {held_part}")
+            counts.update(f"Ready: {ready_part} | In-progress: {active_part} | Held: {held_part}")
 
         # Event severity counts
         sev_label = self.query_one("#event-severity-counts", Label)
