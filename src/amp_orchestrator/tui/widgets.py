@@ -324,6 +324,7 @@ class StatusPanel(Static):
     def compose(self) -> ComposeResult:
         yield Label("Status", classes="panel-title")
         yield Label("[bold white]○ IDLE[/]", id="mode-badge")
+        yield Label("", id="refresh-error")
         yield Label("[italic]Last refresh: —[/]", id="last-updated")
         yield Label("[italic]Queue last refreshed: —[/]", id="queue-last-refreshed")
         yield Label("Ready: 0 | In-progress: 0 | Held: 0", id="counts-summary")
@@ -336,6 +337,7 @@ class StatusPanel(Static):
         self.query_one("#mode-badge", Label).update(
             "[bold red]⚠ NOT CONNECTED[/]"
         )
+        self.query_one("#refresh-error", Label).update("")
         self.query_one("#last-updated", Label).update("[italic]Last refresh: —[/]")
         self.query_one("#queue-last-refreshed", Label).update("[italic]Queue last refreshed: —[/]")
         self.query_one("#counts-summary", Label).update(NO_PROJECT_PLACEHOLDER)
@@ -357,6 +359,17 @@ class StatusPanel(Static):
         self.query_one("#queue-last-refreshed", Label).update(
             f"[italic]Queue last refreshed: {time_str}[/]"
         )
+
+    def show_refresh_error(self, message: str) -> None:
+        """Show a visible refresh error warning below the mode badge."""
+        truncated = message if len(message) <= 80 else message[:77] + "…"
+        self.query_one("#refresh-error", Label).update(
+            f"[bold red]⚠ Refresh error: {truncated}[/]"
+        )
+
+    def hide_refresh_error(self) -> None:
+        """Clear the refresh error warning."""
+        self.query_one("#refresh-error", Label).update("")
 
     def show_stale(self) -> None:
         """Show STALE badge on the last-refresh label."""

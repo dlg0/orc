@@ -17,6 +17,7 @@ class DashboardSnapshot:
     recent_events: list[dict]
     config: OrchestratorConfig
     is_fast: bool = False
+    config_error: str | None = None
 
 
 def load_snapshot_fast(
@@ -38,10 +39,12 @@ def load_snapshot(repo_root: Path, state_dir: Path) -> DashboardSnapshot:
     """Load all dashboard data in a single call."""
     state = StateStore(state_dir).load()
 
+    config_error: str | None = None
     try:
         config = load_config(repo_root)
-    except Exception:
+    except Exception as exc:
         config = OrchestratorConfig()
+        config_error = str(exc)
 
     queue_result = get_ready_issues(repo_root)
     recent_events = EventLog(state_dir).recent(100)
@@ -51,4 +54,5 @@ def load_snapshot(repo_root: Path, state_dir: Path) -> DashboardSnapshot:
         ready_issues=queue_result.issues,
         recent_events=recent_events,
         config=config,
+        config_error=config_error,
     )
