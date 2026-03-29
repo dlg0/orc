@@ -382,7 +382,7 @@ class StatusPanel(Static):
             for info in snap.state.issue_failures.values():
                 cat = info.get("category", "unknown") if isinstance(info, dict) else "unknown"
                 by_cat[cat] = by_cat.get(cat, 0) + 1
-            parts = ", ".join(f"{cat}: {n}" for cat, n in sorted(by_cat.items()))
+            parts = ", ".join(f"{_CATEGORY_LABELS.get(cat, cat)}: {n}" for cat, n in sorted(by_cat.items()))
             fc.update(f"[bold red]⚠ Held: {len(snap.state.issue_failures)} ({parts})[/]")
         else:
             fc.update("[italic]Held: —[/]")
@@ -445,6 +445,15 @@ _CATEGORY_ICONS: dict[str, str] = {
     "issue_needs_rework": "✎",
     "blocked_by_dependency": "⛔",
     "fatal_run_error": "☠",
+}
+
+# Human-readable labels for failure categories (shown in status panel & history).
+_CATEGORY_LABELS: dict[str, str] = {
+    "transient_external": "Transient error",
+    "stale_or_conflicted": "Conflict/stale branch",
+    "issue_needs_rework": "Needs rework",
+    "blocked_by_dependency": "Dependency blocked",
+    "fatal_run_error": "Fatal run error",
 }
 
 
@@ -869,7 +878,11 @@ class HistoryTable(Static):
                 }
                 rc = category_colors.get(cat, rc)
                 icon = _CATEGORY_ICONS.get(cat, icon)
-            result = f"[{rc}]{icon} {raw_result}[/]"
+            result_label = _CATEGORY_LABELS.get(
+                failure_info.get("category", "") if failure_info and isinstance(failure_info, dict) else "",
+                raw_result,
+            )
+            result = f"[{rc}]{icon} {result_label}[/]"
             branch = run.get("branch", "")
             summary = run.get("summary", "")
             table.add_row(ts, issue_id, result, branch, summary)
