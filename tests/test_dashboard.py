@@ -264,6 +264,7 @@ async def test_stop_shows_confirmation_modal() -> None:
     """Pressing 'x' should show the ConfirmStopModal."""
     app = OrchestratorApp(state_dir=Path("/tmp/fake"))
     async with app.run_test() as pilot:
+        app._orch_mode = OrchestratorMode.running
         await pilot.press("x")
         await pilot.pause()
 
