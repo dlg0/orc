@@ -164,6 +164,38 @@ def test_snap_with_failed_runs() -> None:
     assert failed == 2
 
 
+def test_pending_action_suppresses_refresh() -> None:
+    """When _pending_action is set, refreshes should not update status/controls."""
+    app = OrchestratorApp()
+    app._pending_action = "start"
+    snap_idle = _snap(mode=OrchestratorMode.idle)
+    # While pending and mode hasn't reached expected, suppress should be True
+    assert app._check_pending_action(snap_idle) is True
+    assert app._pending_action == "start"
+    # Once mode reaches expected (running), suppress should clear
+    snap_running = _snap(mode=OrchestratorMode.running)
+    assert app._check_pending_action(snap_running) is False
+    assert app._pending_action is None
+
+
+def test_pending_action_clear_on_failure() -> None:
+    """_clear_pending_action should reset the guard."""
+    app = OrchestratorApp()
+    app._pending_action = "pause"
+    app._clear_pending_action()
+    assert app._pending_action is None
+    # After clearing, check_pending_action should not suppress
+    snap = _snap(mode=OrchestratorMode.idle)
+    assert app._check_pending_action(snap) is False
+
+
+def test_pending_action_none_does_not_suppress() -> None:
+    """When no pending action, check_pending_action returns False."""
+    app = OrchestratorApp()
+    snap = _snap(mode=OrchestratorMode.idle)
+    assert app._check_pending_action(snap) is False
+
+
 def test_help_modal_has_bindings() -> None:
     from amp_orchestrator.tui.modals import _HELP_BINDINGS
 

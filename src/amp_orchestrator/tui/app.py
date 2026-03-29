@@ -10,6 +10,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Footer, Header
 
 from amp_orchestrator.config import OrchestratorConfig
+from amp_orchestrator.state import OrchestratorMode
 from amp_orchestrator.tui.snapshot import (
     DashboardSnapshot,
     load_snapshot,
@@ -57,6 +58,13 @@ class OrchestratorApp(App):
         ("question_mark", "help", "Help"),
     ]
 
+    _EXPECTED_MODES: dict[str, set[OrchestratorMode]] = {
+        "start": {OrchestratorMode.running},
+        "pause": {OrchestratorMode.pause_requested, OrchestratorMode.paused},
+        "resume": {OrchestratorMode.running},
+        "stop": {OrchestratorMode.stopping, OrchestratorMode.idle},
+    }
+
     def __init__(
         self,
         repo_root: Path | None = None,
@@ -67,6 +75,7 @@ class OrchestratorApp(App):
         self._repo_root = repo_root
         self._state_dir = state_dir
         self._config = OrchestratorConfig()
+        self._pending_action: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -152,20 +161,37 @@ class OrchestratorApp(App):
 
         self.push_screen(HelpModal())
 
+    def _check_pending_action(self, snap: DashboardSnapshot) -> bool:
+        """Check if a pending action's expected mode has been reached.
+
+        Returns True if controls/status should be suppressed (still pending).
+        """
+        if not self._pending_action:
+            return False
+        expected = self._EXPECTED_MODES.get(self._pending_action, set())
+        if snap.state.mode in expected:
+            self._pending_action = None
+            return False
+        return True
+
     def _apply_fast_snapshot(self, snap: DashboardSnapshot) -> None:
         """Update only state/events/history panels."""
-        self.query_one(StatusPanel).update_snapshot(snap)
+        suppress = self._check_pending_action(snap)
+        if not suppress:
+            self.query_one(StatusPanel).update_snapshot(snap)
+            self.query_one(ControlsPanel).update_snapshot(snap)
         self.query_one(ActiveIssuePanel).update_snapshot(snap)
-        self.query_one(ControlsPanel).update_snapshot(snap)
         self.query_one(EventsLog).update_snapshot(snap)
         self.query_one(HistoryTable).update_snapshot(snap)
 
     def _apply_snapshot(self, snap: DashboardSnapshot) -> None:
         """Update all panels."""
-        self.query_one(StatusPanel).update_snapshot(snap)
+        suppress = self._check_pending_action(snap)
+        if not suppress:
+            self.query_one(StatusPanel).update_snapshot(snap)
+            self.query_one(ControlsPanel).update_snapshot(snap)
         self.query_one(ActiveIssuePanel).update_snapshot(snap)
         self.query_one(ConfigPanel).update_snapshot(snap)
-        self.query_one(ControlsPanel).update_snapshot(snap)
         self.query_one(QueueTable).update_snapshot(snap)
         self.query_one(EventsLog).update_snapshot(snap)
         self.query_one(HistoryTable).update_snapshot(snap)
@@ -221,8 +247,13 @@ class OrchestratorApp(App):
         "stop": ("Stopping\u2026", "Orchestrator stopped"),
     }
 
+    def _clear_pending_action(self) -> None:
+        """Clear the pending action guard so refreshes resume normally."""
+        self._pending_action = None
+
     def _show_transitional_feedback(self, action: str) -> None:
         """Immediately disable controls and show transitional status."""
+        self._pending_action = action
         label = self._ACTION_LABELS.get(action, (f"{action.capitalize()}\u2026",))[0]
         self.query_one(StatusPanel).show_transitional(label)
         self.query_one(ControlsPanel).disable_all()
@@ -264,10 +295,12 @@ class OrchestratorApp(App):
                     self.notify, success_msg
                 )
         except click.ClickException as exc:
+            self.call_from_thread(self._clear_pending_action)
             self.call_from_thread(
                 self.notify, str(exc.message), severity="error"
             )
         except Exception as exc:
+            self.call_from_thread(self._clear_pending_action)
             self.call_from_thread(
                 self.notify, f"{action} failed: {exc}", severity="error"
             )
