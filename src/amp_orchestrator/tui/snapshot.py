@@ -23,7 +23,7 @@ def load_snapshot_fast(
 ) -> DashboardSnapshot:
     """Load state and events only (no queue subprocess call)."""
     state = StateStore(state_dir).load()
-    recent_events = EventLog(state_dir).recent(20)
+    recent_events = EventLog(state_dir).recent(100)
     return DashboardSnapshot(
         state=state,
         ready_issues=[],
@@ -42,7 +42,7 @@ def load_snapshot(repo_root: Path, state_dir: Path) -> DashboardSnapshot:
         config = OrchestratorConfig()
 
     ready_issues = get_ready_issues(repo_root)
-    recent_events = EventLog(state_dir).recent(20)
+    recent_events = EventLog(state_dir).recent(100)
 
     return DashboardSnapshot(
         state=state,

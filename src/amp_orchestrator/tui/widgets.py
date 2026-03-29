@@ -56,7 +56,92 @@ EVENT_COLORS: dict[str, str] = {
     "stop_requested": "yellow",
     "state_changed": "grey",
     "verification_run": "blue",
+    "evaluation_started": "blue",
+    "evaluation_finished": "green",
+    "issue_needs_rework": "dark_orange",
+    "conflict_detected": "red",
+    "conflict_resolution_started": "yellow",
+    "conflict_resolution_finished": "green",
 }
+
+
+def _human_message(event_type: str, data: dict | None) -> str:
+    """Convert raw event_type + data into a human-readable message."""
+    d = data or {}
+    iid = d.get("issue_id", "")
+    match event_type:
+        case "issue_selected":
+            title = d.get("title", "")
+            return f"Selected issue {iid}" + (f": {title}" if title else "")
+        case "amp_started":
+            return f"Agent started on {iid}" if iid else "Agent started"
+        case "amp_finished":
+            result = d.get("result", "")
+            summary = d.get("summary", "")
+            msg = f"Agent finished {iid}" if iid else "Agent finished"
+            if result:
+                msg += f" ({result})"
+            if summary:
+                msg += f" — {summary}"
+            return msg
+        case "verification_run":
+            cmd = d.get("command", "")
+            result = d.get("result", "")
+            msg = f"Verification on {iid}" if iid else "Verification"
+            if cmd:
+                msg += f": {cmd}"
+            if result:
+                msg += f" [{result}]"
+            return msg
+        case "merge_attempt":
+            return f"Merge attempt for {iid}" if iid else "Merge attempt"
+        case "issue_closed":
+            return f"Issue {iid} closed" if iid else "Issue closed"
+        case "pause_requested":
+            return "Pause requested"
+        case "stop_requested":
+            return "Stop requested"
+        case "state_changed":
+            to = d.get("to", "")
+            frm = d.get("from", "")
+            reason = d.get("reason", "")
+            msg = f"State → {to}" if to else "State changed"
+            if frm:
+                msg = f"State {frm} → {to}"
+            if reason:
+                msg += f" ({reason})"
+            return msg
+        case "error":
+            stage = d.get("stage", "")
+            err = d.get("error", "")
+            msg = f"Error on {iid}" if iid else "Error"
+            if stage:
+                msg += f" [{stage}]"
+            if err:
+                msg += f": {err}"
+            return msg
+        case "evaluation_started":
+            return f"Evaluation started for {iid}" if iid else "Evaluation started"
+        case "evaluation_finished":
+            return f"Evaluation finished for {iid}" if iid else "Evaluation finished"
+        case "issue_needs_rework":
+            return f"Issue {iid} needs rework" if iid else "Issue needs rework"
+        case "conflict_detected":
+            branch = d.get("branch", "")
+            msg = f"Conflict detected on {iid}" if iid else "Conflict detected"
+            if branch:
+                msg += f" (branch: {branch})"
+            return msg
+        case "conflict_resolution_started":
+            return f"Conflict resolution started for {iid}" if iid else "Conflict resolution started"
+        case "conflict_resolution_finished":
+            result = d.get("result", d.get("status", ""))
+            msg = f"Conflict resolution finished for {iid}" if iid else "Conflict resolution finished"
+            if result:
+                msg += f" ({result})"
+            return msg
+        case _:
+            return event_type if not d else f"{event_type}: {d}"
 
 
 class ErrorAlert(Static):
@@ -448,10 +533,8 @@ class EventsLog(Static):
         etype = entry.get("event_type", "?")
         data = entry.get("data")
         color = EVENT_COLORS.get(etype, "white")
-        line = f"[dim]{ts}[/] [{color}]{etype}[/]"
-        if data:
-            line += f"  {data}"
-        return line
+        message = _human_message(etype, data)
+        return f"[dim]{ts}[/] [{color}]{message}[/]"
 
     def compose(self) -> ComposeResult:
         yield Label("Events", classes="panel-title")
