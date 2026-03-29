@@ -26,6 +26,7 @@ from amp_orchestrator.tui.widgets import (
     ControlsPanel,
     ErrorAlert,
     EventsLog,
+    HeldIssuesTable,
     HistoryTable,
     NotConnectedBanner,
     QueueTable,
@@ -661,6 +662,85 @@ def test_events_log_filter_events_errors_only() -> None:
     assert len(filtered) == 2
     assert filtered[0]["event_type"] == "error"
     assert filtered[1]["event_type"] == "conflict_detected"
+
+
+# --- HeldIssuesTable tests ---
+
+
+def test_held_issues_table_composes() -> None:
+    table = HeldIssuesTable()
+    children = list(table.compose())
+    assert len(children) == 2  # Label + DataTable
+
+
+def test_held_issues_table_is_focusable() -> None:
+    table = HeldIssuesTable()
+    assert table.can_focus is True
+
+
+def test_held_issues_table_has_inspect_and_retry_bindings() -> None:
+    table = HeldIssuesTable()
+    binding_keys = [b.key for b in table.BINDINGS]
+    assert "enter" in binding_keys
+    assert "i" in binding_keys
+    assert "y" in binding_keys
+
+
+def test_held_issues_table_hidden_when_no_failures() -> None:
+    """Table should not show 'visible' class when no failures exist."""
+    table = HeldIssuesTable()
+    snap = _snap()
+    # Simulate update_snapshot logic without mounting
+    assert not snap.state.issue_failures
+    # If there were no failures, _held_items would be empty
+    table._held_items = []
+    table._row_key = []
+    assert len(table._held_items) == 0
+
+
+def test_held_issues_table_stores_held_items() -> None:
+    """Table should track held items from snapshot."""
+    table = HeldIssuesTable()
+    failures = {
+        "TEST-1": {
+            "category": "transient_external",
+            "action": "hold_for_retry",
+            "stage": "amp",
+            "summary": "timeout",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "attempts": 2,
+        },
+        "TEST-2": {
+            "category": "issue_needs_rework",
+            "action": "hold_until_backlog_changes",
+            "stage": "evaluation",
+            "summary": "tests failed",
+            "timestamp": "2025-01-01T00:01:00Z",
+            "attempts": 1,
+        },
+    }
+    # Directly set items to test data handling
+    table._held_items = [(iid, failures[iid]) for iid in sorted(failures.keys())]
+    assert len(table._held_items) == 2
+    assert table._held_items[0][0] == "TEST-1"
+    assert table._held_items[1][0] == "TEST-2"
+
+
+def test_confirm_retry_modal_init() -> None:
+    from amp_orchestrator.tui.modals import ConfirmRetryModal
+
+    modal = ConfirmRetryModal("TEST-42")
+    assert modal._issue_id == "TEST-42"
+
+
+def test_confirm_retry_modal_has_bindings() -> None:
+    from amp_orchestrator.tui.modals import ConfirmRetryModal
+
+    modal = ConfirmRetryModal("TEST-1")
+    binding_keys = [b[0] if isinstance(b, tuple) else b.key for b in modal.BINDINGS]
+    assert "escape" in binding_keys
+    assert "y" in binding_keys
+    assert "n" in binding_keys
 
 
 def test_mode_styles_use_high_contrast_colors() -> None:

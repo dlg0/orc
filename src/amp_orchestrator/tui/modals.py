@@ -150,6 +150,75 @@ class ConfirmStopModal(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class ConfirmRetryModal(ModalScreen[str | None]):
+    """Confirmation modal before retrying a held issue."""
+
+    DEFAULT_CSS = """
+    ConfirmRetryModal {
+        align: center middle;
+    }
+    #retry-dialog {
+        width: 60;
+        height: auto;
+        border: thick $warning;
+        background: $surface;
+        padding: 1 2;
+    }
+    #retry-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #retry-buttons {
+        height: auto;
+        margin-top: 1;
+    }
+    #retry-buttons Button {
+        margin: 0 1;
+    }
+    #retry-buttons Button:focus {
+        text-style: bold reverse;
+    }
+    #retry-hint {
+        margin-top: 1;
+        color: $text-muted;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("y", "confirm", "Confirm"),
+        ("n", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, issue_id: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._issue_id = issue_id
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="retry-dialog"):
+            yield Label(f"Retry {self._issue_id}?", id="retry-title")
+            yield Static("This will clear the held/failed status and re-queue the issue for processing.")
+            with Horizontal(id="retry-buttons"):
+                yield Button("Cancel", variant="default", id="retry-no")
+                yield Button("Retry", variant="warning", id="retry-yes")
+            yield Static("[b]y[/] retry  [b]n[/]/[b]Esc[/] cancel", id="retry-hint")
+
+    def on_mount(self) -> None:
+        self.query_one("#retry-no", Button).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "retry-yes":
+            self.dismiss(self._issue_id)
+        else:
+            self.dismiss(None)
+
+    def action_confirm(self) -> None:
+        self.dismiss(self._issue_id)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 def _build_help_bindings() -> list[tuple[str, str]]:
     """Generate help bindings from OrchestratorApp.BINDINGS.
 

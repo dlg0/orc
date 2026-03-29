@@ -568,6 +568,165 @@ _CATEGORY_LABELS: dict[str, str] = {
 }
 
 
+class HeldIssuesTable(Static):
+    """Table of held/failed issues with inspect and retry capabilities."""
+
+    DEFAULT_CSS = """
+    HeldIssuesTable {
+        height: auto;
+        max-height: 12;
+        border: solid grey;
+        padding: 0 1;
+        display: none;
+    }
+    HeldIssuesTable.visible {
+        display: block;
+    }
+    HeldIssuesTable .panel-title {
+        text-style: bold;
+    }
+    """
+
+    can_focus = True
+
+    BINDINGS = [
+        Binding("enter", "inspect", "Inspect", show=True),
+        Binding("i", "inspect", "Inspect", show=False),
+        Binding("y", "retry", "Retry", show=True),
+    ]
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._held_items: list[tuple[str, dict]] = []  # (issue_id, failure_info)
+        self._row_key: list[str] = []
+        self._last_snap: DashboardSnapshot | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Label("Held Issues (Enter/i inspect, y retry)", classes="panel-title")
+        yield DataTable(id="held-datatable", cursor_type="row")
+
+    def on_mount(self) -> None:
+        table = self.query_one("#held-datatable", DataTable)
+        table.add_columns("Issue", "Category", "Action", "Attempts", "Summary")
+
+    def show_no_project(self) -> None:
+        self.remove_class("visible")
+
+    def update_snapshot(self, snap: DashboardSnapshot) -> None:
+        self._last_snap = snap
+        failures = snap.state.issue_failures
+        if not failures:
+            if self.has_class("visible"):
+                self.remove_class("visible")
+            self._held_items = []
+            self._row_key = []
+            return
+
+        new_keys = sorted(failures.keys())
+        if new_keys == self._row_key:
+            return
+
+        self._row_key = new_keys
+        self._held_items = [(iid, failures[iid]) for iid in new_keys]
+        self.add_class("visible")
+
+        table = self.query_one("#held-datatable", DataTable)
+        table.clear()
+        for issue_id, info in self._held_items:
+            if not isinstance(info, dict):
+                table.add_row(issue_id, "?", "?", "?", "?")
+                continue
+            cat = info.get("category", "unknown")
+            cat_label = _CATEGORY_LABELS.get(cat, cat)
+            cat_icon = _CATEGORY_ICONS.get(cat, "·")
+            action = info.get("action", "unknown")
+            action_labels = {
+                "auto_retry": "Auto retry",
+                "hold_for_retry": "Hold for retry",
+                "hold_until_backlog_changes": "Hold until backlog changes",
+                "pause_orchestrator": "Pause orchestrator",
+            }
+            action_label = action_labels.get(action, action)
+            attempts = str(info.get("attempts", 1))
+            summary = info.get("summary", "")
+            if len(summary) > 60:
+                summary = summary[:57] + "…"
+
+            category_colors = {
+                "transient_external": "bright_yellow",
+                "stale_or_conflicted": "bold bright_yellow",
+                "issue_needs_rework": "bold red",
+                "blocked_by_dependency": "orchid1",
+                "fatal_run_error": "bold red",
+            }
+            cc = category_colors.get(cat, "white")
+            table.add_row(
+                issue_id,
+                f"[{cc}]{cat_icon} {cat_label}[/]",
+                action_label,
+                attempts,
+                summary,
+            )
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        self._show_inspect()
+
+    def action_inspect(self) -> None:
+        self._show_inspect()
+
+    def _show_inspect(self) -> None:
+        table = self.query_one("#held-datatable", DataTable)
+        if not self._held_items or table.row_count == 0:
+            return
+        row_idx = table.cursor_row
+        if row_idx < 0 or row_idx >= len(self._held_items):
+            return
+        issue_id, info = self._held_items[row_idx]
+        title = f"Held Issue: {issue_id}"
+        lines = [f"[bold]Issue:[/] {issue_id}"]
+        if isinstance(info, dict):
+            lines.append(f"[bold]Category:[/] {_CATEGORY_LABELS.get(info.get('category', ''), info.get('category', 'unknown'))}")
+            lines.append(f"[bold]Action:[/] {info.get('action', 'unknown')}")
+            lines.append(f"[bold]Stage:[/] {info.get('stage', 'unknown')}")
+            lines.append(f"[bold]Attempts:[/] {info.get('attempts', 1)}")
+            lines.append(f"[bold]Timestamp:[/] {info.get('timestamp', '')}")
+            if info.get("branch"):
+                lines.append(f"[bold]Branch:[/] {info['branch']}")
+            if info.get("worktree_path"):
+                lines.append(f"[bold]Worktree:[/] {info['worktree_path']}")
+            if info.get("summary"):
+                lines.append(f"\n[bold]Summary:[/]\n{info['summary']}")
+        from amp_orchestrator.tui.modals import CopyableField, InspectModal
+
+        copyable: list[CopyableField] = []
+        if isinstance(info, dict):
+            if info.get("branch"):
+                copyable.append(CopyableField(label="Branch", value=info["branch"], key="b"))
+            if info.get("worktree_path"):
+                copyable.append(CopyableField(label="Worktree", value=info["worktree_path"], key="w"))
+
+        self.app.push_screen(
+            InspectModal(title=title, body="\n".join(lines), copyable_fields=copyable)
+        )
+
+    def action_retry(self) -> None:
+        """Clear held status for the selected issue so it gets re-queued."""
+        table = self.query_one("#held-datatable", DataTable)
+        if not self._held_items or table.row_count == 0:
+            return
+        row_idx = table.cursor_row
+        if row_idx < 0 or row_idx >= len(self._held_items):
+            return
+        issue_id, _info = self._held_items[row_idx]
+        from amp_orchestrator.tui.modals import ConfirmRetryModal
+
+        self.app.push_screen(ConfirmRetryModal(issue_id), self._on_retry_confirmed)
+
+    def _on_retry_confirmed(self, result: str | None) -> None:
+        if result:
+            self.app.retry_held_issue(result)  # type: ignore[attr-defined]
+
+
 class ActiveIssuePanel(Static):
     """Active issue panel: id, title, stage, elapsed, branch, worktree."""
 
