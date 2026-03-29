@@ -26,6 +26,16 @@ MODE_STYLES: dict[OrchestratorMode, tuple[str, str]] = {
 NO_PROJECT_MSG = "[bold red]⚠ Not connected to repo/state directory[/]"
 NO_PROJECT_PLACEHOLDER = "[italic]Not available — no project detected[/]"
 
+# Max display width for values in the narrow left column.
+_LEFT_COL_MAX = 40
+
+
+def _truncate(text: str, max_len: int = _LEFT_COL_MAX) -> str:
+    """Truncate *text* with an ellipsis if it exceeds *max_len*."""
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
 
 def _format_run_timestamp(ts: str) -> str:
     """Format an ISO timestamp for the run history table.
@@ -597,7 +607,7 @@ class ActiveIssuePanel(Static):
         if snap.state.active_issue_id:
             lines = [f"[bold]{snap.state.active_issue_id}[/]"]
             if snap.state.active_issue_title:
-                lines.append(f"  {snap.state.active_issue_title}")
+                lines.append(f"  {_truncate(snap.state.active_issue_title)}")
             if snap.state.active_stage:
                 color, label = _STAGE_STYLES.get(
                     snap.state.active_stage,
@@ -608,9 +618,9 @@ class ActiveIssuePanel(Static):
                     elapsed = f" ({_format_elapsed(snap.state.active_started_at)})"
                 lines.append(f"  Stage: [{color}]{label}[/]{elapsed}")
             if snap.state.active_branch:
-                lines.append(f"  Branch: {snap.state.active_branch}")
+                lines.append(f"  Branch: {_truncate(snap.state.active_branch)}")
             if snap.state.active_worktree_path:
-                lines.append(f"  Worktree: {snap.state.active_worktree_path}")
+                lines.append(f"  Worktree: {_truncate(snap.state.active_worktree_path)}")
             detail.update("\n".join(lines))
         else:
             detail.update("[italic]No active issue[/]")
