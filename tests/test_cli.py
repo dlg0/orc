@@ -9,6 +9,7 @@ from click.testing import CliRunner
 
 from amp_orchestrator.cli import main
 from amp_orchestrator.control import start_orchestrator
+from amp_orchestrator.queue import QueueResult
 from amp_orchestrator.state import OrchestratorMode, OrchestratorState, StateStore
 
 
@@ -37,7 +38,7 @@ def test_version() -> None:
 def test_status_shows_mode(tmp_path: Path) -> None:
     _make_project(tmp_path)
     with patch("amp_orchestrator.cli._get_state_dir", return_value=tmp_path / ".amp-orchestrator"):
-        with patch("amp_orchestrator.cli.get_ready_issues", return_value=[]):
+        with patch("amp_orchestrator.cli.get_ready_issues", return_value=QueueResult()):
             runner = CliRunner()
             result = runner.invoke(main, ["status"])
             assert result.exit_code == 0
@@ -58,7 +59,7 @@ def test_status_shows_active_issue(tmp_path: Path) -> None:
     store.save(state)
 
     with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
-        with patch("amp_orchestrator.cli.get_ready_issues", return_value=[]):
+        with patch("amp_orchestrator.cli.get_ready_issues", return_value=QueueResult()):
             runner = CliRunner()
             result = runner.invoke(main, ["status"])
             assert result.exit_code == 0
@@ -224,7 +225,7 @@ def test_status_shows_rework(tmp_path: Path) -> None:
     store.save(state)
 
     with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
-        with patch("amp_orchestrator.cli.get_ready_issues", return_value=[]):
+        with patch("amp_orchestrator.cli.get_ready_issues", return_value=QueueResult()):
             runner = CliRunner()
             result = runner.invoke(main, ["status"])
             assert result.exit_code == 0

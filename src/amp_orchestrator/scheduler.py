@@ -55,8 +55,11 @@ def run_loop(
             return
 
         # Select next issue
-        ready = get_ready_issues(repo_root)
-        issue = select_next_issue(ready, skip_ids=failed_ids)
+        queue_result = get_ready_issues(repo_root)
+        if not queue_result.success:
+            click.echo(f"[SCHEDULER] Queue fetch failed: {queue_result.error}")
+            events.record(EventType.error, {"stage": "queue", "error": queue_result.error})
+        issue = select_next_issue(queue_result.issues, skip_ids=failed_ids)
 
         if issue is None:
             click.echo("[SCHEDULER] No ready issues -- queue exhausted.")
