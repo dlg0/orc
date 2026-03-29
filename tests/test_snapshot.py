@@ -100,6 +100,42 @@ def test_load_snapshot_fast_with_config(tmp_path: Path) -> None:
     assert snap.config.base_branch == "develop"
 
 
+def test_load_snapshot_corrupt_state(tmp_path: Path) -> None:
+    """Corrupt state file causes StateStore.load() to raise; snapshot should handle."""
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir()
+    state_file = state_dir / "state.json"
+    state_file.write_text("{not valid json!!!")
+
+    with patch("amp_orchestrator.tui.snapshot.get_ready_issues", return_value=[]):
+        import pytest
+        with pytest.raises(Exception):
+            load_snapshot(tmp_path, state_dir)
+
+
+def test_load_snapshot_missing_state_dir(tmp_path: Path) -> None:
+    """Missing state dir (no state.json) returns default state."""
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir()
+
+    with patch("amp_orchestrator.tui.snapshot.get_ready_issues", return_value=[]):
+        snap = load_snapshot(tmp_path, state_dir)
+
+    assert snap.state.mode == OrchestratorMode.idle
+
+
+def test_load_snapshot_fast_corrupt_state(tmp_path: Path) -> None:
+    """Corrupt state file raises on fast snapshot too."""
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir()
+    state_file = state_dir / "state.json"
+    state_file.write_text("{{bad}}")
+
+    import pytest
+    with pytest.raises(Exception):
+        load_snapshot_fast(state_dir)
+
+
 def test_load_snapshot_fast_with_events(tmp_path: Path) -> None:
     """Fast snapshot includes recent events."""
     state_dir = tmp_path / ".amp-orchestrator"

@@ -76,6 +76,39 @@ def test_start_acquires_lock_and_runs(tmp_path: Path) -> None:
         start_orchestrator(tmp_path, state_dir)
 
 
+def test_stop_from_pause_requested(tmp_path: Path) -> None:
+    state_dir = _setup(tmp_path, OrchestratorMode.pause_requested)
+    stop_orchestrator(state_dir)
+    state = StateStore(state_dir).load()
+    assert state.mode == OrchestratorMode.stopping
+
+
+def test_pause_from_paused_fails(tmp_path: Path) -> None:
+    state_dir = _setup(tmp_path, OrchestratorMode.paused)
+    with pytest.raises(Exception, match="Cannot pause"):
+        pause_orchestrator(state_dir)
+
+
+def test_start_crash_recovery(tmp_path: Path) -> None:
+    """Start from stale running state (no lock held) triggers crash recovery."""
+    state_dir = _setup(tmp_path, OrchestratorMode.running)
+    store = StateStore(state_dir)
+    state = store.load()
+    state.active_issue_id = "X-stale"
+    state.active_branch = "amp/stale"
+    store.save(state)
+
+    with (
+        patch("amp_orchestrator.control.load_config"),
+        patch("amp_orchestrator.control.run_loop"),
+    ):
+        start_orchestrator(tmp_path, state_dir)
+
+    state = StateStore(state_dir).load()
+    assert state.mode == OrchestratorMode.running
+    assert state.active_issue_id is None  # cleared by crash recovery
+
+
 def test_start_refuses_when_locked(tmp_path: Path) -> None:
     state_dir = _setup(tmp_path, OrchestratorMode.idle)
     from amp_orchestrator.lock import OrchestratorLock

@@ -28,6 +28,7 @@ VALID_TRANSITIONS: dict[OrchestratorMode, set[OrchestratorMode]] = {
     },
     OrchestratorMode.pause_requested: {
         OrchestratorMode.paused,
+        OrchestratorMode.stopping,
         OrchestratorMode.error,
     },
     OrchestratorMode.paused: {
