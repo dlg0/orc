@@ -375,7 +375,8 @@ class StatusPanel(Static):
     def compose(self) -> ComposeResult:
         yield Label("Status", classes="panel-title")
         yield Label("[bold white]○ IDLE[/]", id="mode-badge")
-        yield Label("[italic]Last updated: —[/]", id="last-updated")
+        yield Label("[italic]Last refresh: —[/]", id="last-updated")
+        yield Label("[italic]Queue last refreshed: —[/]", id="queue-last-refreshed")
         yield Label("Ready Queue: 0 issue(s)", id="queue-count")
         yield Label("[italic]Events: —[/]", id="event-severity-counts")
         yield Label("[italic]Held: —[/]", id="failed-count")
@@ -387,7 +388,8 @@ class StatusPanel(Static):
         self.query_one("#mode-badge", Label).update(
             "[bold red]⚠ NOT CONNECTED[/]"
         )
-        self.query_one("#last-updated", Label).update("[italic]Last updated: —[/]")
+        self.query_one("#last-updated", Label).update("[italic]Last refresh: —[/]")
+        self.query_one("#queue-last-refreshed", Label).update("[italic]Queue last refreshed: —[/]")
         self.query_one("#queue-count", Label).update(NO_PROJECT_PLACEHOLDER)
         self.query_one("#event-severity-counts", Label).update("[italic]Events: —[/]")
         self.query_one("#failed-count", Label).update("[italic]Held: —[/]")
@@ -396,11 +398,28 @@ class StatusPanel(Static):
         self.query_one(ErrorAlert).set_error("")
 
     def update_last_refreshed(self, ts: datetime) -> None:
-        """Update the 'Last updated' display with the given timestamp."""
+        """Update the 'Last refresh' display with the given timestamp."""
         time_str = ts.strftime("%H:%M:%S")
         self.query_one("#last-updated", Label).update(
-            f"[italic]Last updated: {time_str}[/]"
+            f"[italic]Last refresh: {time_str}[/]"
         )
+
+    def update_queue_last_refreshed(self, ts: datetime) -> None:
+        """Update the 'Queue last refreshed' display with the given timestamp."""
+        time_str = ts.strftime("%H:%M:%S")
+        self.query_one("#queue-last-refreshed", Label).update(
+            f"[italic]Queue last refreshed: {time_str}[/]"
+        )
+
+    def show_stale(self) -> None:
+        """Show STALE badge on the last-refresh label."""
+        label = self.query_one("#last-updated", Label)
+        current = str(label.renderable)
+        if "STALE" not in current:
+            # Extract time from current text
+            label.update(
+                f"[bold yellow]⚠ STALE[/] {current}"
+            )
 
     def show_transitional(self, text: str) -> None:
         """Show a transitional status like 'Starting…' or 'Pausing…'."""

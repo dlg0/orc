@@ -73,7 +73,7 @@ def test_mode_styles_covers_all_modes() -> None:
 def test_status_panel_composes() -> None:
     panel = StatusPanel()
     children = list(panel.compose())
-    assert len(children) == 9  # title, badge, last-updated, queue, severity-counts, failed, completed, error, ErrorAlert
+    assert len(children) == 10  # title, badge, last-refresh, queue-last-refreshed, queue, severity-counts, failed, completed, error, ErrorAlert
 
 
 def test_active_issue_panel_composes() -> None:
@@ -269,6 +269,7 @@ def test_app_refresh_tracking_fields() -> None:
     """App should initialise refresh tracking fields."""
     app = OrchestratorApp()
     assert app._last_successful_refresh is None
+    assert app._last_queue_refresh is None
     assert app._last_refresh_error is None
 
 

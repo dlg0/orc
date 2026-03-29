@@ -85,6 +85,7 @@ class OrchestratorApp(App):
         self._pending_action: str | None = None
         self._orch_mode: OrchestratorMode = OrchestratorMode.idle
         self._last_successful_refresh: datetime | None = None
+        self._last_queue_refresh: datetime | None = None
         self._last_refresh_error: str | None = None
 
     def compose(self) -> ComposeResult:
@@ -156,7 +157,7 @@ class OrchestratorApp(App):
             return
         try:
             snap = load_snapshot(self._repo_root, self._state_dir)
-            self.call_from_thread(self._mark_refresh_success)
+            self.call_from_thread(self._mark_refresh_success, True)
             self.call_from_thread(self._apply_snapshot, snap)
         except Exception as exc:
             self.call_from_thread(self._mark_refresh_error, str(exc))
@@ -168,17 +169,21 @@ class OrchestratorApp(App):
             return
         try:
             snap = load_snapshot(self._repo_root, self._state_dir)
-            self.call_from_thread(self._mark_refresh_success)
+            self.call_from_thread(self._mark_refresh_success, True)
             self.call_from_thread(self._apply_snapshot, snap)
         except Exception as exc:
             self.call_from_thread(self._mark_refresh_error, str(exc))
 
-    def _mark_refresh_success(self) -> None:
+    def _mark_refresh_success(self, includes_queue: bool = False) -> None:
         """Record a successful refresh and update the status display."""
         now = datetime.now(timezone.utc)
         self._last_successful_refresh = now
         self._last_refresh_error = None
-        self.query_one(StatusPanel).update_last_refreshed(now)
+        status_panel = self.query_one(StatusPanel)
+        status_panel.update_last_refreshed(now)
+        if includes_queue:
+            self._last_queue_refresh = now
+            status_panel.update_queue_last_refreshed(now)
         self.query_one(StaleBanner).hide()
 
     def _mark_refresh_error(self, message: str) -> None:
@@ -188,14 +193,17 @@ class OrchestratorApp(App):
     def _check_staleness(self) -> None:
         """Show/hide the stale banner based on time since last successful refresh."""
         banner = self.query_one(StaleBanner)
+        status_panel = self.query_one(StatusPanel)
         if self._last_refresh_error:
             banner.show_error(self._last_refresh_error)
+            status_panel.show_stale()
             return
         if self._last_successful_refresh is None:
             return
         elapsed = (datetime.now(timezone.utc) - self._last_successful_refresh).total_seconds()
         if elapsed >= _STALE_THRESHOLD_SECS:
             banner.show_stale(int(elapsed))
+            status_panel.show_stale()
         else:
             banner.hide()
 
