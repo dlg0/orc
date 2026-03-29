@@ -126,6 +126,7 @@ class ActiveIssuePanel(Static):
     DEFAULT_CSS = """
     ActiveIssuePanel {
         height: auto;
+        min-height: 7;
         border: solid grey;
         padding: 0 1;
     }
@@ -164,6 +165,10 @@ class ConfigPanel(Static):
         height: auto;
         border: solid grey;
         padding: 0 1;
+        display: none;
+    }
+    ConfigPanel.visible {
+        display: block;
     }
     ConfigPanel .panel-title {
         text-style: bold;
@@ -250,7 +255,7 @@ class QueueTable(Static):
 
     DEFAULT_CSS = """
     QueueTable {
-        height: 1fr;
+        height: 2fr;
         border: solid grey;
         padding: 0 1;
     }

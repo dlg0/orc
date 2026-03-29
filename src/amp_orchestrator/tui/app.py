@@ -53,6 +53,7 @@ class OrchestratorApp(App):
         ("x", "stop", "Stop"),
         ("tab", "focus_next", "Next Panel"),
         ("shift+tab", "focus_previous", "Prev Panel"),
+        ("c", "toggle_config", "Config"),
         ("question_mark", "help", "Help"),
     ]
 
@@ -140,6 +141,10 @@ class OrchestratorApp(App):
     def action_refresh(self) -> None:
         """Manual refresh triggered by 'r' key."""
         self._do_full_refresh()
+
+    def action_toggle_config(self) -> None:
+        """Toggle ConfigPanel visibility."""
+        self.query_one(ConfigPanel).toggle_class("visible")
 
     def action_help(self) -> None:
         """Toggle help overlay."""
