@@ -41,12 +41,12 @@ def load_snapshot(repo_root: Path, state_dir: Path) -> DashboardSnapshot:
     except Exception:
         config = OrchestratorConfig()
 
-    ready_issues = get_ready_issues(repo_root)
+    queue_result = get_ready_issues(repo_root)
     recent_events = EventLog(state_dir).recent(100)
 
     return DashboardSnapshot(
         state=state,
-        ready_issues=ready_issues,
+        ready_issues=queue_result.issues,
         recent_events=recent_events,
         config=config,
     )

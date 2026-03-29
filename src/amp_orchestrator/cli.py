@@ -49,8 +49,11 @@ def status() -> None:
     if state.last_error:
         click.echo(f"Last error: {state.last_error}")
 
-    ready = get_ready_issues(state_dir.parent)
-    click.echo(f"Queue: {len(ready)} issue(s) ready")
+    queue_result = get_ready_issues(state_dir.parent)
+    if queue_result.success:
+        click.echo(f"Queue: {len(queue_result.issues)} issue(s) ready")
+    else:
+        click.echo(f"Queue: error fetching issues ({queue_result.error})")
 
     if state.issue_failures:
         click.echo(f"Rework: {len(state.issue_failures)} issue(s) need rework")

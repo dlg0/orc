@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from amp_orchestrator.config import OrchestratorConfig
-from amp_orchestrator.queue import BdIssue
+from amp_orchestrator.queue import BdIssue, QueueResult
 from amp_orchestrator.state import OrchestratorMode, OrchestratorState, StateStore
 from amp_orchestrator.tui.snapshot import DashboardSnapshot, load_snapshot, load_snapshot_fast
 
@@ -15,7 +15,7 @@ def test_load_snapshot_defaults(tmp_path: Path) -> None:
     state_dir = tmp_path / ".amp-orchestrator"
     state_dir.mkdir()
 
-    with patch("amp_orchestrator.tui.snapshot.get_ready_issues", return_value=[]):
+    with patch("amp_orchestrator.tui.snapshot.get_ready_issues", return_value=QueueResult()):
         snap = load_snapshot(tmp_path, state_dir)
 
     assert snap.state.mode == OrchestratorMode.idle
@@ -36,7 +36,7 @@ def test_load_snapshot_with_state(tmp_path: Path) -> None:
     ))
 
     issue = BdIssue(id="X-2", title="New feature", priority=2, created="2026-01-01")
-    with patch("amp_orchestrator.tui.snapshot.get_ready_issues", return_value=[issue]):
+    with patch("amp_orchestrator.tui.snapshot.get_ready_issues", return_value=QueueResult(issues=[issue])):
         snap = load_snapshot(tmp_path, state_dir)
 
     assert snap.state.mode == OrchestratorMode.running
@@ -56,7 +56,7 @@ def test_load_snapshot_with_events(tmp_path: Path) -> None:
     events.record(EventType.state_changed, {"to": "running"})
     events.record(EventType.issue_selected, {"issue_id": "X-1"})
 
-    with patch("amp_orchestrator.tui.snapshot.get_ready_issues", return_value=[]):
+    with patch("amp_orchestrator.tui.snapshot.get_ready_issues", return_value=QueueResult()):
         snap = load_snapshot(tmp_path, state_dir)
 
     assert len(snap.recent_events) == 2
@@ -68,7 +68,7 @@ def test_load_snapshot_config_error_uses_default(tmp_path: Path) -> None:
     state_dir.mkdir()
 
     with (
-        patch("amp_orchestrator.tui.snapshot.get_ready_issues", return_value=[]),
+        patch("amp_orchestrator.tui.snapshot.get_ready_issues", return_value=QueueResult()),
         patch("amp_orchestrator.tui.snapshot.load_config", side_effect=Exception("bad config")),
     ):
         snap = load_snapshot(tmp_path, state_dir)
@@ -107,7 +107,7 @@ def test_load_snapshot_corrupt_state(tmp_path: Path) -> None:
     state_file = state_dir / "state.json"
     state_file.write_text("{not valid json!!!")
 
-    with patch("amp_orchestrator.tui.snapshot.get_ready_issues", return_value=[]):
+    with patch("amp_orchestrator.tui.snapshot.get_ready_issues", return_value=QueueResult()):
         import pytest
         with pytest.raises(Exception):
             load_snapshot(tmp_path, state_dir)
@@ -118,7 +118,7 @@ def test_load_snapshot_missing_state_dir(tmp_path: Path) -> None:
     state_dir = tmp_path / ".amp-orchestrator"
     state_dir.mkdir()
 
-    with patch("amp_orchestrator.tui.snapshot.get_ready_issues", return_value=[]):
+    with patch("amp_orchestrator.tui.snapshot.get_ready_issues", return_value=QueueResult()):
         snap = load_snapshot(tmp_path, state_dir)
 
     assert snap.state.mode == OrchestratorMode.idle

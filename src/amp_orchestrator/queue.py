@@ -20,6 +20,19 @@ class BdIssue:
     acceptance_criteria: str = ""
 
 
+@dataclass
+class QueueResult:
+    """Result of fetching the ready-issue queue.
+
+    Distinguishes an empty queue (success=True, issues=[]) from a fetch
+    failure (success=False, error=...).
+    """
+
+    issues: list[BdIssue] = field(default_factory=list)
+    success: bool = True
+    error: str | None = None
+
+
 def _extract_acceptance_criteria(description: str) -> str:
     """Extract the Acceptance Criteria section from a bd issue description."""
     marker = "## Acceptance Criteria"
@@ -47,10 +60,11 @@ def _parse_issue(raw: dict) -> BdIssue:
     )
 
 
-def get_ready_issues(cwd: Path | None = None) -> list[BdIssue]:
-    """Run ``bd ready --json`` and return parsed issues.
+def get_ready_issues(cwd: Path | None = None) -> QueueResult:
+    """Run ``bd ready --json`` and return a structured result.
 
-    Returns an empty list when no issues are ready or the command fails.
+    Returns a :class:`QueueResult` that distinguishes an empty queue
+    (``success=True``) from a fetch failure (``success=False``).
     """
     try:
         result = subprocess.run(
@@ -61,13 +75,16 @@ def get_ready_issues(cwd: Path | None = None) -> list[BdIssue]:
             check=False,
         )
         if result.returncode != 0:
-            return []
+            error = result.stderr.strip() if result.stderr and result.stderr.strip() else "bd ready failed"
+            return QueueResult(issues=[], success=False, error=error)
         data = json.loads(result.stdout)
         if not isinstance(data, list):
-            return []
-        return [_parse_issue(item) for item in data]
-    except (OSError, json.JSONDecodeError):
-        return []
+            return QueueResult(issues=[], success=False, error="bd ready returned non-list JSON")
+        return QueueResult(issues=[_parse_issue(item) for item in data], success=True, error=None)
+    except OSError as exc:
+        return QueueResult(issues=[], success=False, error=str(exc))
+    except json.JSONDecodeError as exc:
+        return QueueResult(issues=[], success=False, error=str(exc))
 
 
 def _sort_key(issue: BdIssue) -> tuple[int, str]:

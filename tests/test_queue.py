@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from amp_orchestrator.queue import BdIssue, claim_issue, select_next_issue
+from amp_orchestrator.queue import BdIssue, QueueResult, claim_issue, get_ready_issues, select_next_issue
 
 
 def _issue(
@@ -91,3 +91,84 @@ class TestClaimIssue:
     def test_claim_oserror(self, tmp_path) -> None:
         with patch("amp_orchestrator.queue.subprocess.run", side_effect=OSError("no bd")):
             assert claim_issue("test-1", cwd=tmp_path) is False
+
+
+class TestGetReadyIssues:
+    """Tests for get_ready_issues returning QueueResult."""
+
+    def test_success_with_issues(self, tmp_path) -> None:
+        import json
+
+        data = [
+            {"id": "i1", "title": "First", "priority": 2, "created_at": "2026-01-01T00:00:00Z"},
+            {"id": "i2", "title": "Second", "priority": 3, "created_at": "2026-02-01T00:00:00Z"},
+        ]
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json.dumps(data)
+            result = get_ready_issues(tmp_path)
+
+        assert isinstance(result, QueueResult)
+        assert result.success is True
+        assert result.error is None
+        assert len(result.issues) == 2
+        assert result.issues[0].id == "i1"
+        assert result.issues[1].id == "i2"
+
+    def test_success_empty_queue(self, tmp_path) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "[]"
+            result = get_ready_issues(tmp_path)
+
+        assert result.success is True
+        assert result.error is None
+        assert result.issues == []
+
+    def test_failure_nonzero_returncode(self, tmp_path) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stderr = "bd: not initialized"
+            result = get_ready_issues(tmp_path)
+
+        assert result.success is False
+        assert result.error == "bd: not initialized"
+        assert result.issues == []
+
+    def test_failure_nonzero_returncode_empty_stderr(self, tmp_path) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stderr = ""
+            result = get_ready_issues(tmp_path)
+
+        assert result.success is False
+        assert result.error == "bd ready failed"
+        assert result.issues == []
+
+    def test_failure_oserror(self, tmp_path) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run", side_effect=OSError("no bd")):
+            result = get_ready_issues(tmp_path)
+
+        assert result.success is False
+        assert "no bd" in result.error
+        assert result.issues == []
+
+    def test_failure_json_decode_error(self, tmp_path) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "not json"
+            result = get_ready_issues(tmp_path)
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.issues == []
+
+    def test_failure_non_list_json(self, tmp_path) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = '{"key": "value"}'
+            result = get_ready_issues(tmp_path)
+
+        assert result.success is False
+        assert "non-list" in result.error
+        assert result.issues == []

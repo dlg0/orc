@@ -11,7 +11,7 @@ from amp_orchestrator.amp_runner import AmpResult, ResultType, StubAmpRunner
 from amp_orchestrator.config import OrchestratorConfig
 from amp_orchestrator.evaluator import StubEvaluator
 from amp_orchestrator.events import EventLog
-from amp_orchestrator.queue import BdIssue
+from amp_orchestrator.queue import BdIssue, QueueResult
 from amp_orchestrator.scheduler import run_loop
 from amp_orchestrator.state import OrchestratorMode, OrchestratorState, StateStore
 
@@ -46,7 +46,7 @@ def test_empty_queue_goes_idle(repo_root: Path, state_dir: Path) -> None:
     config = OrchestratorConfig()
     runner = StubAmpRunner()
 
-    with patch("amp_orchestrator.scheduler.get_ready_issues", return_value=[]):
+    with patch("amp_orchestrator.scheduler.get_ready_issues", return_value=QueueResult()):
         run_loop(repo_root, state_dir, config, runner)
 
     state = StateStore(state_dir).load()
@@ -87,8 +87,8 @@ def test_processes_issue_with_stub(repo_root: Path, state_dir: Path) -> None:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return [issue]
-        return []
+            return QueueResult(issues=[issue])
+        return QueueResult()
 
     mock_merge = MagicMock()
     mock_merge.return_value = MagicMock(success=True, stage="complete")
@@ -125,8 +125,8 @@ def test_decomposed_issue_skips_merge(repo_root: Path, state_dir: Path) -> None:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return [issue]
-        return []
+            return QueueResult(issues=[issue])
+        return QueueResult()
 
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
@@ -169,10 +169,10 @@ def test_failed_issue_continues_to_next(repo_root: Path, state_dir: Path) -> Non
         nonlocal ready_call
         ready_call += 1
         if ready_call == 1:
-            return [issue1, issue2]
+            return QueueResult(issues=[issue1, issue2])
         if ready_call == 2:
-            return [issue2]  # fail-1 will be in skip_ids
-        return []
+            return QueueResult(issues=[issue2])  # fail-1 will be in skip_ids
+        return QueueResult()
 
     mock_merge = MagicMock()
     mock_merge.return_value = MagicMock(success=True, stage="complete")
@@ -208,8 +208,8 @@ def test_events_are_recorded(repo_root: Path, state_dir: Path) -> None:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return [issue]
-        return []
+            return QueueResult(issues=[issue])
+        return QueueResult()
 
     mock_merge = MagicMock()
     mock_merge.return_value = MagicMock(success=True, stage="complete")
@@ -249,8 +249,8 @@ def test_evaluation_pass_proceeds_to_merge(repo_root: Path, state_dir: Path) -> 
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return [issue]
-        return []
+            return QueueResult(issues=[issue])
+        return QueueResult()
 
     mock_merge = MagicMock()
     mock_merge.return_value = MagicMock(success=True, stage="complete")
@@ -286,8 +286,8 @@ def test_evaluation_fail_blocks_merge(repo_root: Path, state_dir: Path) -> None:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return [issue]
-        return []
+            return QueueResult(issues=[issue])
+        return QueueResult()
 
     mock_merge = MagicMock()
 
@@ -326,8 +326,8 @@ def test_evaluation_crash_treated_as_fail(repo_root: Path, state_dir: Path) -> N
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return [issue]
-        return []
+            return QueueResult(issues=[issue])
+        return QueueResult()
 
     mock_merge = MagicMock()
 
@@ -361,8 +361,8 @@ def test_no_evaluator_skips_evaluation(repo_root: Path, state_dir: Path) -> None
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return [issue]
-        return []
+            return QueueResult(issues=[issue])
+        return QueueResult()
 
     mock_merge = MagicMock()
     mock_merge.return_value = MagicMock(success=True, stage="complete")
@@ -398,8 +398,8 @@ def test_evaluation_events_recorded(repo_root: Path, state_dir: Path) -> None:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return [issue]
-        return []
+            return QueueResult(issues=[issue])
+        return QueueResult()
 
     mock_merge = MagicMock()
     mock_merge.return_value = MagicMock(success=True, stage="complete")
@@ -436,8 +436,8 @@ def test_evaluation_failure_persists_needs_rework(repo_root: Path, state_dir: Pa
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return [issue]
-        return []
+            return QueueResult(issues=[issue])
+        return QueueResult()
 
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
@@ -470,8 +470,8 @@ def test_claim_issue_called_before_amp(repo_root: Path, state_dir: Path) -> None
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return [issue]
-        return []
+            return QueueResult(issues=[issue])
+        return QueueResult()
 
     mock_merge = MagicMock()
     mock_merge.return_value = MagicMock(success=True, stage="complete")
@@ -505,8 +505,8 @@ def test_claim_failure_still_runs_amp(repo_root: Path, state_dir: Path) -> None:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return [issue]
-        return []
+            return QueueResult(issues=[issue])
+        return QueueResult()
 
     mock_merge = MagicMock()
     mock_merge.return_value = MagicMock(success=True, stage="complete")
@@ -548,8 +548,8 @@ def test_needs_rework_skipped_on_restart(repo_root: Path, state_dir: Path) -> No
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return [issue_rework, issue_ok]
-        return []
+            return QueueResult(issues=[issue_rework, issue_ok])
+        return QueueResult()
 
     runner_mock = MagicMock()
     runner_mock.run.return_value = AmpResult(result=ResultType.completed, summary="done", merge_ready=True)
