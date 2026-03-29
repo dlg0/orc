@@ -25,6 +25,32 @@ MODE_STYLES: dict[OrchestratorMode, tuple[str, str]] = {
 NO_PROJECT_MSG = "[bold red]⚠ Not connected to repo/state directory[/]"
 NO_PROJECT_PLACEHOLDER = "[italic]Not available — no project detected[/]"
 
+
+def _format_run_timestamp(ts: str) -> str:
+    """Format an ISO timestamp for the run history table.
+
+    Returns relative time (e.g. '5m ago') for recent runs (< 24h),
+    or 'YYYY-MM-DD HH:MM' for older ones.
+    """
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        delta = now - dt
+        total_seconds = int(delta.total_seconds())
+        if total_seconds < 0:
+            return dt.strftime("%Y-%m-%d %H:%M")
+        if total_seconds < 60:
+            return "just now"
+        if total_seconds < 3600:
+            return f"{total_seconds // 60}m ago"
+        if total_seconds < 86400:
+            hours = total_seconds // 3600
+            return f"{hours}h ago"
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return ts
+
+
 class StaleBanner(Static):
     """Banner shown when dashboard data is stale or refresh has failed."""
 
@@ -806,7 +832,7 @@ class HistoryTable(Static):
         for run in self._runs:
             ts = run.get("timestamp", "")
             if "T" in ts:
-                ts = ts.split("T")[0]
+                ts = _format_run_timestamp(ts)
             issue_id = run.get("issue_id", "")
             raw_result = run.get("result", "")
             result_colors = {"completed": "green", "failed": "red", "error": "red"}
