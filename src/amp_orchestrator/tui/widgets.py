@@ -1163,7 +1163,7 @@ class EventsLog(Static):
         severity = _event_severity(etype)
         sev_style = _SEVERITY_STYLE.get(severity, "white")
         message = _human_message(etype, data)
-        return f"[italic]{ts}[/] [{sev_style}][{severity}][/] [{color}]{message}[/]"
+        return f"[italic]{ts}[/] [{sev_style}]\\[{severity}][/] [{color}]{message}[/]"
 
     def _filter_events(self, events: list[dict]) -> list[dict]:
         """Filter events based on current error-only setting."""
@@ -1173,7 +1173,7 @@ class EventsLog(Static):
 
     def compose(self) -> ComposeResult:
         yield Label("Events (e errors only)", classes="panel-title")
-        yield RichLog(id="events-richlog", wrap=True, max_lines=200)
+        yield RichLog(id="events-richlog", wrap=True, max_lines=200, markup=True)
 
     def show_no_project(self) -> None:
         log = self.query_one("#events-richlog", RichLog)
