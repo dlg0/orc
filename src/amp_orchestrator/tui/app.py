@@ -21,6 +21,7 @@ from amp_orchestrator.tui.widgets import (
     ControlsPanel,
     EventsLog,
     HistoryTable,
+    NotConnectedBanner,
     QueueTable,
     StatusPanel,
 )
@@ -68,6 +69,7 @@ class OrchestratorApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield NotConnectedBanner()
         with Horizontal(id="main-area"):
             with Vertical(id="left-col"):
                 yield StatusPanel()
@@ -86,6 +88,19 @@ class OrchestratorApp(App):
             self._do_full_refresh()
             self.set_interval(1.0, self._do_fast_refresh)
             self.set_interval(5.0, self._do_queue_refresh)
+        else:
+            self._show_no_project()
+
+    def _show_no_project(self) -> None:
+        """Switch all panels to the no-project placeholder state."""
+        self.query_one(NotConnectedBanner).add_class("visible")
+        self.query_one(StatusPanel).show_no_project()
+        self.query_one(ActiveIssuePanel).show_no_project()
+        self.query_one(ConfigPanel).show_no_project()
+        self.query_one(ControlsPanel).show_no_project()
+        self.query_one(QueueTable).show_no_project()
+        self.query_one(EventsLog).show_no_project()
+        self.query_one(HistoryTable).show_no_project()
 
     def _load_config(self) -> None:
         """Load config once on startup."""

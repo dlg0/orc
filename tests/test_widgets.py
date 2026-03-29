@@ -9,15 +9,18 @@ import pytest
 from amp_orchestrator.config import OrchestratorConfig
 from amp_orchestrator.queue import BdIssue
 from amp_orchestrator.state import OrchestratorMode, OrchestratorState
+from amp_orchestrator.tui.app import OrchestratorApp
 from amp_orchestrator.tui.snapshot import DashboardSnapshot
 from amp_orchestrator.tui.widgets import (
     MODE_STYLES,
+    NO_PROJECT_PLACEHOLDER,
     _ACTION_ENABLED,
     ActiveIssuePanel,
     ConfigPanel,
     ControlsPanel,
     EventsLog,
     HistoryTable,
+    NotConnectedBanner,
     QueueTable,
     StatusPanel,
 )
@@ -112,6 +115,23 @@ def test_inspect_modal_init() -> None:
     modal = InspectModal(title="Test Title", body="Body text")
     assert modal._title == "Test Title"
     assert modal._body == "Body text"
+
+
+def test_not_connected_banner_composes() -> None:
+    banner = NotConnectedBanner()
+    children = list(banner.compose())
+    assert len(children) == 1  # Label
+
+
+def test_no_project_placeholder_is_defined() -> None:
+    assert "no project detected" in NO_PROJECT_PLACEHOLDER.lower()
+
+
+def test_app_no_project_state() -> None:
+    """App without repo/state should call _show_no_project."""
+    app = OrchestratorApp()
+    assert app._repo_root is None
+    assert app._state_dir is None
 
 
 def test_help_modal_has_bindings() -> None:

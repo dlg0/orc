@@ -20,6 +20,31 @@ MODE_STYLES: dict[OrchestratorMode, tuple[str, str]] = {
     OrchestratorMode.idle: ("grey", "○ IDLE"),
 }
 
+NO_PROJECT_MSG = "[bold red]⚠ Not connected to repo/state directory[/]"
+NO_PROJECT_PLACEHOLDER = "[dim]Not available — no project detected[/]"
+
+class NotConnectedBanner(Static):
+    """Persistent banner shown when no repo/state directory is detected."""
+
+    DEFAULT_CSS = """
+    NotConnectedBanner {
+        height: auto;
+        background: $error-darken-2;
+        color: white;
+        text-align: center;
+        text-style: bold;
+        padding: 0 1;
+        display: none;
+    }
+    NotConnectedBanner.visible {
+        display: block;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Label(NO_PROJECT_MSG, id="no-project-banner-text")
+
+
 EVENT_COLORS: dict[str, str] = {
     "error": "red",
     "issue_selected": "cyan",
@@ -57,6 +82,14 @@ class StatusPanel(Static):
         yield Label("Queue: 0 issue(s)", id="queue-count")
         yield Label("", id="last-completed")
         yield Label("", id="last-error")
+
+    def show_no_project(self) -> None:
+        self.query_one("#mode-badge", Label).update(
+            "[bold red]⚠ NOT CONNECTED[/]"
+        )
+        self.query_one("#queue-count", Label).update(NO_PROJECT_PLACEHOLDER)
+        self.query_one("#last-completed", Label).update("")
+        self.query_one("#last-error", Label).update("")
 
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         color, text = MODE_STYLES.get(
@@ -105,6 +138,9 @@ class ActiveIssuePanel(Static):
         yield Label("Active Issue", classes="panel-title")
         yield Label("[dim]No active issue[/]", id="active-detail")
 
+    def show_no_project(self) -> None:
+        self.query_one("#active-detail", Label).update(NO_PROJECT_PLACEHOLDER)
+
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         detail = self.query_one("#active-detail", Label)
         if snap.state.active_issue_id:
@@ -137,6 +173,9 @@ class ConfigPanel(Static):
     def compose(self) -> ComposeResult:
         yield Label("Config", classes="panel-title")
         yield Label("", id="config-detail")
+
+    def show_no_project(self) -> None:
+        self.query_one("#config-detail", Label).update(NO_PROJECT_PLACEHOLDER)
 
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         cfg = snap.config
@@ -187,6 +226,12 @@ class ControlsPanel(Static):
             yield Button("Resume", id="btn-resume", variant="primary")
             yield Button("Stop", id="btn-stop", variant="error")
 
+    def show_no_project(self) -> None:
+        for btn_id in ("#btn-start", "#btn-pause", "#btn-resume", "#btn-stop"):
+            btn = self.query_one(btn_id, Button)
+            btn.disabled = True
+            btn.tooltip = "No project detected"
+
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         mode = snap.state.mode
         for action, btn_id in [
@@ -226,6 +271,11 @@ class QueueTable(Static):
     def on_mount(self) -> None:
         table = self.query_one("#queue-datatable", DataTable)
         table.add_columns("Pri", "ID", "Title", "Created")
+
+    def show_no_project(self) -> None:
+        table = self.query_one("#queue-datatable", DataTable)
+        table.clear()
+        table.add_row("-", "-", NO_PROJECT_PLACEHOLDER, "-")
 
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         self._issues = list(snap.ready_issues)
@@ -290,6 +340,11 @@ class EventsLog(Static):
         yield Label("Events", classes="panel-title")
         yield RichLog(id="events-richlog", wrap=True, max_lines=200)
 
+    def show_no_project(self) -> None:
+        log = self.query_one("#events-richlog", RichLog)
+        log.clear()
+        log.write(NO_PROJECT_PLACEHOLDER)
+
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         log = self.query_one("#events-richlog", RichLog)
         log.clear()
@@ -336,6 +391,11 @@ class HistoryTable(Static):
     def on_mount(self) -> None:
         table = self.query_one("#history-datatable", DataTable)
         table.add_columns("Timestamp", "Issue", "Result", "Branch", "Summary")
+
+    def show_no_project(self) -> None:
+        table = self.query_one("#history-datatable", DataTable)
+        table.clear()
+        table.add_row("-", "-", NO_PROJECT_PLACEHOLDER, "-", "-")
 
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         self._runs = list(reversed(snap.state.run_history))
