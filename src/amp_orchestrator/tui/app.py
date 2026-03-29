@@ -205,7 +205,7 @@ class OrchestratorApp(App):
         self.query_one(ConfigPanel).toggle_class("visible")
 
     def action_help(self) -> None:
-        """Toggle help overlay."""
+        """Show help modal with key bindings."""
         from amp_orchestrator.tui.modals import HelpModal
 
         self.push_screen(HelpModal())
