@@ -973,7 +973,7 @@ class EventsLog(Static):
     def _format_entry(entry: dict) -> str:
         ts = entry.get("timestamp", "?")
         if "T" in ts:
-            ts = ts.split("T")[1][:8]
+            ts = _format_run_timestamp(ts)
         etype = entry.get("event_type", "?")
         data = entry.get("data")
         color = EVENT_COLORS.get(etype, "white")
