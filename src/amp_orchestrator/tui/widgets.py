@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, DataTable, Label, RichLog, Static
+from textual.widgets import Button, DataTable, Input, Label, RichLog, Static
 
 from amp_orchestrator.config import OrchestratorConfig
 from amp_orchestrator.queue import BdIssue
@@ -773,7 +773,7 @@ class ControlsPanel(Static):
 
 
 class QueueTable(Static):
-    """Ready queue table."""
+    """Ready queue table with sort and search/filter support."""
 
     DEFAULT_CSS = """
     QueueTable {
@@ -784,6 +784,13 @@ class QueueTable(Static):
     QueueTable .panel-title {
         text-style: bold;
     }
+    QueueTable .filter-bar {
+        height: auto;
+        display: none;
+    }
+    QueueTable .filter-bar.visible {
+        display: block;
+    }
     """
 
     can_focus = True
@@ -791,55 +798,119 @@ class QueueTable(Static):
     BINDINGS = [
         Binding("enter", "inspect", "Inspect", show=True),
         Binding("i", "inspect", "Inspect", show=False),
+        Binding("o", "cycle_sort", "Sort", show=True),
+        Binding("slash", "toggle_filter", "Filter", show=True),
     ]
+
+    # Sort modes cycle: priority (default) → age-newest → age-oldest
+    _SORT_MODES = ("priority", "age_newest", "age_oldest")
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._issues: list[BdIssue] = []
+        self._filtered_issues: list[BdIssue] = []
         self._row_key: list[str] = []
+        self._sort_mode: str = "priority"
+        self._filter_text: str = ""
 
     def compose(self) -> ComposeResult:
-        yield Label("Ready Queue (Enter/i to inspect)", classes="panel-title")
+        yield Label("Ready Queue (Enter/i inspect, o sort, / filter)", classes="panel-title")
+        yield Input(placeholder="Filter by issue ID…", id="queue-filter", classes="filter-bar")
         yield DataTable(id="queue-datatable", cursor_type="row")
 
     def on_mount(self) -> None:
         table = self.query_one("#queue-datatable", DataTable)
         table.add_columns("Pri", "ID", "Title", "Created")
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "queue-filter":
+            self._filter_text = event.value.strip()
+            self._row_key = []  # force re-render
+            self._rebuild_table()
+
     def show_no_project(self) -> None:
         table = self.query_one("#queue-datatable", DataTable)
         table.clear()
         table.add_row("-", "-", NO_PROJECT_PLACEHOLDER, "-")
 
-    def update_snapshot(self, snap: DashboardSnapshot) -> None:
-        new_keys = [issue.id for issue in snap.ready_issues]
-        if new_keys == self._row_key:
-            return
+    def _sort_issues(self, issues: list[BdIssue]) -> list[BdIssue]:
+        """Sort issues based on current sort mode."""
+        if self._sort_mode == "age_newest":
+            return sorted(issues, key=lambda i: i.created, reverse=True)
+        if self._sort_mode == "age_oldest":
+            return sorted(issues, key=lambda i: i.created)
+        # Default: priority (lower number = higher priority, 0 treated as lowest)
+        from amp_orchestrator.queue import _sort_key
+        return sorted(issues, key=_sort_key)
+
+    def _apply_filter(self, issues: list[BdIssue]) -> list[BdIssue]:
+        """Filter issues by ID or title substring."""
+        if not self._filter_text:
+            return issues
+        needle = self._filter_text.lower()
+        return [i for i in issues if needle in i.id.lower() or needle in i.title.lower()]
+
+    def _rebuild_table(self) -> None:
+        """Re-render the table with current sort and filter settings."""
         table = self.query_one("#queue-datatable", DataTable)
         saved_cursor = table.cursor_row
-        self._issues = list(snap.ready_issues)
-        self._row_key = new_keys
+        filtered = self._apply_filter(self._issues)
+        self._filtered_issues = self._sort_issues(filtered)
         table.clear()
-        if not snap.ready_issues:
-            table.add_row("-", "-", "[italic]No issues in queue[/]", "-")
+        if not self._filtered_issues:
+            if self._filter_text:
+                table.add_row("-", "-", f"[italic]No matches for '{self._filter_text}'[/]", "-")
+            else:
+                table.add_row("-", "-", "[italic]No issues in queue[/]", "-")
             return
-        for issue in snap.ready_issues:
+        for issue in self._filtered_issues:
             pri = str(issue.priority) if issue.priority else "-"
             table.add_row(pri, issue.id, issue.title, issue.created)
         if table.row_count > 0:
             table.move_cursor(row=min(saved_cursor, table.row_count - 1))
+
+    def update_snapshot(self, snap: DashboardSnapshot) -> None:
+        new_keys = [issue.id for issue in snap.ready_issues]
+        if new_keys == self._row_key:
+            return
+        self._issues = list(snap.ready_issues)
+        self._row_key = new_keys
+        self._rebuild_table()
+
+    def action_cycle_sort(self) -> None:
+        """Cycle through sort modes: priority → newest → oldest."""
+        idx = self._SORT_MODES.index(self._sort_mode)
+        self._sort_mode = self._SORT_MODES[(idx + 1) % len(self._SORT_MODES)]
+        sort_labels = {"priority": "Priority", "age_newest": "Newest first", "age_oldest": "Oldest first"}
+        self.query_one(".panel-title", Label).update(
+            f"Ready Queue [Sort: {sort_labels[self._sort_mode]}] (o sort, / filter)"
+        )
+        self._row_key = []  # force re-render
+        self._rebuild_table()
+
+    def action_toggle_filter(self) -> None:
+        """Toggle the filter input bar."""
+        filter_input = self.query_one("#queue-filter", Input)
+        filter_input.toggle_class("visible")
+        if filter_input.has_class("visible"):
+            filter_input.focus()
+        else:
+            self._filter_text = ""
+            filter_input.value = ""
+            self._row_key = []
+            self._rebuild_table()
 
     def action_inspect(self) -> None:
         self._show_inspect()
 
     def _show_inspect(self) -> None:
         table = self.query_one("#queue-datatable", DataTable)
-        if not self._issues or table.row_count == 0:
+        if not self._filtered_issues or table.row_count == 0:
             return
         row_idx = table.cursor_row
-        if row_idx < 0 or row_idx >= len(self._issues):
+        if row_idx < 0 or row_idx >= len(self._filtered_issues):
             return
-        issue = self._issues[row_idx]
+        issue = self._filtered_issues[row_idx]
         title = f"Issue: {issue.id}"
         lines = [
             f"[bold]Title:[/] {issue.title}",
@@ -930,7 +1001,9 @@ class EventsLog(Static):
 
 
 class HistoryTable(Static):
-    """Run history table."""
+    """Run history table with failed-only filter and search."""
+
+    _FAILED_RESULTS = frozenset({"failed", "error"})
 
     DEFAULT_CSS = """
     HistoryTable {
@@ -941,6 +1014,13 @@ class HistoryTable(Static):
     HistoryTable .panel-title {
         text-style: bold;
     }
+    HistoryTable .filter-bar {
+        height: auto;
+        display: none;
+    }
+    HistoryTable .filter-bar.visible {
+        display: block;
+    }
     """
 
     can_focus = True
@@ -948,20 +1028,33 @@ class HistoryTable(Static):
     BINDINGS = [
         Binding("enter", "inspect", "Inspect", show=True),
         Binding("i", "inspect", "Inspect", show=False),
+        Binding("f", "toggle_failed_only", "Failed only", show=True),
+        Binding("slash", "toggle_filter", "Filter", show=True),
     ]
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._runs: list[dict] = []
+        self._filtered_runs: list[dict] = []
         self._row_key: list[str] = []
+        self._last_snap: DashboardSnapshot | None = None
+        self._failed_only: bool = False
+        self._filter_text: str = ""
 
     def compose(self) -> ComposeResult:
-        yield Label("Run History (Enter/i to inspect)", classes="panel-title")
+        yield Label("Run History (Enter/i inspect, f failed, / filter)", classes="panel-title")
+        yield Input(placeholder="Filter by issue ID…", id="history-filter", classes="filter-bar")
         yield DataTable(id="history-datatable", cursor_type="row")
 
     def on_mount(self) -> None:
         table = self.query_one("#history-datatable", DataTable)
         table.add_columns("Timestamp", "Issue", "Result", "Branch", "Summary")
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "history-filter":
+            self._filter_text = event.value.strip()
+            self._row_key = []  # force re-render
+            self._rebuild_table()
 
     def show_no_project(self) -> None:
         table = self.query_one("#history-datatable", DataTable)
@@ -972,20 +1065,30 @@ class HistoryTable(Static):
     def _run_key(run: dict) -> str:
         return f"{run.get('timestamp', '')}:{run.get('issue_id', '')}:{run.get('result', '')}"
 
-    def update_snapshot(self, snap: DashboardSnapshot) -> None:
-        runs = list(reversed(snap.state.run_history))
-        new_keys = [self._run_key(r) for r in runs]
-        if new_keys == self._row_key:
-            return
+    def _apply_filters(self, runs: list[dict]) -> list[dict]:
+        """Apply failed-only and text filters."""
+        result = runs
+        if self._failed_only:
+            result = [r for r in result if r.get("result", "") in self._FAILED_RESULTS]
+        if self._filter_text:
+            needle = self._filter_text.lower()
+            result = [r for r in result if needle in r.get("issue_id", "").lower()]
+        return result
+
+    def _rebuild_table(self) -> None:
+        """Re-render the table with current filters."""
+        snap = self._last_snap
         table = self.query_one("#history-datatable", DataTable)
         saved_cursor = table.cursor_row
-        self._runs = runs
-        self._row_key = new_keys
+        self._filtered_runs = self._apply_filters(self._runs)
         table.clear()
-        if not self._runs:
-            table.add_row("-", "-", "[italic]No run history[/]", "-", "-")
+        if not self._filtered_runs:
+            if self._failed_only or self._filter_text:
+                table.add_row("-", "-", "[italic]No matching runs[/]", "-", "-")
+            else:
+                table.add_row("-", "-", "[italic]No run history[/]", "-", "-")
             return
-        for run in self._runs:
+        for run in self._filtered_runs:
             ts = run.get("timestamp", "")
             if "T" in ts:
                 ts = _format_run_timestamp(ts)
@@ -995,7 +1098,10 @@ class HistoryTable(Static):
             rc = result_colors.get(raw_result, "white")
             icon = _RESULT_ICONS.get(raw_result, "·")
             # Check if this issue has a failure category for richer coloring
-            failure_info = snap.state.issue_failures.get(issue_id)
+            if snap:
+                failure_info = snap.state.issue_failures.get(issue_id)
+            else:
+                failure_info = None
             if failure_info and isinstance(failure_info, dict):
                 cat = failure_info.get("category", "")
                 category_colors = {
@@ -1018,17 +1124,50 @@ class HistoryTable(Static):
         if table.row_count > 0:
             table.move_cursor(row=min(saved_cursor, table.row_count - 1))
 
+    def update_snapshot(self, snap: DashboardSnapshot) -> None:
+        runs = list(reversed(snap.state.run_history))
+        new_keys = [self._run_key(r) for r in runs]
+        if new_keys == self._row_key:
+            return
+        self._runs = runs
+        self._row_key = new_keys
+        self._last_snap = snap
+        self._rebuild_table()
+
+    def action_toggle_failed_only(self) -> None:
+        """Toggle failed-only filter."""
+        self._failed_only = not self._failed_only
+        label = "Run History"
+        if self._failed_only:
+            label += " [bold red][FAILED ONLY][/]"
+        label += " (f failed, / filter)"
+        self.query_one(".panel-title", Label).update(label)
+        self._row_key = []  # force re-render
+        self._rebuild_table()
+
+    def action_toggle_filter(self) -> None:
+        """Toggle the filter input bar."""
+        filter_input = self.query_one("#history-filter", Input)
+        filter_input.toggle_class("visible")
+        if filter_input.has_class("visible"):
+            filter_input.focus()
+        else:
+            self._filter_text = ""
+            filter_input.value = ""
+            self._row_key = []
+            self._rebuild_table()
+
     def action_inspect(self) -> None:
         self._show_inspect()
 
     def _show_inspect(self) -> None:
         table = self.query_one("#history-datatable", DataTable)
-        if not self._runs or table.row_count == 0:
+        if not self._filtered_runs or table.row_count == 0:
             return
         row_idx = table.cursor_row
-        if row_idx < 0 or row_idx >= len(self._runs):
+        if row_idx < 0 or row_idx >= len(self._filtered_runs):
             return
-        run = self._runs[row_idx]
+        run = self._filtered_runs[row_idx]
         title = f"Run: {run.get('issue_id', '?')}"
         lines = [
             f"[bold]Issue:[/] {run.get('issue_id', '')}",

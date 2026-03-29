@@ -153,7 +153,7 @@ def test_controls_panel_has_all_actions() -> None:
 def test_queue_table_composes() -> None:
     panel = QueueTable()
     children = list(panel.compose())
-    assert len(children) == 2  # Label + DataTable
+    assert len(children) == 3  # Label + Input (filter) + DataTable
 
 
 def test_events_log_composes() -> None:
@@ -165,7 +165,7 @@ def test_events_log_composes() -> None:
 def test_history_table_composes() -> None:
     panel = HistoryTable()
     children = list(panel.compose())
-    assert len(children) == 2  # Label + DataTable
+    assert len(children) == 3  # Label + Input (filter) + DataTable
 
 
 def test_inspect_modal_init() -> None:
@@ -426,6 +426,162 @@ def test_category_icons_cover_all_categories() -> None:
 
     for cat in FailureCategory:
         assert cat.value in _CATEGORY_ICONS, f"_CATEGORY_ICONS missing '{cat.value}'"
+
+
+# --- QueueTable sort/filter tests ---
+
+
+def test_queue_table_sort_modes() -> None:
+    """QueueTable should cycle through three sort modes."""
+    table = QueueTable()
+    assert table._sort_mode == "priority"
+    # Simulate cycling
+    modes = QueueTable._SORT_MODES
+    assert modes == ("priority", "age_newest", "age_oldest")
+
+
+def test_queue_table_sort_issues_by_priority() -> None:
+    """Default sort should order by priority (lower number first, 0 last)."""
+    table = QueueTable()
+    issues = [
+        BdIssue(id="A-1", title="Low", priority=4, created="2025-01-01"),
+        BdIssue(id="A-2", title="Urgent", priority=1, created="2025-01-02"),
+        BdIssue(id="A-3", title="None", priority=0, created="2025-01-03"),
+    ]
+    sorted_issues = table._sort_issues(issues)
+    assert [i.id for i in sorted_issues] == ["A-2", "A-1", "A-3"]
+
+
+def test_queue_table_sort_issues_by_age_newest() -> None:
+    """age_newest sort should put newest first."""
+    table = QueueTable()
+    table._sort_mode = "age_newest"
+    issues = [
+        BdIssue(id="A-1", title="Old", priority=1, created="2025-01-01"),
+        BdIssue(id="A-2", title="New", priority=1, created="2025-06-01"),
+    ]
+    sorted_issues = table._sort_issues(issues)
+    assert [i.id for i in sorted_issues] == ["A-2", "A-1"]
+
+
+def test_queue_table_sort_issues_by_age_oldest() -> None:
+    """age_oldest sort should put oldest first."""
+    table = QueueTable()
+    table._sort_mode = "age_oldest"
+    issues = [
+        BdIssue(id="A-1", title="New", priority=1, created="2025-06-01"),
+        BdIssue(id="A-2", title="Old", priority=1, created="2025-01-01"),
+    ]
+    sorted_issues = table._sort_issues(issues)
+    assert [i.id for i in sorted_issues] == ["A-2", "A-1"]
+
+
+def test_queue_table_filter_by_id() -> None:
+    """Filter should match issue ID substring."""
+    table = QueueTable()
+    table._filter_text = "a-2"
+    issues = [
+        BdIssue(id="A-1", title="First", priority=1, created="2025-01-01"),
+        BdIssue(id="A-2", title="Second", priority=1, created="2025-01-02"),
+        BdIssue(id="A-22", title="Third", priority=1, created="2025-01-03"),
+    ]
+    filtered = table._apply_filter(issues)
+    assert [i.id for i in filtered] == ["A-2", "A-22"]
+
+
+def test_queue_table_filter_by_title() -> None:
+    """Filter should also match title substring."""
+    table = QueueTable()
+    table._filter_text = "bug"
+    issues = [
+        BdIssue(id="A-1", title="Fix bug in parser", priority=1, created="2025-01-01"),
+        BdIssue(id="A-2", title="Add feature", priority=1, created="2025-01-02"),
+    ]
+    filtered = table._apply_filter(issues)
+    assert [i.id for i in filtered] == ["A-1"]
+
+
+def test_queue_table_empty_filter_returns_all() -> None:
+    """Empty filter should return all issues."""
+    table = QueueTable()
+    table._filter_text = ""
+    issues = [
+        BdIssue(id="A-1", title="First", priority=1, created="2025-01-01"),
+    ]
+    assert table._apply_filter(issues) == issues
+
+
+def test_queue_table_has_sort_and_filter_bindings() -> None:
+    """QueueTable should have bindings for sort (o) and filter (/)."""
+    table = QueueTable()
+    binding_keys = [b.key for b in table.BINDINGS]
+    assert "o" in binding_keys
+    assert "slash" in binding_keys
+
+
+# --- HistoryTable filter tests ---
+
+
+def test_history_table_failed_only_filter() -> None:
+    """_apply_filters with failed_only should only keep failed/error runs."""
+    table = HistoryTable()
+    table._failed_only = True
+    runs = [
+        {"issue_id": "A-1", "result": "completed"},
+        {"issue_id": "A-2", "result": "failed"},
+        {"issue_id": "A-3", "result": "error"},
+        {"issue_id": "A-4", "result": "completed"},
+    ]
+    filtered = table._apply_filters(runs)
+    assert [r["issue_id"] for r in filtered] == ["A-2", "A-3"]
+
+
+def test_history_table_filter_by_issue_id() -> None:
+    """_apply_filters with filter_text should match issue_id substring."""
+    table = HistoryTable()
+    table._filter_text = "a-2"
+    runs = [
+        {"issue_id": "A-1", "result": "completed"},
+        {"issue_id": "A-2", "result": "failed"},
+        {"issue_id": "A-22", "result": "completed"},
+    ]
+    filtered = table._apply_filters(runs)
+    assert [r["issue_id"] for r in filtered] == ["A-2", "A-22"]
+
+
+def test_history_table_combined_filters() -> None:
+    """Both failed_only and filter_text should stack."""
+    table = HistoryTable()
+    table._failed_only = True
+    table._filter_text = "a-2"
+    runs = [
+        {"issue_id": "A-1", "result": "failed"},
+        {"issue_id": "A-2", "result": "completed"},
+        {"issue_id": "A-2", "result": "failed"},
+        {"issue_id": "A-3", "result": "error"},
+    ]
+    filtered = table._apply_filters(runs)
+    assert len(filtered) == 1
+    assert filtered[0]["issue_id"] == "A-2"
+    assert filtered[0]["result"] == "failed"
+
+
+def test_history_table_no_filters_returns_all() -> None:
+    """With no filters active, all runs should be returned."""
+    table = HistoryTable()
+    runs = [
+        {"issue_id": "A-1", "result": "completed"},
+        {"issue_id": "A-2", "result": "failed"},
+    ]
+    assert table._apply_filters(runs) == runs
+
+
+def test_history_table_has_filter_bindings() -> None:
+    """HistoryTable should have bindings for failed-only (f) and filter (/)."""
+    table = HistoryTable()
+    binding_keys = [b.key for b in table.BINDINGS]
+    assert "f" in binding_keys
+    assert "slash" in binding_keys
 
 
 def test_mode_styles_use_high_contrast_colors() -> None:
