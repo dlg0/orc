@@ -70,14 +70,17 @@ class ConfirmStopModal(ModalScreen[bool]):
     #confirm-buttons Button {
         margin: 0 1;
     }
-    #confirm-yes:focus {
+    #confirm-buttons Button:focus {
         text-style: bold reverse;
+    }
+    #confirm-hint {
+        margin-top: 1;
+        color: $text-muted;
     }
     """
 
     BINDINGS = [
         ("escape", "cancel", "Cancel"),
-        ("enter", "confirm", "Confirm"),
         ("y", "confirm", "Confirm"),
         ("n", "cancel", "Cancel"),
     ]
@@ -87,11 +90,12 @@ class ConfirmStopModal(ModalScreen[bool]):
             yield Label("Stop Orchestrator?", id="confirm-title")
             yield Static("The orchestrator will stop after the current issue reaches a safe checkpoint.")
             with Horizontal(id="confirm-buttons"):
-                yield Button("Stop", variant="error", id="confirm-yes")
                 yield Button("Cancel", variant="default", id="confirm-no")
+                yield Button("Stop", variant="error", id="confirm-yes")
+            yield Static("[b]y[/] stop  [b]n[/]/[b]Esc[/] cancel", id="confirm-hint")
 
     def on_mount(self) -> None:
-        self.query_one("#confirm-yes", Button).focus()
+        self.query_one("#confirm-no", Button).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "confirm-yes")
