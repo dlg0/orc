@@ -651,9 +651,17 @@ class ActiveIssuePanel(Static):
             lines.append(f"[bold]Branch:[/] {state.active_branch}")
         if state.active_worktree_path:
             lines.append(f"[bold]Worktree:[/] {state.active_worktree_path}")
-        from amp_orchestrator.tui.modals import InspectModal
+        from amp_orchestrator.tui.modals import CopyableField, InspectModal
 
-        self.app.push_screen(InspectModal(title=title, body="\n".join(lines)))
+        copyable: list[CopyableField] = []
+        if state.active_branch:
+            copyable.append(CopyableField(label="Branch", value=state.active_branch, key="b"))
+        if state.active_worktree_path:
+            copyable.append(CopyableField(label="Worktree", value=state.active_worktree_path, key="w"))
+
+        self.app.push_screen(
+            InspectModal(title=title, body="\n".join(lines), copyable_fields=copyable)
+        )
 
 
 class ConfigPanel(Static):
@@ -1272,9 +1280,30 @@ class HistoryTable(Static):
         if run.get("worktree_path"):
             lines.append(f"[bold]Worktree:[/] {run['worktree_path']}")
         if run.get("thread_id"):
+            from amp_orchestrator.tui.modals import _THREAD_URL_PREFIX
+
+            thread_url = f"{_THREAD_URL_PREFIX}{run['thread_id']}"
             lines.append(f"[bold]Thread:[/] {run['thread_id']}")
+            lines.append(f"[bold]Thread URL:[/] {thread_url}")
         if run.get("summary"):
             lines.append(f"\n[bold]Summary:[/]\n{run['summary']}")
-        from amp_orchestrator.tui.modals import InspectModal
+        from amp_orchestrator.tui.modals import CopyableField, InspectModal, _THREAD_URL_PREFIX
 
-        self.app.push_screen(InspectModal(title=title, body="\n".join(lines)))
+        copyable: list[CopyableField] = []
+        if run.get("thread_id"):
+            copyable.append(CopyableField(label="Thread ID", value=run["thread_id"], key="t"))
+            copyable.append(
+                CopyableField(
+                    label="Thread URL",
+                    value=f"{_THREAD_URL_PREFIX}{run['thread_id']}",
+                    key="u",
+                )
+            )
+        if run.get("branch"):
+            copyable.append(CopyableField(label="Branch", value=run["branch"], key="b"))
+        if run.get("worktree_path"):
+            copyable.append(CopyableField(label="Worktree", value=run["worktree_path"], key="w"))
+
+        self.app.push_screen(
+            InspectModal(title=title, body="\n".join(lines), copyable_fields=copyable)
+        )

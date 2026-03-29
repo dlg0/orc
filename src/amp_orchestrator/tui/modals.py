@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from textual.app import ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Label, Static
+
+
+@dataclass
+class CopyableField:
+    """A field whose value can be copied to the clipboard from the modal."""
+
+    label: str
+    value: str
+    key: str  # single key to trigger copy (e.g. "t" for thread)
+
+
+# Ampcode thread URL prefix.
+_THREAD_URL_PREFIX = "https://ampcode.com/threads/"
 
 
 class InspectModal(ModalScreen[None]):
@@ -27,6 +42,10 @@ class InspectModal(ModalScreen[None]):
         text-style: bold;
         margin-bottom: 1;
     }
+    #inspect-copy-hint {
+        margin-top: 1;
+        color: $text-muted;
+    }
     """
 
     BINDINGS = [
@@ -34,15 +53,39 @@ class InspectModal(ModalScreen[None]):
         ("q", "dismiss", "Close"),
     ]
 
-    def __init__(self, title: str, body: str, **kwargs) -> None:
+    def __init__(
+        self,
+        title: str,
+        body: str,
+        copyable_fields: list[CopyableField] | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self._title = title
         self._body = body
+        self._copyable_fields = copyable_fields or []
+        self._copy_key_map: dict[str, CopyableField] = {
+            f.key: f for f in self._copyable_fields
+        }
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="inspect-dialog"):
             yield Label(self._title, id="inspect-title")
             yield Static(self._body, id="inspect-body")
+            if self._copyable_fields:
+                hints = "  ".join(
+                    f"[bold]{f.key}[/] copy {f.label.lower()}"
+                    for f in self._copyable_fields
+                )
+                yield Static(hints, id="inspect-copy-hint")
+
+    async def on_key(self, event) -> None:
+        """Handle copy key presses for copyable fields."""
+        cf = self._copy_key_map.get(event.key)
+        if cf is not None:
+            event.stop()
+            self.app.copy_to_clipboard(cf.value)
+            self.app.notify(f"Copied {cf.label}: {cf.value}", timeout=2)
 
 
 class ConfirmStopModal(ModalScreen[bool]):
