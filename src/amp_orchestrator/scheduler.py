@@ -13,7 +13,14 @@ from amp_orchestrator.config import OrchestratorConfig
 from amp_orchestrator.evaluator import IssueEvaluator
 from amp_orchestrator.events import EventLog, EventType
 from amp_orchestrator.merge import verify_and_merge
-from amp_orchestrator.queue import claim_issue, get_ready_issues, select_next_issue, unclaim_issue
+from amp_orchestrator.queue import (
+    claim_issue,
+    get_children_all_closed,
+    get_issue_parent,
+    get_ready_issues,
+    select_next_issue,
+    unclaim_issue,
+)
 from amp_orchestrator.state import (
     FailureAction,
     FailureCategory,
@@ -328,6 +335,7 @@ def _attempt_resume(
         _record_run(store, state, issue_id, "completed", "recovered from interrupted run",
                     branch, wt_path_str, amp_mode=config.amp_mode)
         _try_cleanup(worktree_mgr, wt_info)
+        _check_parent_promotion(issue_id, repo_root, store, state, events)
     else:
         click.echo(f"[MERGE] {issue_id} FAILED at {merge_result.stage}: {merge_result.error}")
         _record_failure(
@@ -414,7 +422,13 @@ def run_loop(
             events.record(EventType.error, {"stage": "queue", "error": queue_result.error, "retries_exhausted": True})
             continue
 
-        issue = select_next_issue(queue_result.issues, skip_ids=failed_ids)
+        # If a parent was promoted, prioritize it in selection
+        priority_id = state.promoted_parent
+        issue = select_next_issue(queue_result.issues, skip_ids=failed_ids, priority_id=priority_id)
+        # Clear promoted_parent after selection attempt (one-shot)
+        if state.promoted_parent:
+            state.promoted_parent = None
+            store.save(state)
 
         if issue is None:
             click.echo("[SCHEDULER] No ready issues -- queue exhausted.")
@@ -709,6 +723,7 @@ def run_loop(
             _clear_active(store, state)
             _record_run(store, state, issue.id, "completed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
+            _check_parent_promotion(issue.id, repo_root, store, state, events)
         else:
             click.echo(f"[MERGE] {issue.id} FAILED at {merge_result.stage}: {merge_result.error}")
             events.record(EventType.error, {
@@ -736,6 +751,35 @@ def run_loop(
                 store.transition(state, OrchestratorMode.idle)
                 events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
                 return
+
+
+def _check_parent_promotion(
+    issue_id: str,
+    repo_root: Path,
+    store: StateStore,
+    state: OrchestratorState,
+    events: EventLog,
+) -> None:
+    """After closing *issue_id*, check if its parent should be promoted.
+
+    If *issue_id* has a parent and all siblings are now closed,
+    set ``state.promoted_parent`` so the next queue selection prioritizes it.
+    """
+    parent_id = get_issue_parent(issue_id, cwd=repo_root)
+    if not parent_id:
+        return
+
+    all_closed = get_children_all_closed(parent_id, cwd=repo_root)
+    if all_closed:
+        click.echo(f"[PROMOTE] {parent_id} all children closed — promoting parent")
+        state.promoted_parent = parent_id
+        # Clear any failure record so the parent is not skipped
+        state.issue_failures.pop(parent_id, None)
+        store.save(state)
+        events.record(EventType.parent_promoted, {
+            "parent_id": parent_id,
+            "triggered_by": issue_id,
+        })
 
 
 def _clear_active(store: StateStore, state: OrchestratorState) -> None:

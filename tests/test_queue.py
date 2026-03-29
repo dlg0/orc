@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from amp_orchestrator.queue import BdIssue, QueueResult, claim_issue, get_ready_issues, select_next_issue, unclaim_issue
+from amp_orchestrator.queue import (
+    BdIssue,
+    QueueResult,
+    claim_issue,
+    get_children_all_closed,
+    get_issue_parent,
+    get_ready_issues,
+    select_next_issue,
+    unclaim_issue,
+)
 
 
 def _issue(
@@ -197,3 +206,101 @@ class TestUnclaimIssue:
             mock_run.return_value.returncode = 0
             unclaim_issue("X-1", cwd=tmp_path)
             assert mock_run.call_args[1]["cwd"] == tmp_path
+
+
+class TestSelectNextIssuePriorityId:
+    def test_priority_id_selected_over_higher_priority(self) -> None:
+        urgent = _issue(id="urgent", priority=1)
+        target = _issue(id="target", priority=4)
+        assert select_next_issue([urgent, target], priority_id="target") is target
+
+    def test_priority_id_not_in_list_falls_back(self) -> None:
+        a = _issue(id="a", priority=2)
+        b = _issue(id="b", priority=3)
+        assert select_next_issue([a, b], priority_id="missing") is a
+
+    def test_priority_id_in_skip_ids_not_selected(self) -> None:
+        a = _issue(id="a", priority=2)
+        b = _issue(id="b", priority=3)
+        assert select_next_issue([a, b], skip_ids={"a"}, priority_id="a") is b
+
+    def test_priority_id_none_has_no_effect(self) -> None:
+        a = _issue(id="a", priority=1)
+        b = _issue(id="b", priority=2)
+        assert select_next_issue([a, b], priority_id=None) is a
+
+
+class TestGetIssueParent:
+    def test_returns_parent_id(self) -> None:
+        import json
+        data = [{"id": "child-1", "title": "Child", "parent": "parent-1"}]
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json.dumps(data)
+            assert get_issue_parent("child-1") == "parent-1"
+
+    def test_returns_none_when_no_parent(self) -> None:
+        import json
+        data = [{"id": "top-1", "title": "Top level"}]
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json.dumps(data)
+            assert get_issue_parent("top-1") is None
+
+    def test_returns_none_on_failure(self) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            assert get_issue_parent("x") is None
+
+    def test_returns_none_on_oserror(self) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run", side_effect=OSError("no bd")):
+            assert get_issue_parent("x") is None
+
+    def test_passes_cwd(self, tmp_path) -> None:
+        import json
+        data = [{"id": "c", "parent": "p"}]
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json.dumps(data)
+            get_issue_parent("c", cwd=tmp_path)
+            assert mock_run.call_args[1]["cwd"] == tmp_path
+
+
+class TestGetChildrenAllClosed:
+    def test_all_closed_returns_true(self) -> None:
+        import json
+        data = [
+            {"id": "c1", "status": "closed"},
+            {"id": "c2", "status": "closed"},
+        ]
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json.dumps(data)
+            assert get_children_all_closed("parent-1") is True
+
+    def test_some_open_returns_false(self) -> None:
+        import json
+        data = [
+            {"id": "c1", "status": "closed"},
+            {"id": "c2", "status": "open"},
+        ]
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json.dumps(data)
+            assert get_children_all_closed("parent-1") is False
+
+    def test_no_children_returns_none(self) -> None:
+        import json
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "[]"
+            assert get_children_all_closed("parent-1") is None
+
+    def test_failure_returns_none(self) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            assert get_children_all_closed("parent-1") is None
+
+    def test_oserror_returns_none(self) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run", side_effect=OSError("no bd")):
+            assert get_children_all_closed("parent-1") is None

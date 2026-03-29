@@ -1417,3 +1417,192 @@ def test_resume_records_events(repo_root: Path, state_dir: Path) -> None:
     event_types = [e["event_type"] for e in events]
     assert "resume_attempted" in event_types
     assert "resume_succeeded" in event_types
+
+
+# --- parent promotion tests ---
+
+
+def test_parent_promoted_after_last_child_closes(repo_root: Path, state_dir: Path) -> None:
+    """When a child issue is closed and all siblings are closed, the parent is promoted."""
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    runner = StubAmpRunner.completed()
+
+    child = _make_issue("child-1", "Child issue")
+    parent = _make_issue("parent-1", "Parent issue")
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return QueueResult(issues=[child])
+        if call_count == 2:
+            # Parent should now appear in the queue after promotion
+            return QueueResult(issues=[parent])
+        return QueueResult()
+
+    mock_merge = MagicMock()
+    mock_merge.return_value = MagicMock(success=True, stage="complete")
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "x"
+    mock_wt_info.branch_name = "amp/x"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("amp_orchestrator.scheduler.get_issue_parent", return_value="parent-1"),
+        patch("amp_orchestrator.scheduler.get_children_all_closed", return_value=True),
+    ):
+        run_loop(repo_root, state_dir, config, runner)
+
+    state = StateStore(state_dir).load()
+    # Both child and parent should have been processed
+    assert len(state.run_history) == 2
+    assert state.run_history[0]["issue_id"] == "child-1"
+    assert state.run_history[1]["issue_id"] == "parent-1"
+
+    events = EventLog(state_dir).all()
+    event_types = [e["event_type"] for e in events]
+    assert "parent_promoted" in event_types
+    promoted_event = next(e for e in events if e["event_type"] == "parent_promoted")
+    assert promoted_event["data"]["parent_id"] == "parent-1"
+    assert promoted_event["data"]["triggered_by"] == "child-1"
+
+
+def test_no_promotion_when_siblings_still_open(repo_root: Path, state_dir: Path) -> None:
+    """No promotion when not all children are closed."""
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    runner = StubAmpRunner.completed()
+    issue = _make_issue()
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return QueueResult(issues=[issue])
+        return QueueResult()
+
+    mock_merge = MagicMock()
+    mock_merge.return_value = MagicMock(success=True, stage="complete")
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
+    mock_wt_info.branch_name = "amp/test-1"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("amp_orchestrator.scheduler.get_issue_parent", return_value="parent-1"),
+        patch("amp_orchestrator.scheduler.get_children_all_closed", return_value=False),
+    ):
+        run_loop(repo_root, state_dir, config, runner)
+
+    state = StateStore(state_dir).load()
+    assert state.promoted_parent is None
+
+    events = EventLog(state_dir).all()
+    event_types = [e["event_type"] for e in events]
+    assert "parent_promoted" not in event_types
+
+
+def test_no_promotion_when_no_parent(repo_root: Path, state_dir: Path) -> None:
+    """No promotion when the issue has no parent."""
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    runner = StubAmpRunner.completed()
+    issue = _make_issue()
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return QueueResult(issues=[issue])
+        return QueueResult()
+
+    mock_merge = MagicMock()
+    mock_merge.return_value = MagicMock(success=True, stage="complete")
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
+    mock_wt_info.branch_name = "amp/test-1"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("amp_orchestrator.scheduler.get_issue_parent", return_value=None),
+    ):
+        run_loop(repo_root, state_dir, config, runner)
+
+    state = StateStore(state_dir).load()
+    assert state.promoted_parent is None
+
+    events = EventLog(state_dir).all()
+    event_types = [e["event_type"] for e in events]
+    assert "parent_promoted" not in event_types
+
+
+def test_promotion_clears_parent_failure_record(repo_root: Path, state_dir: Path) -> None:
+    """When a parent is promoted, any existing failure record is cleared."""
+    store = StateStore(state_dir)
+    state = OrchestratorState(
+        mode=OrchestratorMode.running,
+        issue_failures={"parent-1": {"category": "issue_needs_rework", "action": "hold_until_backlog_changes",
+                                      "stage": "amp", "summary": "old failure", "timestamp": "t", "attempts": 1}},
+    )
+    store.save(state)
+
+    config = OrchestratorConfig()
+    runner = StubAmpRunner.completed()
+
+    child = _make_issue("child-1", "Child issue")
+    parent = _make_issue("parent-1", "Parent issue")
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return QueueResult(issues=[child])
+        if call_count == 2:
+            return QueueResult(issues=[parent])
+        return QueueResult()
+
+    mock_merge = MagicMock()
+    mock_merge.return_value = MagicMock(success=True, stage="complete")
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "x"
+    mock_wt_info.branch_name = "amp/x"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("amp_orchestrator.scheduler.get_issue_parent", return_value="parent-1"),
+        patch("amp_orchestrator.scheduler.get_children_all_closed", return_value=True),
+    ):
+        run_loop(repo_root, state_dir, config, runner)
+
+    state = StateStore(state_dir).load()
+    # parent-1 should not be in failures (cleared by promotion, then processed)
+    assert "parent-1" not in state.issue_failures
