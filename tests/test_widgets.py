@@ -16,6 +16,8 @@ from amp_orchestrator.tui.widgets import (
     MODE_STYLES,
     NO_PROJECT_PLACEHOLDER,
     _ACTION_ENABLED,
+    _CATEGORY_ICONS,
+    _RESULT_ICONS,
     _event_severity,
     _format_run_timestamp,
     _human_message,
@@ -369,3 +371,38 @@ def test_format_run_timestamp_invalid_returns_original() -> None:
 def test_format_run_timestamp_no_timezone_suffix() -> None:
     result = _format_run_timestamp("2024-06-01T14:30:00+00:00")
     assert result == "2024-06-01 14:30"
+
+
+# --- Accessibility: redundant non-color cues ---
+
+
+def test_mode_styles_have_text_prefix() -> None:
+    """Every mode badge must include a text prefix (RUN/PAUSE/ERR/IDLE/STOPPING)."""
+    for mode, (_color, label) in MODE_STYLES.items():
+        # Label should start with an icon character followed by a space and text
+        parts = label.split(None, 1)
+        assert len(parts) >= 2, f"MODE_STYLES[{mode}] label '{label}' lacks icon+text"
+
+
+def test_result_icons_cover_common_results() -> None:
+    for key in ("completed", "failed", "error"):
+        assert key in _RESULT_ICONS, f"_RESULT_ICONS missing '{key}'"
+        assert len(_RESULT_ICONS[key]) >= 1
+
+
+def test_category_icons_cover_all_categories() -> None:
+    from amp_orchestrator.state import FailureCategory
+
+    for cat in FailureCategory:
+        assert cat.value in _CATEGORY_ICONS, f"_CATEGORY_ICONS missing '{cat.value}'"
+
+
+def test_mode_styles_use_high_contrast_colors() -> None:
+    """Ensure we don't use dim/low-contrast color names like plain 'yellow' or 'orange1'."""
+    low_contrast = {"yellow", "orange1", "dark_orange", "grey", "dim"}
+    for mode, (color, _label) in MODE_STYLES.items():
+        # Extract the base color name (strip 'bold ', 'italic ', etc.)
+        base = color.replace("bold ", "").replace("italic ", "").strip()
+        assert base not in low_contrast, (
+            f"MODE_STYLES[{mode}] uses low-contrast color '{color}'"
+        )

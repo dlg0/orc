@@ -14,11 +14,11 @@ from amp_orchestrator.state import OrchestratorMode
 from amp_orchestrator.tui.snapshot import DashboardSnapshot
 
 MODE_STYLES: dict[OrchestratorMode, tuple[str, str]] = {
-    OrchestratorMode.running: ("green", "● RUNNING"),
-    OrchestratorMode.paused: ("bold yellow", "⏸ PAUSED"),
-    OrchestratorMode.pause_requested: ("yellow", "⏸ PAUSE REQUESTED"),
-    OrchestratorMode.stopping: ("bold orange1", "■ STOPPING"),
-    OrchestratorMode.error: ("bold red", "✖ ERROR"),
+    OrchestratorMode.running: ("bold green", "● RUN"),
+    OrchestratorMode.paused: ("bold bright_yellow", "⏸ PAUSE"),
+    OrchestratorMode.pause_requested: ("bold bright_yellow", "⏸ PAUSE REQUESTED"),
+    OrchestratorMode.stopping: ("bold bright_red", "■ STOPPING"),
+    OrchestratorMode.error: ("bold red", "✖ ERR"),
     OrchestratorMode.idle: ("bold white", "○ IDLE"),
 }
 
@@ -113,21 +113,21 @@ class NotConnectedBanner(Static):
 
 
 EVENT_COLORS: dict[str, str] = {
-    "error": "red",
+    "error": "bold red",
     "issue_selected": "cyan",
-    "amp_started": "blue",
+    "amp_started": "dodger_blue2",
     "amp_finished": "green",
-    "merge_attempt": "magenta",
+    "merge_attempt": "orchid1",
     "issue_closed": "green bold",
-    "pause_requested": "yellow",
-    "stop_requested": "yellow",
+    "pause_requested": "bright_yellow",
+    "stop_requested": "bright_yellow",
     "state_changed": "white",
-    "verification_run": "blue",
-    "evaluation_started": "blue",
+    "verification_run": "dodger_blue2",
+    "evaluation_started": "dodger_blue2",
     "evaluation_finished": "green",
-    "issue_needs_rework": "bold yellow",
-    "conflict_detected": "red",
-    "conflict_resolution_started": "yellow",
+    "issue_needs_rework": "bold bright_yellow",
+    "conflict_detected": "bold red",
+    "conflict_resolution_started": "bright_yellow",
     "conflict_resolution_finished": "green",
 }
 
@@ -150,8 +150,8 @@ def _event_severity(event_type: str) -> str:
 
 _SEVERITY_STYLE: dict[str, str] = {
     "ERR": "bold red",
-    "WARN": "yellow",
-    "INFO": "white",
+    "WARN": "bold bright_yellow",
+    "INFO": "bright_white",
 }
 
 
@@ -338,7 +338,7 @@ class StatusPanel(Static):
 
     def show_transitional(self, text: str) -> None:
         """Show a transitional status like 'Starting…' or 'Pausing…'."""
-        self.query_one("#mode-badge", Label).update(f"[yellow]{text}[/]")
+        self.query_one("#mode-badge", Label).update(f"[bright_yellow]{text}[/]")
 
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         color, text = MODE_STYLES.get(
@@ -368,9 +368,9 @@ class StatusPanel(Static):
         if err_count or warn_count:
             parts: list[str] = []
             if err_count:
-                parts.append(f"[bold red]{err_count} error(s)[/]")
+                parts.append(f"[bold red]✖ {err_count} error(s)[/]")
             if warn_count:
-                parts.append(f"[yellow]{warn_count} warning(s)[/]")
+                parts.append(f"[bold bright_yellow]⚠ {warn_count} warning(s)[/]")
             sev_label.update("Events: " + ", ".join(parts))
         else:
             sev_label.update("[italic]Events: —[/]")
@@ -383,19 +383,19 @@ class StatusPanel(Static):
                 cat = info.get("category", "unknown") if isinstance(info, dict) else "unknown"
                 by_cat[cat] = by_cat.get(cat, 0) + 1
             parts = ", ".join(f"{cat}: {n}" for cat, n in sorted(by_cat.items()))
-            fc.update(f"[bold red]Held: {len(snap.state.issue_failures)} ({parts})[/]")
+            fc.update(f"[bold red]⚠ Held: {len(snap.state.issue_failures)} ({parts})[/]")
         else:
             fc.update("[italic]Held: —[/]")
 
         lc = self.query_one("#last-completed", Label)
         if snap.state.last_completed_issue:
-            lc.update(f"[green]Last completed: {snap.state.last_completed_issue}[/]")
+            lc.update(f"[green]✔ Last completed: {snap.state.last_completed_issue}[/]")
         else:
             lc.update("[italic]Last completed: —[/]")
 
         le = self.query_one("#last-error", Label)
         if snap.state.last_error:
-            le.update(f"[red]Last error: {snap.state.last_error}[/]")
+            le.update(f"[bold red]✖ Last error: {snap.state.last_error}[/]")
         else:
             le.update("[italic]Last error: —[/]")
 
@@ -424,9 +424,27 @@ def _format_elapsed(started_at: str) -> str:
 
 _STAGE_STYLES: dict[str, tuple[str, str]] = {
     "claiming": ("cyan", "⏳ Claiming"),
-    "running agent": ("blue", "🤖 Running Agent"),
-    "evaluating": ("magenta", "🔍 Evaluating"),
+    "running agent": ("dodger_blue2", "🤖 Running Agent"),
+    "evaluating": ("orchid1", "🔍 Evaluating"),
     "merging": ("green", "🔀 Merging"),
+}
+
+# Result icons for the run history table — provide non-color cues.
+_RESULT_ICONS: dict[str, str] = {
+    "completed": "✔",
+    "failed": "✖",
+    "error": "✖",
+    "skipped": "⊘",
+    "timeout": "⏱",
+}
+
+# Failure-category icons for richer labelling in the history table.
+_CATEGORY_ICONS: dict[str, str] = {
+    "transient_external": "↻",
+    "stale_or_conflicted": "⚡",
+    "issue_needs_rework": "✎",
+    "blocked_by_dependency": "⛔",
+    "fatal_run_error": "☠",
 }
 
 
@@ -473,7 +491,7 @@ class ActiveIssuePanel(Static):
             if snap.state.active_stage:
                 color, label = _STAGE_STYLES.get(
                     snap.state.active_stage,
-                    ("yellow", snap.state.active_stage),
+                    ("bright_yellow", snap.state.active_stage),
                 )
                 elapsed = ""
                 if snap.state.active_started_at:
@@ -835,21 +853,23 @@ class HistoryTable(Static):
                 ts = _format_run_timestamp(ts)
             issue_id = run.get("issue_id", "")
             raw_result = run.get("result", "")
-            result_colors = {"completed": "green", "failed": "red", "error": "red"}
+            result_colors = {"completed": "green", "failed": "bold red", "error": "bold red"}
             rc = result_colors.get(raw_result, "white")
+            icon = _RESULT_ICONS.get(raw_result, "·")
             # Check if this issue has a failure category for richer coloring
             failure_info = snap.state.issue_failures.get(issue_id)
             if failure_info and isinstance(failure_info, dict):
                 cat = failure_info.get("category", "")
                 category_colors = {
-                    "transient_external": "yellow",
-                    "stale_or_conflicted": "bold yellow",
-                    "issue_needs_rework": "red",
-                    "blocked_by_dependency": "magenta",
+                    "transient_external": "bright_yellow",
+                    "stale_or_conflicted": "bold bright_yellow",
+                    "issue_needs_rework": "bold red",
+                    "blocked_by_dependency": "orchid1",
                     "fatal_run_error": "bold red",
                 }
                 rc = category_colors.get(cat, rc)
-            result = f"[{rc}]{raw_result}[/]"
+                icon = _CATEGORY_ICONS.get(cat, icon)
+            result = f"[{rc}]{icon} {raw_result}[/]"
             branch = run.get("branch", "")
             summary = run.get("summary", "")
             table.add_row(ts, issue_id, result, branch, summary)
