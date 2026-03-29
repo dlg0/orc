@@ -91,6 +91,10 @@ class StatusPanel(Static):
         self.query_one("#last-completed", Label).update("")
         self.query_one("#last-error", Label).update("")
 
+    def show_transitional(self, text: str) -> None:
+        """Show a transitional status like 'Starting…' or 'Pausing…'."""
+        self.query_one("#mode-badge", Label).update(f"[yellow]{text}[/]")
+
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         color, text = MODE_STYLES.get(
             snap.state.mode, ("grey", snap.state.mode.value)
@@ -196,7 +200,7 @@ class ConfigPanel(Static):
 
 
 _ACTION_ENABLED: dict[str, set[OrchestratorMode]] = {
-    "start": {OrchestratorMode.idle, OrchestratorMode.paused},
+    "start": {OrchestratorMode.idle},
     "pause": {OrchestratorMode.running},
     "resume": {OrchestratorMode.paused},
     "stop": {OrchestratorMode.running, OrchestratorMode.pause_requested},
@@ -237,6 +241,11 @@ class ControlsPanel(Static):
             btn = self.query_one(btn_id, Button)
             btn.disabled = True
             btn.tooltip = "No project detected"
+
+    def disable_all(self) -> None:
+        """Disable all control buttons (used during in-flight actions)."""
+        for btn_id in ("#btn-start", "#btn-pause", "#btn-resume", "#btn-stop"):
+            self.query_one(btn_id, Button).disabled = True
 
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         mode = snap.state.mode

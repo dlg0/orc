@@ -214,10 +214,26 @@ class OrchestratorApp(App):
         if confirmed:
             self._run_control_action("stop")
 
+    _ACTION_LABELS: dict[str, tuple[str, str]] = {
+        "start": ("Starting\u2026", "Orchestrator started"),
+        "pause": ("Pausing\u2026", "Orchestrator paused"),
+        "resume": ("Resuming\u2026", "Orchestrator resumed"),
+        "stop": ("Stopping\u2026", "Orchestrator stopped"),
+    }
+
+    def _show_transitional_feedback(self, action: str) -> None:
+        """Immediately disable controls and show transitional status."""
+        label = self._ACTION_LABELS.get(action, (f"{action.capitalize()}\u2026",))[0]
+        self.query_one(StatusPanel).show_transitional(label)
+        self.query_one(ControlsPanel).disable_all()
+
     @work(thread=True)
     def _run_control_action(self, action: str) -> None:
         """Run a control action in a background thread."""
         import click
+
+        self.call_from_thread(self._show_transitional_feedback, action)
+        success_msg = self._ACTION_LABELS.get(action, ("", f"{action.capitalize()} succeeded"))[1]
 
         try:
             if action in ("start", "resume"):
@@ -232,7 +248,7 @@ class OrchestratorApp(App):
                 )
                 self.call_from_thread(
                     self.notify,
-                    f"Orchestrator {action}ed (pid {proc.pid})",
+                    f"{success_msg} (pid {proc.pid})",
                 )
             else:
                 from amp_orchestrator.control import (
@@ -245,7 +261,7 @@ class OrchestratorApp(App):
                 elif action == "stop":
                     stop_orchestrator(self._state_dir)  # type: ignore[arg-type]
                 self.call_from_thread(
-                    self.notify, f"{action.capitalize()} succeeded"
+                    self.notify, success_msg
                 )
         except click.ClickException as exc:
             self.call_from_thread(
