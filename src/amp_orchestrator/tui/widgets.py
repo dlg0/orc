@@ -59,8 +59,62 @@ EVENT_COLORS: dict[str, str] = {
 }
 
 
+class ErrorAlert(Static):
+    """Persistent, high-salience error alert shown when last_error exists."""
+
+    DEFAULT_CSS = """
+    ErrorAlert {
+        height: auto;
+        display: none;
+        background: #4a0000;
+        color: white;
+        padding: 0 1;
+        margin: 1 0 0 0;
+        text-style: bold;
+    }
+    ErrorAlert.visible {
+        display: block;
+    }
+    """
+
+    can_focus = True
+
+    BINDINGS = [
+        Binding("enter", "inspect_error", "Inspect Error", show=True),
+        Binding("i", "inspect_error", "Inspect Error", show=False),
+    ]
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._full_error: str = ""
+
+    def compose(self) -> ComposeResult:
+        yield Label("", id="error-alert-text")
+
+    def set_error(self, error: str) -> None:
+        self._full_error = error
+        if error:
+            truncated = error if len(error) <= 120 else error[:117] + "…"
+            self.query_one("#error-alert-text", Label).update(
+                f"[bold red on #4a0000]⚠ ERROR: {truncated}[/]  [dim](Enter/i to inspect)[/]"
+            )
+            self.add_class("visible")
+        else:
+            self.query_one("#error-alert-text", Label).update("")
+            self.remove_class("visible")
+
+    def action_inspect_error(self) -> None:
+        if not self._full_error:
+            return
+        from amp_orchestrator.tui.modals import InspectModal
+
+        self.app.push_screen(
+            InspectModal(title="Error Details", body=self._full_error)
+        )
+
+
 class StatusPanel(Static):
-    """Status panel: mode badge, queue count, last completed/error."""
+    """Status panel: mode badge, queue count, last completed/error, error alert."""
 
     DEFAULT_CSS = """
     StatusPanel {
@@ -80,16 +134,20 @@ class StatusPanel(Static):
         yield Label("Status", classes="panel-title")
         yield Label("[grey]○ IDLE[/]", id="mode-badge")
         yield Label("Queue: 0 issue(s)", id="queue-count")
+        yield Label("", id="failed-count")
         yield Label("", id="last-completed")
         yield Label("", id="last-error")
+        yield ErrorAlert()
 
     def show_no_project(self) -> None:
         self.query_one("#mode-badge", Label).update(
             "[bold red]⚠ NOT CONNECTED[/]"
         )
         self.query_one("#queue-count", Label).update(NO_PROJECT_PLACEHOLDER)
+        self.query_one("#failed-count", Label).update("")
         self.query_one("#last-completed", Label).update("")
         self.query_one("#last-error", Label).update("")
+        self.query_one(ErrorAlert).set_error("")
 
     def show_transitional(self, text: str) -> None:
         """Show a transitional status like 'Starting…' or 'Pausing…'."""
@@ -111,6 +169,16 @@ class StatusPanel(Static):
             f"Queue: {len(snap.ready_issues)} issue(s)"
         )
 
+        # Failed run count
+        failed_count = sum(
+            1 for r in snap.state.run_history if r.get("result") in ("failed", "error")
+        )
+        fc = self.query_one("#failed-count", Label)
+        if failed_count:
+            fc.update(f"[bold red]Failed runs: {failed_count}[/]")
+        else:
+            fc.update("")
+
         lc = self.query_one("#last-completed", Label)
         if snap.state.last_completed_issue:
             lc.update(f"[green]Last completed: {snap.state.last_completed_issue}[/]")
@@ -122,6 +190,9 @@ class StatusPanel(Static):
             le.update(f"[red]Last error: {snap.state.last_error}[/]")
         else:
             le.update("")
+
+        # Persistent error alert
+        self.query_one(ErrorAlert).set_error(snap.state.last_error or "")
 
 
 class ActiveIssuePanel(Static):
