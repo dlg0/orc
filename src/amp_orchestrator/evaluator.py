@@ -120,6 +120,7 @@ class AmpEvaluatorRunner:
             "--dangerously-allow-all",
             "--no-notifications",
             "--no-color",
+            "--stream-json",
             "--mode",
             self._mode,
         ]
@@ -236,24 +237,63 @@ class AmpEvaluatorRunner:
         return None
 
     def _parse_output(self, proc: subprocess.CompletedProcess[str]) -> EvaluationResult:
+        stdout = proc.stdout or ""
+
+        # Parse stream JSON messages
+        result_msg: dict | None = None
+        assistant_texts: list[str] = []
+
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            msg_type = msg.get("type")
+
+            if msg_type == "result":
+                result_msg = msg
+            elif msg_type == "assistant":
+                content = msg.get("message", {}).get("content", [])
+                for block in content:
+                    if block.get("type") == "text":
+                        assistant_texts.append(block.get("text", ""))
+
+        # Extract context window usage from result message
+        context_usage: float | None = None
+        if result_msg and "usage" in result_msg:
+            usage = result_msg["usage"]
+            input_tokens = usage.get("input_tokens", 0)
+            max_tokens = usage.get("max_tokens", 0)
+            if max_tokens > 0:
+                context_usage = round(input_tokens / max_tokens * 100, 1)
+
+        # Check for error
+        if result_msg and result_msg.get("is_error"):
+            error_text = result_msg.get("error", "Unknown error")
+            return EvaluationResult.fail(error_text)
+
         if proc.returncode != 0:
             return EvaluationResult.fail(
                 f"Evaluator exited with code {proc.returncode}",
             )
 
-        stdout = proc.stdout or ""
+        # Try to extract verdict JSON from assistant text
+        combined_text = "\n".join(assistant_texts)
 
-        json_block = self._extract_json_block(stdout)
+        json_block = self._extract_json_block(combined_text)
         if json_block is not None:
             result = self._json_to_result(json_block)
         else:
             result = None
-            # Try bare JSON object on a single line
-            for line in reversed(stdout.splitlines()):
-                line = line.strip()
-                if line.startswith("{") and line.endswith("}"):
+            for text_line in reversed(combined_text.splitlines()):
+                text_line = text_line.strip()
+                if text_line.startswith("{") and text_line.endswith("}"):
                     try:
-                        data = json.loads(line)
+                        data = json.loads(text_line)
                         if "verdict" in data:
                             result = self._json_to_result(data)
                             break
@@ -265,10 +305,9 @@ class AmpEvaluatorRunner:
                 "Evaluator produced no structured result",
             )
 
-        # Best-effort context window usage extraction
-        combined = stdout + "\n" + (proc.stderr or "")
-        if result.context_window_usage_pct is None:
-            result.context_window_usage_pct = self._parse_context_usage(combined)
+        # Override context_window_usage_pct from stream JSON (authoritative)
+        if context_usage is not None:
+            result.context_window_usage_pct = context_usage
 
         return result
 

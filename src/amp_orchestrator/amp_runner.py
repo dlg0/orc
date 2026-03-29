@@ -115,6 +115,7 @@ class RealAmpRunner:
             amp_path,
             "-x",
             prompt,
+            "--stream-json",
             "--dangerously-allow-all",
             "--no-notifications",
             "--no-color",
@@ -133,7 +134,7 @@ class RealAmpRunner:
                 text=True,
                 timeout=self._timeout,
             )
-        except subprocess.TimeoutExpired as exc:
+        except subprocess.TimeoutExpired:
             logger.error("Amp timed out after %d seconds", self._timeout)
             return AmpResult(
                 result=ResultType.failed,
@@ -146,7 +147,7 @@ class RealAmpRunner:
         if proc.stderr:
             logger.debug("stderr:\n%s", proc.stderr)
 
-        return self._parse_output(proc)
+        return self._parse_stream_json(proc, context.worktree_path)
 
     # ------------------------------------------------------------------
     # Context window usage parsing
@@ -211,31 +212,78 @@ class RealAmpRunner:
         return "\n".join(parts)
 
     # ------------------------------------------------------------------
-    # Output parsing
+    # Stream JSON output parsing
     # ------------------------------------------------------------------
 
-    def _parse_output(self, proc: subprocess.CompletedProcess[str]) -> AmpResult:
-        # Fail fast if the process exited with an error
+    def _parse_stream_json(
+        self, proc: subprocess.CompletedProcess[str], worktree_path: Path,
+    ) -> AmpResult:
+        stdout = proc.stdout or ""
+
+        # Parse all stream JSON messages
+        result_msg: dict | None = None
+        assistant_texts: list[str] = []
+
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            msg_type = msg.get("type")
+
+            if msg_type == "result":
+                result_msg = msg
+            elif msg_type == "assistant":
+                # Extract text content blocks from assistant messages
+                content = msg.get("message", {}).get("content", [])
+                for block in content:
+                    if block.get("type") == "text":
+                        assistant_texts.append(block.get("text", ""))
+
+        # Extract context window usage from the result message's usage field
+        context_usage: float | None = None
+        if result_msg and "usage" in result_msg:
+            usage = result_msg["usage"]
+            input_tokens = usage.get("input_tokens", 0)
+            max_tokens = usage.get("max_tokens", 0)
+            if max_tokens > 0:
+                context_usage = round(input_tokens / max_tokens * 100, 1)
+
+        # Check for error in the result message
+        if result_msg and result_msg.get("is_error"):
+            error_text = result_msg.get("error", "Unknown error")
+            return AmpResult(
+                result=ResultType.failed,
+                summary=error_text,
+                context_window_usage_pct=context_usage,
+            )
+
+        # If no result message found and process failed, treat as error
         if proc.returncode != 0:
             return AmpResult(
                 result=ResultType.failed,
                 summary=f"Amp exited with code {proc.returncode}",
+                context_window_usage_pct=context_usage,
             )
 
-        stdout = proc.stdout or ""
+        # Try to extract our custom orchestrator JSON from assistant text
+        combined_text = "\n".join(assistant_texts)
 
-        # Try to extract a JSON result block from ```json fences
-        json_block = self._extract_json_block(stdout)
+        json_block = self._extract_json_block(combined_text)
         if json_block is not None:
             result = self._json_to_result(json_block)
         else:
             result = None
             # Try bare JSON object on a single line
-            for line in reversed(stdout.splitlines()):
-                line = line.strip()
-                if line.startswith("{") and line.endswith("}"):
+            for text_line in reversed(combined_text.splitlines()):
+                text_line = text_line.strip()
+                if text_line.startswith("{") and text_line.endswith("}"):
                     try:
-                        data = json.loads(line)
+                        data = json.loads(text_line)
                         if "result" in data:
                             result = self._json_to_result(data)
                             break
@@ -244,12 +292,24 @@ class RealAmpRunner:
 
         if result is None:
             # Heuristic fallback
-            result = self._heuristic_parse(proc)
+            result = self._heuristic_parse(combined_text)
 
-        # Best-effort context window usage extraction
-        combined = stdout + "\n" + (proc.stderr or "")
-        if result.context_window_usage_pct is None:
-            result.context_window_usage_pct = self._parse_context_usage(combined)
+        # Override context_window_usage_pct from stream JSON usage (authoritative source)
+        if context_usage is not None:
+            result.context_window_usage_pct = context_usage
+
+        # If heuristic said not merge_ready, check for actual commits
+        if not result.merge_ready and result.result == ResultType.completed:
+            commit_info = self._detect_commits(worktree_path)
+            if commit_info is not None:
+                result.merge_ready = True
+                result.changed_paths = commit_info["changed_paths"]
+                if result.summary == "Amp completed (no structured result found)":
+                    result.summary = "Amp completed with commits (no structured result found)"
+
+        # Use result message summary if we have one and no better summary
+        if result_msg and not result.summary:
+            result.summary = result_msg.get("result", "") or result_msg.get("error", "")
 
         return result
 
@@ -285,15 +345,8 @@ class RealAmpRunner:
         )
 
     @staticmethod
-    def _heuristic_parse(proc: subprocess.CompletedProcess[str]) -> AmpResult:
-        combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
-        lower = combined.lower()
-
-        if proc.returncode != 0:
-            return AmpResult(
-                result=ResultType.failed,
-                summary=f"Amp exited with code {proc.returncode}",
-            )
+    def _heuristic_parse(combined_text: str) -> AmpResult:
+        lower = combined_text.lower()
 
         if "decomposed" in lower or "sub-issue" in lower:
             return AmpResult(
@@ -307,9 +360,47 @@ class RealAmpRunner:
                 summary="Amp appears blocked (heuristic)",
             )
 
-        # Assume completed if exit code was 0
+        # Assume completed if we got here (exit code was already checked)
         return AmpResult(
             result=ResultType.completed,
-            summary="Amp exited successfully (no structured result found)",
+            summary="Amp completed (no structured result found)",
             merge_ready=False,
         )
+
+    @staticmethod
+    def _detect_commits(worktree_path: Path) -> dict | None:
+        """Check if the worktree branch has new commits not on any remote branch."""
+        try:
+            # Find commits on HEAD not reachable from any remote-tracking branch
+            log_proc = subprocess.run(
+                ["git", "log", "--oneline", "HEAD", "--not", "--remotes"],
+                cwd=str(worktree_path),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if log_proc.returncode != 0 or not log_proc.stdout.strip():
+                return None
+
+            # Count new commits
+            new_commits = [l for l in log_proc.stdout.strip().splitlines() if l.strip()]
+            if not new_commits:
+                return None
+
+            # Get changed files across all new commits
+            n = len(new_commits)
+            diff_proc = subprocess.run(
+                ["git", "diff", "--name-only", f"HEAD~{n}..HEAD"],
+                cwd=str(worktree_path),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            changed_paths = [
+                p.strip()
+                for p in diff_proc.stdout.splitlines()
+                if p.strip()
+            ]
+            return {"changed_paths": changed_paths}
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None

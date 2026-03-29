@@ -244,6 +244,49 @@ def _make_proc(
     )
 
 
+def _stream_assistant(text: str) -> str:
+    """Build a stream-JSON assistant line containing the given text."""
+    msg = {
+        "type": "assistant",
+        "message": {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": text}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 100, "output_tokens": 50},
+        },
+    }
+    return json.dumps(msg)
+
+
+def _stream_result(
+    *,
+    is_error: bool = False,
+    error: str | None = None,
+    input_tokens: int = 5000,
+    max_tokens: int = 200000,
+) -> str:
+    """Build a stream-JSON result line."""
+    msg: dict = {
+        "type": "result",
+        "subtype": "error_during_execution" if is_error else "success",
+        "duration_ms": 1000,
+        "is_error": is_error,
+        "num_turns": 1,
+        "session_id": "T-test",
+        "usage": {
+            "input_tokens": input_tokens,
+            "max_tokens": max_tokens,
+            "output_tokens": 200,
+        },
+    }
+    if is_error and error:
+        msg["error"] = error
+    if not is_error:
+        msg["result"] = "ok"
+    return json.dumps(msg)
+
+
 def test_parse_output_nonzero_exit_code() -> None:
     runner = AmpEvaluatorRunner()
     proc = _make_proc(returncode=1)
@@ -254,8 +297,12 @@ def test_parse_output_nonzero_exit_code() -> None:
 
 def test_parse_output_valid_json_block() -> None:
     runner = AmpEvaluatorRunner()
+    assistant_text = '```json\n{"verdict": "pass", "summary": "all good"}\n```'
     stdout = (
-        'Thinking...\n```json\n{"verdict": "pass", "summary": "all good"}\n```\ndone\n'
+        _stream_assistant(assistant_text)
+        + "\n"
+        + _stream_result()
+        + "\n"
     )
     result = runner._parse_output(_make_proc(stdout=stdout))
     assert result.passed is True
@@ -264,7 +311,13 @@ def test_parse_output_valid_json_block() -> None:
 
 def test_parse_output_bare_json_line() -> None:
     runner = AmpEvaluatorRunner()
-    stdout = 'Some log output\n{"verdict": "pass", "summary": "bare json"}\n'
+    assistant_text = '{"verdict": "pass", "summary": "bare json"}'
+    stdout = (
+        _stream_assistant(assistant_text)
+        + "\n"
+        + _stream_result()
+        + "\n"
+    )
     result = runner._parse_output(_make_proc(stdout=stdout))
     assert result.passed is True
     assert result.summary == "bare json"
@@ -272,6 +325,34 @@ def test_parse_output_bare_json_line() -> None:
 
 def test_parse_output_no_structured_output() -> None:
     runner = AmpEvaluatorRunner()
-    result = runner._parse_output(_make_proc(stdout="just some text\n"))
+    stdout = (
+        _stream_assistant("just some text")
+        + "\n"
+        + _stream_result()
+        + "\n"
+    )
+    result = runner._parse_output(_make_proc(stdout=stdout))
     assert result.passed is False
     assert "no structured result" in result.summary.lower()
+
+
+def test_parse_output_stream_error() -> None:
+    runner = AmpEvaluatorRunner()
+    stdout = _stream_result(is_error=True, error="context window exhausted") + "\n"
+    result = runner._parse_output(_make_proc(stdout=stdout))
+    assert result.passed is False
+    assert "context window exhausted" in result.summary
+
+
+def test_parse_output_context_usage_from_stream() -> None:
+    runner = AmpEvaluatorRunner()
+    assistant_text = '```json\n{"verdict": "pass", "summary": "ok"}\n```'
+    stdout = (
+        _stream_assistant(assistant_text)
+        + "\n"
+        + _stream_result(input_tokens=80000, max_tokens=200000)
+        + "\n"
+    )
+    result = runner._parse_output(_make_proc(stdout=stdout))
+    assert result.passed is True
+    assert result.context_window_usage_pct == 40.0
