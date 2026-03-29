@@ -17,6 +17,7 @@ from amp_orchestrator.tui.snapshot import (
     load_snapshot_fast,
 )
 from amp_orchestrator.tui.widgets import (
+    _ACTION_ENABLED,
     ActiveIssuePanel,
     ConfigPanel,
     ControlsPanel,
@@ -76,6 +77,7 @@ class OrchestratorApp(App):
         self._state_dir = state_dir
         self._config = OrchestratorConfig()
         self._pending_action: str | None = None
+        self._orch_mode: OrchestratorMode = OrchestratorMode.idle
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -176,6 +178,7 @@ class OrchestratorApp(App):
 
     def _apply_fast_snapshot(self, snap: DashboardSnapshot) -> None:
         """Update only state/events/history panels."""
+        self._orch_mode = snap.state.mode
         suppress = self._check_pending_action(snap)
         if not suppress:
             self.query_one(StatusPanel).update_snapshot(snap)
@@ -186,6 +189,7 @@ class OrchestratorApp(App):
 
     def _apply_snapshot(self, snap: DashboardSnapshot) -> None:
         """Update all panels."""
+        self._orch_mode = snap.state.mode
         suppress = self._check_pending_action(snap)
         if not suppress:
             self.query_one(StatusPanel).update_snapshot(snap)
@@ -197,6 +201,22 @@ class OrchestratorApp(App):
         self.query_one(HistoryTable).update_snapshot(snap)
 
     # -- Control actions -------------------------------------------------------
+
+    def _is_action_allowed(self, action: str) -> bool:
+        """Check if *action* is valid for the current mode.
+
+        Returns ``True`` when the action may proceed.  When it is not
+        allowed, a notification is shown and ``False`` is returned so the
+        caller can short-circuit.
+        """
+        allowed_modes = _ACTION_ENABLED.get(action)
+        if allowed_modes is None or self._orch_mode in allowed_modes:
+            return True
+        self.notify(
+            f"Cannot {action} while {self._orch_mode.value}",
+            severity="warning",
+        )
+        return False
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle control panel button clicks."""
@@ -214,11 +234,15 @@ class OrchestratorApp(App):
         if not self._repo_root or not self._state_dir:
             self.notify("No project detected", severity="error")
             return
+        if not self._is_action_allowed("start"):
+            return
         self._run_control_action("start")
 
     def action_pause(self) -> None:
         if not self._state_dir:
             self.notify("No project detected", severity="error")
+            return
+        if not self._is_action_allowed("pause"):
             return
         self._run_control_action("pause")
 
@@ -226,11 +250,15 @@ class OrchestratorApp(App):
         if not self._repo_root or not self._state_dir:
             self.notify("No project detected", severity="error")
             return
+        if not self._is_action_allowed("resume"):
+            return
         self._run_control_action("resume")
 
     def action_stop(self) -> None:
         if not self._state_dir:
             self.notify("No project detected", severity="error")
+            return
+        if not self._is_action_allowed("stop"):
             return
         from amp_orchestrator.tui.modals import ConfirmStopModal
 
