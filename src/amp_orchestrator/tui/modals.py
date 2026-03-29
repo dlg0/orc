@@ -70,10 +70,16 @@ class ConfirmStopModal(ModalScreen[bool]):
     #confirm-buttons Button {
         margin: 0 1;
     }
+    #confirm-yes:focus {
+        text-style: bold reverse;
+    }
     """
 
     BINDINGS = [
         ("escape", "cancel", "Cancel"),
+        ("enter", "confirm", "Confirm"),
+        ("y", "confirm", "Confirm"),
+        ("n", "cancel", "Cancel"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -84,8 +90,14 @@ class ConfirmStopModal(ModalScreen[bool]):
                 yield Button("Stop", variant="error", id="confirm-yes")
                 yield Button("Cancel", variant="default", id="confirm-no")
 
+    def on_mount(self) -> None:
+        self.query_one("#confirm-yes", Button).focus()
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "confirm-yes")
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
 
     def action_cancel(self) -> None:
         self.dismiss(False)
