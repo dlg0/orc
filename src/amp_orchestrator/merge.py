@@ -6,6 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from amp_orchestrator.events import EventLog, EventType
 from amp_orchestrator.worktree import WorktreeInfo
 
 
@@ -23,6 +24,7 @@ def verify_and_merge(
     verification_commands: list[str],
     auto_push: bool,
     issue_id: str,
+    state_dir: Path | None = None,
 ) -> MergeResult:
     """Verify a worktree branch and merge it into the base branch."""
     # Fetch
@@ -50,7 +52,10 @@ def verify_and_merge(
         return MergeResult(success=False, stage="rebase", error=str(e))
 
     # Verify
+    events = EventLog(state_dir) if state_dir else None
     for cmd in verification_commands:
+        if events:
+            events.record(EventType.verification_run, {"issue_id": issue_id, "command": cmd})
         try:
             subprocess.run(
                 cmd,
@@ -60,7 +65,11 @@ def verify_and_merge(
                 shell=True,
             )
         except subprocess.CalledProcessError as e:
+            if events:
+                events.record(EventType.verification_run, {"issue_id": issue_id, "command": cmd, "result": "fail"})
             return MergeResult(success=False, stage="verify", error=str(e))
+        if events:
+            events.record(EventType.verification_run, {"issue_id": issue_id, "command": cmd, "result": "pass"})
 
     # Checkout base branch
     subprocess.run(

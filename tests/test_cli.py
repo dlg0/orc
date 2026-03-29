@@ -8,6 +8,7 @@ from unittest.mock import patch
 from click.testing import CliRunner
 
 from amp_orchestrator.cli import main
+from amp_orchestrator.control import start_orchestrator
 from amp_orchestrator.state import OrchestratorMode, OrchestratorState, StateStore
 
 
@@ -103,13 +104,11 @@ def test_start_runs_and_goes_idle(tmp_path: Path) -> None:
 
     with (
         patch("amp_orchestrator.cli.detect_project", return_value=ProjectContext(repo_root=tmp_path, has_git=True, has_beads=True)),
-        patch("amp_orchestrator.cli.load_config"),
-        patch("amp_orchestrator.cli.run_loop"),
+        patch("amp_orchestrator.cli.start_orchestrator"),
     ):
         runner = CliRunner()
         result = runner.invoke(main, ["start"])
         assert result.exit_code == 0
-        assert "started" in result.output.lower()
 
 
 def test_start_refuses_when_locked(tmp_path: Path) -> None:

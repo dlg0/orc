@@ -46,6 +46,7 @@ VALID_TRANSITIONS: dict[OrchestratorMode, set[OrchestratorMode]] = {
 class OrchestratorState:
     mode: OrchestratorMode = OrchestratorMode.idle
     active_issue_id: str | None = None
+    active_issue_title: str | None = None
     active_branch: str | None = None
     active_worktree_path: str | None = None
     last_completed_issue: str | None = None
@@ -63,6 +64,9 @@ class StateStore:
             return OrchestratorState()
         raw = json.loads(self._state_file.read_text())
         raw["mode"] = OrchestratorMode(raw["mode"])
+        # Drop unknown keys and let missing fields use defaults (backward compat)
+        known = {f.name for f in OrchestratorState.__dataclass_fields__.values()}
+        raw = {k: v for k, v in raw.items() if k in known}
         return OrchestratorState(**raw)
 
     def save(self, state: OrchestratorState) -> None:

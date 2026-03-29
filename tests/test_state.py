@@ -61,3 +61,35 @@ def test_transition_saves_state(tmp_path) -> None:
     store.transition(state, OrchestratorMode.running)
     loaded = store.load()
     assert loaded.mode is OrchestratorMode.running
+
+
+def test_load_backward_compat_missing_fields(tmp_path) -> None:
+    """Old state.json files without active_issue_title still load fine."""
+    import json
+    state_file = tmp_path / "state.json"
+    state_file.write_text(json.dumps({
+        "mode": "running",
+        "active_issue_id": "X-1",
+        "active_branch": "amp/X-1",
+        "active_worktree_path": "/tmp/wt",
+        "last_completed_issue": None,
+        "last_error": None,
+        "run_history": [],
+    }))
+    store = StateStore(tmp_path)
+    state = store.load()
+    assert state.mode is OrchestratorMode.running
+    assert state.active_issue_id == "X-1"
+    assert state.active_issue_title is None
+
+
+def test_active_issue_title_round_trip(tmp_path) -> None:
+    store = StateStore(tmp_path)
+    state = OrchestratorState(
+        mode=OrchestratorMode.running,
+        active_issue_id="X-1",
+        active_issue_title="Fix the widget",
+    )
+    store.save(state)
+    loaded = store.load()
+    assert loaded.active_issue_title == "Fix the widget"

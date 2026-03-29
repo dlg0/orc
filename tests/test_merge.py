@@ -181,6 +181,78 @@ class TestBdCloseNotCalledOnMergeFailure:
         assert len(bd_calls) == 0
 
 
+class TestVerificationRunEvents:
+    @patch("amp_orchestrator.merge.subprocess.run")
+    def test_verification_run_events_emitted(self, mock_run: object, tmp_path: Path) -> None:
+        state_dir = tmp_path / ".amp-orchestrator"
+        state_dir.mkdir()
+
+        result = verify_and_merge(
+            worktree_info=WORKTREE_INFO,
+            repo_root=REPO_ROOT,
+            base_branch=BASE_BRANCH,
+            verification_commands=["make test", "make lint"],
+            auto_push=False,
+            issue_id=ISSUE_ID,
+            state_dir=state_dir,
+        )
+
+        assert result.success is True
+
+        from amp_orchestrator.events import EventLog
+        events = EventLog(state_dir).all()
+        vr_events = [e for e in events if e["event_type"] == "verification_run"]
+        # 2 commands → 2 "before" events + 2 "pass" events = 4 total
+        assert len(vr_events) == 4
+        assert vr_events[0]["data"]["command"] == "make test"
+        assert "result" not in vr_events[0]["data"]  # before-run event
+        assert vr_events[1]["data"]["command"] == "make test"
+        assert vr_events[1]["data"]["result"] == "pass"
+
+    @patch("amp_orchestrator.merge.subprocess.run")
+    def test_verification_run_fail_event(self, mock_run: object, tmp_path: Path) -> None:
+        state_dir = tmp_path / ".amp-orchestrator"
+        state_dir.mkdir()
+
+        def side_effect(*args: object, **kwargs: object) -> None:
+            if kwargs.get("shell"):
+                raise subprocess.CalledProcessError(1, args[0])
+
+        mock_run.side_effect = side_effect
+
+        result = verify_and_merge(
+            worktree_info=WORKTREE_INFO,
+            repo_root=REPO_ROOT,
+            base_branch=BASE_BRANCH,
+            verification_commands=["make test"],
+            auto_push=False,
+            issue_id=ISSUE_ID,
+            state_dir=state_dir,
+        )
+
+        assert result.success is False
+        assert result.stage == "verify"
+
+        from amp_orchestrator.events import EventLog
+        events = EventLog(state_dir).all()
+        vr_events = [e for e in events if e["event_type"] == "verification_run"]
+        assert len(vr_events) == 2  # before + fail
+        assert vr_events[1]["data"]["result"] == "fail"
+
+    @patch("amp_orchestrator.merge.subprocess.run")
+    def test_no_events_without_state_dir(self, mock_run: object) -> None:
+        """When state_dir is None, no events are emitted and merge still works."""
+        result = verify_and_merge(
+            worktree_info=WORKTREE_INFO,
+            repo_root=REPO_ROOT,
+            base_branch=BASE_BRANCH,
+            verification_commands=["make test"],
+            auto_push=False,
+            issue_id=ISSUE_ID,
+        )
+        assert result.success is True
+
+
 class TestAutoPushFalse:
     @patch("amp_orchestrator.merge.subprocess.run")
     def test_push_skipped_when_auto_push_false(self, mock_run: object) -> None:
