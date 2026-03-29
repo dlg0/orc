@@ -16,6 +16,9 @@ from amp_orchestrator.state import OrchestratorMode, OrchestratorState, StateSto
 from amp_orchestrator.worktree import WorktreeManager
 
 
+_ISSUE_DIVIDER = "-" * 60
+
+
 def run_loop(
     repo_root: Path,
     state_dir: Path,
@@ -29,6 +32,7 @@ def run_loop(
     worktree_mgr = WorktreeManager(repo_root, config.base_branch)
     state = store.load()
     failed_ids: set[str] = set(state.needs_rework.keys())
+    issue_num = 0
 
     while True:
         state = store.load()
@@ -40,11 +44,11 @@ def run_loop(
             if state.mode == OrchestratorMode.pause_requested:
                 store.transition(state, OrchestratorMode.paused)
                 events.record(EventType.state_changed, {"to": "paused"})
-                click.echo("Paused.")
+                click.echo("[SCHEDULER] Paused.")
             else:
                 store.transition(state, OrchestratorMode.idle)
                 events.record(EventType.state_changed, {"to": "idle"})
-                click.echo("Stopped.")
+                click.echo("[SCHEDULER] Stopped.")
             return
 
         if state.mode != OrchestratorMode.running:
@@ -55,23 +59,30 @@ def run_loop(
         issue = select_next_issue(ready, skip_ids=failed_ids)
 
         if issue is None:
-            click.echo("No ready issues — queue exhausted.")
+            click.echo("[SCHEDULER] No ready issues -- queue exhausted.")
             store.transition(state, OrchestratorMode.idle)
             events.record(EventType.state_changed, {"to": "idle", "reason": "queue_empty"})
             return
 
+        issue_num += 1
         events.record(EventType.issue_selected, {"issue_id": issue.id, "title": issue.title})
-        click.echo(f"Selected issue: {issue.id} — {issue.title}")
+        click.echo("")
+        click.echo(_ISSUE_DIVIDER)
+        click.echo(f"[SELECT] #{issue_num} {issue.id} -- {issue.title}")
+        click.echo(_ISSUE_DIVIDER)
 
         # Create worktree
         try:
             wt_info = worktree_mgr.create_worktree(issue.id, issue.title)
         except Exception as exc:
-            click.echo(f"Failed to create worktree for {issue.id}: {exc}")
+            click.echo(f"[WORKTREE] {issue.id} FAILED: {exc}")
             events.record(EventType.error, {"issue_id": issue.id, "stage": "worktree", "error": str(exc)})
             failed_ids.add(issue.id)
             _record_run(store, state, issue.id, "failed", str(exc), amp_mode=config.amp_mode)
             continue
+
+        click.echo(f"[WORKTREE] {issue.id} branch={wt_info.branch_name}")
+        click.echo(f"[WORKTREE] {issue.id} path={wt_info.worktree_path}")
 
         # Update state with active issue
         state.active_issue_id = issue.id
@@ -82,7 +93,7 @@ def run_loop(
 
         # Claim the issue in bd so it shows as in-progress
         if not claim_issue(issue.id, cwd=repo_root):
-            click.echo(f"Warning: failed to claim {issue.id} in bd (continuing anyway)")
+            click.echo(f"[CLAIM] {issue.id} WARNING: bd update --claim failed (continuing)")
             events.record(EventType.error, {"issue_id": issue.id, "stage": "claim", "error": "bd update --claim failed"})
 
         # Invoke Amp
@@ -95,13 +106,12 @@ def run_loop(
             repo_root=repo_root,
         )
         events.record(EventType.amp_started, {"issue_id": issue.id})
-        click.echo(f"  Worktree: {wt_info.worktree_path}")
-        click.echo(f"  Running amp for issue {issue.id} ...")
+        click.echo(f"[AMP] {issue.id} running ...")
 
         try:
             result = runner.run(ctx)
         except Exception as exc:
-            click.echo(f"Amp failed for {issue.id}: {exc}")
+            click.echo(f"[AMP] {issue.id} FAILED: {exc}")
             events.record(EventType.error, {"issue_id": issue.id, "stage": "amp", "error": str(exc)})
             failed_ids.add(issue.id)
             _clear_active(store, state)
@@ -117,14 +127,14 @@ def run_loop(
         if result.context_window_usage_pct is not None:
             amp_finished_data["context_window_usage_pct"] = result.context_window_usage_pct
         events.record(EventType.amp_finished, amp_finished_data)
-        click.echo(f"Amp result: {result.result.value} — {result.summary}")
+        click.echo(f"[AMP] {issue.id} result={result.result.value} -- {result.summary}")
         if result.context_window_usage_pct is not None and result.context_window_usage_pct >= config.context_window_warn_threshold * 100:
-            click.echo(f"  ⚠ Context window usage high: {result.context_window_usage_pct}%")
+            click.echo(f"[AMP] {issue.id} WARNING: context window usage high: {result.context_window_usage_pct}%")
 
         if result.merge_ready:
-            click.echo("  ✓ Merge ready")
+            click.echo(f"[AMP] {issue.id} merge_ready=true")
         else:
-            click.echo("  ✗ Not merge ready")
+            click.echo(f"[AMP] {issue.id} merge_ready=false")
 
         wt_path = str(wt_info.worktree_path)
 
@@ -135,14 +145,14 @@ def run_loop(
 
         # Handle non-merge outcomes
         if result.result == ResultType.decomposed:
-            click.echo(f"Issue {issue.id} was decomposed — skipping merge.")
+            click.echo(f"[AMP] {issue.id} decomposed -- skipping merge")
             _clear_active(store, state)
             _record_run(store, state, issue.id, "decomposed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
             continue
 
         if result.result in (ResultType.failed, ResultType.blocked, ResultType.needs_human):
-            click.echo(f"Issue {issue.id}: {result.result.value} — moving on.")
+            click.echo(f"[AMP] {issue.id} {result.result.value} -- moving on")
             failed_ids.add(issue.id)
             _clear_active(store, state)
             _record_run(store, state, issue.id, result.result.value, result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
@@ -150,7 +160,7 @@ def run_loop(
             continue
 
         if not result.merge_ready:
-            click.echo(f"Issue {issue.id}: completed but not merge-ready — skipping merge.")
+            click.echo(f"[AMP] {issue.id} completed but not merge-ready -- skipping merge")
             failed_ids.add(issue.id)
             _clear_active(store, state)
             _record_run(store, state, issue.id, "completed_no_merge", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
@@ -159,7 +169,7 @@ def run_loop(
         # Independent evaluation
         if evaluator is not None:
             events.record(EventType.evaluation_started, {"issue_id": issue.id})
-            click.echo(f"  Running evaluator for issue {issue.id} ...")
+            click.echo(f"[EVAL] {issue.id} running ...")
 
             try:
                 eval_result = evaluator.evaluate(
@@ -182,11 +192,11 @@ def run_loop(
             events.record(EventType.evaluation_finished, eval_finished_data)
 
             if eval_result.passed:
-                click.echo(f"  ✓ Evaluation passed: {eval_result.summary}")
+                click.echo(f"[EVAL] {issue.id} PASSED: {eval_result.summary}")
             else:
                 from datetime import datetime, timezone
 
-                click.echo(f"  ✗ Evaluation failed: {eval_result.summary}")
+                click.echo(f"[EVAL] {issue.id} FAILED: {eval_result.summary}")
                 events.record(EventType.issue_needs_rework, {
                     "issue_id": issue.id,
                     "summary": eval_result.summary,
@@ -207,6 +217,7 @@ def run_loop(
                 continue
 
         # Verify and merge
+        click.echo(f"[MERGE] {issue.id} starting verify-and-merge ...")
         events.record(EventType.merge_attempt, {"issue_id": issue.id})
         merge_result = verify_and_merge(
             worktree_info=wt_info,
@@ -220,16 +231,16 @@ def run_loop(
 
         if merge_result.success:
             if merge_result.conflict_resolved:
-                click.echo(f"Issue {issue.id} merged successfully (conflicts auto-resolved).")
+                click.echo(f"[MERGE] {issue.id} OK (conflicts auto-resolved)")
             else:
-                click.echo(f"Issue {issue.id} merged and closed successfully.")
+                click.echo(f"[MERGE] {issue.id} OK")
             events.record(EventType.issue_closed, {"issue_id": issue.id})
             state.last_completed_issue = issue.id
             _clear_active(store, state)
             _record_run(store, state, issue.id, "completed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
         else:
-            click.echo(f"Merge failed for {issue.id} at stage {merge_result.stage}: {merge_result.error}")
+            click.echo(f"[MERGE] {issue.id} FAILED at {merge_result.stage}: {merge_result.error}")
             events.record(EventType.error, {
                 "issue_id": issue.id,
                 "stage": merge_result.stage,

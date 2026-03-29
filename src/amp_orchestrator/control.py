@@ -39,15 +39,15 @@ def start_orchestrator(repo_root: Path, state_dir: Path) -> None:
         # held (we just acquired it), the previous process must have crashed.
         if state.mode in (OrchestratorMode.running, OrchestratorMode.pause_requested):
             click.echo(
-                f"Detected stale {state.mode.value} state (previous process crashed)."
+                f"[RECOVERY] Detected stale {state.mode.value} state (previous process crashed)"
             )
             if state.active_issue_id:
                 stale_label = state.active_issue_id
                 if state.active_issue_title:
-                    stale_label += f" — {state.active_issue_title}"
-                click.echo(f"  Stale active issue: {stale_label}")
-                click.echo(f"  Branch: {state.active_branch}")
-                click.echo(f"  Worktree: {state.active_worktree_path}")
+                    stale_label += f" -- {state.active_issue_title}"
+                click.echo(f"[RECOVERY] stale issue: {stale_label}")
+                click.echo(f"[RECOVERY] branch: {state.active_branch}")
+                click.echo(f"[RECOVERY] worktree: {state.active_worktree_path}")
             # Reset to idle so we can start fresh
             state.last_error = f"crash recovery from {state.mode.value}"
             state.active_issue_id = None
@@ -58,7 +58,7 @@ def start_orchestrator(repo_root: Path, state_dir: Path) -> None:
             store.save(state)
             events = EventLog(state_dir)
             events.record(EventType.state_changed, {"to": "idle", "reason": "crash_recovery"})
-            click.echo("  Reset to idle.")
+            click.echo("[RECOVERY] Reset to idle.")
 
         if state.mode not in (OrchestratorMode.idle, OrchestratorMode.paused):
             lock.release()
@@ -70,7 +70,7 @@ def start_orchestrator(repo_root: Path, state_dir: Path) -> None:
         store.transition(state, OrchestratorMode.running)
         events = EventLog(state_dir)
         events.record(EventType.state_changed, {"from": prev_mode, "to": "running"})
-        click.echo("Orchestrator started")
+        click.echo("[SCHEDULER] Orchestrator started")
 
         config = load_config(repo_root)
         runner = RealAmpRunner(mode=config.amp_mode)
@@ -109,7 +109,7 @@ def pause_orchestrator(state_dir: Path) -> None:
     store.transition(state, OrchestratorMode.pause_requested)
     events = EventLog(state_dir)
     events.record(EventType.pause_requested)
-    click.echo("Pause requested — will pause after current issue completes")
+    click.echo("[SCHEDULER] Pause requested -- will pause after current issue completes")
 
 
 def resume_orchestrator(repo_root: Path, state_dir: Path) -> None:
@@ -139,7 +139,7 @@ def resume_orchestrator(repo_root: Path, state_dir: Path) -> None:
         store.transition(state, OrchestratorMode.running)
         events = EventLog(state_dir)
         events.record(EventType.state_changed, {"from": "paused", "to": "running"})
-        click.echo("Orchestrator resumed")
+        click.echo("[SCHEDULER] Orchestrator resumed")
 
         config = load_config(repo_root)
         runner = RealAmpRunner(mode=config.amp_mode)
@@ -162,7 +162,7 @@ def resume_orchestrator(repo_root: Path, state_dir: Path) -> None:
 
 
 def stop_orchestrator(state_dir: Path) -> None:
-    """Request a stop — the orchestrator will stop after the current issue reaches a safe checkpoint.
+    """Request a stop -- the orchestrator will stop after the current issue reaches a safe checkpoint.
 
     Raises ``click.ClickException`` if not in ``running`` or ``pause_requested`` state.
     """
@@ -177,4 +177,4 @@ def stop_orchestrator(state_dir: Path) -> None:
     store.transition(state, OrchestratorMode.stopping)
     events = EventLog(state_dir)
     events.record(EventType.stop_requested)
-    click.echo("Stop requested — will stop after current issue reaches a safe checkpoint")
+    click.echo("[SCHEDULER] Stop requested -- will stop after current issue reaches a safe checkpoint")
