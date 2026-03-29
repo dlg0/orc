@@ -747,7 +747,7 @@ class ConfigPanel(Static):
 
 
 _ACTION_ENABLED: dict[str, set[OrchestratorMode]] = {
-    "start": {OrchestratorMode.idle},
+    "start": {OrchestratorMode.idle, OrchestratorMode.paused},
     "pause": {OrchestratorMode.running},
     "resume": {OrchestratorMode.paused},
     "stop": {OrchestratorMode.running, OrchestratorMode.pause_requested},
@@ -1257,6 +1257,9 @@ class HistoryTable(Static):
             filter_input.value = ""
             self._row_key = []
             self._rebuild_table()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        self._show_inspect()
 
     def action_inspect(self) -> None:
         self._show_inspect()
