@@ -254,13 +254,15 @@ class StatusPanel(Static):
             f"Queue: {len(snap.ready_issues)} issue(s)"
         )
 
-        # Failed run count
-        failed_count = sum(
-            1 for r in snap.state.run_history if r.get("result") in ("failed", "error")
-        )
+        # Held issues by category
         fc = self.query_one("#failed-count", Label)
-        if failed_count:
-            fc.update(f"[bold red]Failed runs: {failed_count}[/]")
+        if snap.state.issue_failures:
+            by_cat: dict[str, int] = {}
+            for info in snap.state.issue_failures.values():
+                cat = info.get("category", "unknown") if isinstance(info, dict) else "unknown"
+                by_cat[cat] = by_cat.get(cat, 0) + 1
+            parts = ", ".join(f"{cat}: {n}" for cat, n in sorted(by_cat.items()))
+            fc.update(f"[bold red]Held: {len(snap.state.issue_failures)} ({parts})[/]")
         else:
             fc.update("")
 
@@ -634,6 +636,18 @@ class HistoryTable(Static):
             raw_result = run.get("result", "")
             result_colors = {"completed": "green", "failed": "red", "error": "red"}
             rc = result_colors.get(raw_result, "white")
+            # Check if this issue has a failure category for richer coloring
+            failure_info = snap.state.issue_failures.get(issue_id)
+            if failure_info and isinstance(failure_info, dict):
+                cat = failure_info.get("category", "")
+                category_colors = {
+                    "transient_external": "yellow",
+                    "stale_or_conflicted": "dark_orange",
+                    "issue_needs_rework": "red",
+                    "blocked_by_dependency": "magenta",
+                    "fatal_run_error": "bold red",
+                }
+                rc = category_colors.get(cat, rc)
             result = f"[{rc}]{raw_result}[/]"
             branch = run.get("branch", "")
             summary = run.get("summary", "")
