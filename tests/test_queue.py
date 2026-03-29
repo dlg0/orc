@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from amp_orchestrator.queue import BdIssue, select_next_issue
+from unittest.mock import patch
+
+from amp_orchestrator.queue import BdIssue, claim_issue, select_next_issue
 
 
 def _issue(
@@ -66,3 +68,26 @@ class TestSelectNextIssue:
         result = select_next_issue(issues)
         assert result is not None
         assert result.id == "u1"
+
+
+class TestClaimIssue:
+    def test_claim_success(self, tmp_path) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            assert claim_issue("test-1", cwd=tmp_path) is True
+            mock_run.assert_called_once_with(
+                ["bd", "update", "test-1", "--claim"],
+                capture_output=True,
+                text=True,
+                cwd=tmp_path,
+                check=False,
+            )
+
+    def test_claim_failure(self, tmp_path) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            assert claim_issue("test-1", cwd=tmp_path) is False
+
+    def test_claim_oserror(self, tmp_path) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run", side_effect=OSError("no bd")):
+            assert claim_issue("test-1", cwd=tmp_path) is False

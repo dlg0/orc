@@ -11,7 +11,7 @@ from amp_orchestrator.config import OrchestratorConfig
 from amp_orchestrator.evaluator import IssueEvaluator
 from amp_orchestrator.events import EventLog, EventType
 from amp_orchestrator.merge import verify_and_merge
-from amp_orchestrator.queue import get_ready_issues, select_next_issue
+from amp_orchestrator.queue import claim_issue, get_ready_issues, select_next_issue
 from amp_orchestrator.state import OrchestratorMode, OrchestratorState, StateStore
 from amp_orchestrator.worktree import WorktreeManager
 
@@ -79,6 +79,11 @@ def run_loop(
         state.active_branch = wt_info.branch_name
         state.active_worktree_path = str(wt_info.worktree_path)
         store.save(state)
+
+        # Claim the issue in bd so it shows as in-progress
+        if not claim_issue(issue.id, cwd=repo_root):
+            click.echo(f"Warning: failed to claim {issue.id} in bd (continuing anyway)")
+            events.record(EventType.error, {"issue_id": issue.id, "stage": "claim", "error": "bd update --claim failed"})
 
         # Invoke Amp
         ctx = IssueContext(
