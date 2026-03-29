@@ -109,6 +109,8 @@ class OrchestratorState:
     active_issue_title: str | None = None
     active_branch: str | None = None
     active_worktree_path: str | None = None
+    active_stage: str | None = None
+    active_started_at: str | None = None
     last_completed_issue: str | None = None
     last_error: str | None = None
     run_history: list[dict] = field(default_factory=list)

@@ -54,6 +54,8 @@ def start_orchestrator(repo_root: Path, state_dir: Path) -> None:
             state.active_issue_title = None
             state.active_branch = None
             state.active_worktree_path = None
+            state.active_stage = None
+            state.active_started_at = None
             state.mode = OrchestratorMode.idle
             store.save(state)
             events = EventLog(state_dir)
