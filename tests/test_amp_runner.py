@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 from amp_orchestrator.amp_runner import (
     AmpResult,
@@ -206,3 +207,29 @@ def test_context_passed_to_run() -> None:
     stub = StubAmpRunner.completed(summary="ok")
     assert stub.run(ctx1).summary == "ok"
     assert stub.run(ctx2).summary == "ok"
+
+
+# --- RealAmpRunner passes worktree env ---
+
+
+@patch("amp_orchestrator.amp_runner.shutil.which", return_value="/usr/bin/amp")
+@patch("amp_orchestrator.amp_runner.subprocess.run")
+@patch("amp_orchestrator.amp_runner.build_worktree_env")
+def test_real_runner_passes_worktree_env(mock_env, mock_run, mock_which) -> None:
+    """RealAmpRunner.run() passes env=build_worktree_env() to subprocess."""
+    import subprocess as _sp
+
+    fake_env = {"PYTHONPATH": "/tmp/worktree/src", "PATH": "/usr/bin"}
+    mock_env.return_value = fake_env
+    mock_run.return_value = _sp.CompletedProcess(
+        args=["amp"], returncode=0, stdout="", stderr="",
+    )
+
+    runner = RealAmpRunner()
+    ctx = _make_context()
+    runner.run(ctx)
+
+    mock_env.assert_called_once_with(ctx.worktree_path)
+    # The first subprocess.run call is the amp invocation
+    amp_call = mock_run.call_args_list[0]
+    assert amp_call[1]["env"] is fake_env

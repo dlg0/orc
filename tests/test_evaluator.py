@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 
 from amp_orchestrator.amp_runner import IssueContext
+from unittest.mock import patch
+
 from amp_orchestrator.evaluator import (
     AmpEvaluatorRunner,
     EvaluationResult,
@@ -356,3 +358,26 @@ def test_parse_output_context_usage_from_stream() -> None:
     result = runner._parse_output(_make_proc(stdout=stdout))
     assert result.passed is True
     assert result.context_window_usage_pct == 40.0
+
+
+# --- AmpEvaluatorRunner passes worktree env ---
+
+
+@patch("amp_orchestrator.evaluator.build_worktree_env")
+@patch("amp_orchestrator.evaluator.subprocess.run")
+@patch("amp_orchestrator.evaluator.shutil.which", return_value="/usr/bin/amp")
+def test_evaluator_passes_worktree_env(mock_which, mock_run, mock_env) -> None:
+    """AmpEvaluatorRunner.evaluate() passes env=build_worktree_env() to subprocess."""
+    fake_env = {"PYTHONPATH": "/tmp/worktree/src", "PATH": "/usr/bin"}
+    mock_env.return_value = fake_env
+    mock_run.return_value = subprocess.CompletedProcess(
+        args=["amp"], returncode=0, stdout="", stderr="",
+    )
+
+    runner = AmpEvaluatorRunner()
+    ctx = _make_context()
+    runner.evaluate(ctx, "main", [])
+
+    mock_env.assert_called_once_with(ctx.worktree_path)
+    _, kwargs = mock_run.call_args
+    assert kwargs["env"] is fake_env

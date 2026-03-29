@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def build_worktree_env(worktree_path: Path) -> dict[str, str]:
+    """Build a subprocess env with the worktree's ``src/`` prepended to PYTHONPATH.
+
+    This ensures subprocesses import the worktree's modified source rather than
+    the main checkout's editable install.
+    """
+    env = os.environ.copy()
+    src_path = worktree_path / "src"
+    if src_path.is_dir():
+        existing = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = f"{src_path}{os.pathsep}{existing}" if existing else str(src_path)
+    return env
 
 
 def slugify(title: str) -> str:

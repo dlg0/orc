@@ -12,6 +12,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
+from amp_orchestrator.worktree import build_worktree_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -133,6 +135,7 @@ class RealAmpRunner:
                 capture_output=True,
                 text=True,
                 timeout=self._timeout,
+                env=build_worktree_env(context.worktree_path),
             )
         except subprocess.TimeoutExpired:
             logger.error("Amp timed out after %d seconds", self._timeout)
