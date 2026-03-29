@@ -9,6 +9,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DataTable, Label, RichLog, Static
 
+from amp_orchestrator.config import OrchestratorConfig
 from amp_orchestrator.queue import BdIssue
 from amp_orchestrator.state import OrchestratorMode
 from amp_orchestrator.tui.snapshot import DashboardSnapshot
@@ -628,14 +629,26 @@ class ConfigPanel(Static):
     }
     """
 
+    can_focus = True
+
+    BINDINGS = [
+        Binding("enter", "inspect", "Inspect", show=True),
+        Binding("i", "inspect", "Inspect", show=False),
+    ]
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._last_config: OrchestratorConfig | None = None
+
     def compose(self) -> ComposeResult:
-        yield Label("Config", classes="panel-title")
+        yield Label("Config (Enter/i to inspect)", classes="panel-title")
         yield Label("", id="config-detail")
 
     def show_no_project(self) -> None:
         self.query_one("#config-detail", Label).update(NO_PROJECT_PLACEHOLDER)
 
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
+        self._last_config = snap.config
         cfg = snap.config
         lines = [
             f"Base branch: {cfg.base_branch}",
@@ -646,6 +659,38 @@ class ConfigPanel(Static):
         if cfg.verification_commands:
             lines.append(f"Verify: {', '.join(cfg.verification_commands)}")
         self.query_one("#config-detail", Label).update("\n".join(lines))
+
+    def action_inspect(self) -> None:
+        self._show_inspect()
+
+    def _show_inspect(self) -> None:
+        cfg = self._last_config
+        if not cfg:
+            return
+        title = "Configuration"
+        lines = [
+            f"[bold]Base branch:[/] {cfg.base_branch}",
+            f"[bold]Max workers:[/] {cfg.max_workers}",
+            f"[bold]Auto push:[/] {cfg.auto_push}",
+            f"[bold]Require clean worktree:[/] {cfg.require_clean_worktree}",
+            f"[bold]Amp mode:[/] {cfg.amp_mode}",
+            f"[bold]Summary mode:[/] {cfg.summary_mode}",
+            f"[bold]Summary amp mode:[/] {cfg.summary_amp_mode}",
+            f"[bold]Use decomposition preflight:[/] {cfg.use_decomposition_preflight}",
+            f"[bold]Enable evaluation:[/] {cfg.enable_evaluation}",
+            f"[bold]Evaluation mode:[/] {cfg.evaluation_mode or 'default'}",
+            f"[bold]Evaluation timeout:[/] {cfg.evaluation_timeout}s",
+            f"[bold]Context window warn threshold:[/] {cfg.context_window_warn_threshold}",
+        ]
+        if cfg.verification_commands:
+            lines.append(f"\n[bold]Verification commands:[/]")
+            for cmd in cfg.verification_commands:
+                lines.append(f"  • {cmd}")
+        else:
+            lines.append(f"\n[bold]Verification commands:[/] (none)")
+        from amp_orchestrator.tui.modals import InspectModal
+
+        self.app.push_screen(InspectModal(title=title, body="\n".join(lines)))
 
 
 _ACTION_ENABLED: dict[str, set[OrchestratorMode]] = {
