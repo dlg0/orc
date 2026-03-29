@@ -68,6 +68,27 @@ def start() -> None:
         store = StateStore(state_dir)
         state = store.load()
 
+        # Crash recovery: if state is running/pause_requested but no lock was
+        # held (we just acquired it), the previous process must have crashed.
+        if state.mode in (OrchestratorMode.running, OrchestratorMode.pause_requested):
+            click.echo(
+                f"Detected stale {state.mode.value} state (previous process crashed)."
+            )
+            if state.active_issue_id:
+                click.echo(f"  Stale active issue: {state.active_issue_id}")
+                click.echo(f"  Branch: {state.active_branch}")
+                click.echo(f"  Worktree: {state.active_worktree_path}")
+            # Reset to idle so we can start fresh
+            state.last_error = f"crash recovery from {state.mode.value}"
+            state.active_issue_id = None
+            state.active_branch = None
+            state.active_worktree_path = None
+            state.mode = OrchestratorMode.idle
+            store.save(state)
+            events = EventLog(state_dir)
+            events.record(EventType.state_changed, {"to": "idle", "reason": "crash_recovery"})
+            click.echo("  Reset to idle.")
+
         if state.mode not in (OrchestratorMode.idle, OrchestratorMode.paused):
             lock.release()
             raise click.ClickException(
