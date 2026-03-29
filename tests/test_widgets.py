@@ -12,8 +12,10 @@ from amp_orchestrator.state import OrchestratorMode, OrchestratorState
 from amp_orchestrator.tui.snapshot import DashboardSnapshot
 from amp_orchestrator.tui.widgets import (
     MODE_STYLES,
+    _ACTION_ENABLED,
     ActiveIssuePanel,
     ConfigPanel,
+    ControlsPanel,
     EventsLog,
     HistoryTable,
     QueueTable,
@@ -72,6 +74,18 @@ def test_config_panel_composes() -> None:
     panel = ConfigPanel()
     children = list(panel.compose())
     assert len(children) == 2
+
+
+def test_action_enabled_covers_all_actions() -> None:
+    assert set(_ACTION_ENABLED.keys()) == {"start", "pause", "resume", "stop"}
+
+
+def test_controls_panel_has_all_actions() -> None:
+    """ControlsPanel covers start/pause/resume/stop."""
+    assert "start" in _ACTION_ENABLED
+    assert "pause" in _ACTION_ENABLED
+    assert "resume" in _ACTION_ENABLED
+    assert "stop" in _ACTION_ENABLED
 
 
 def test_queue_table_composes() -> None:

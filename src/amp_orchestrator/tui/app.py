@@ -7,7 +7,7 @@ from pathlib import Path
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Header
+from textual.widgets import Button, Footer, Header
 
 from amp_orchestrator.config import OrchestratorConfig
 from amp_orchestrator.tui.snapshot import (
@@ -18,6 +18,7 @@ from amp_orchestrator.tui.snapshot import (
 from amp_orchestrator.tui.widgets import (
     ActiveIssuePanel,
     ConfigPanel,
+    ControlsPanel,
     EventsLog,
     HistoryTable,
     QueueTable,
@@ -45,6 +46,10 @@ class OrchestratorApp(App):
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("r", "refresh", "Refresh"),
+        ("s", "start", "Start"),
+        ("p", "pause", "Pause"),
+        ("u", "resume", "Resume"),
+        ("x", "stop", "Stop"),
         ("tab", "focus_next", "Next Panel"),
         ("shift+tab", "focus_previous", "Prev Panel"),
     ]
@@ -67,6 +72,7 @@ class OrchestratorApp(App):
                 yield StatusPanel()
                 yield ActiveIssuePanel()
                 yield ConfigPanel()
+                yield ControlsPanel()
             with Vertical(id="right-col"):
                 yield QueueTable()
                 yield EventsLog()
@@ -123,6 +129,7 @@ class OrchestratorApp(App):
         """Update only state/events/history panels."""
         self.query_one(StatusPanel).update_snapshot(snap)
         self.query_one(ActiveIssuePanel).update_snapshot(snap)
+        self.query_one(ControlsPanel).update_snapshot(snap)
         self.query_one(EventsLog).update_snapshot(snap)
         self.query_one(HistoryTable).update_snapshot(snap)
 
@@ -131,6 +138,83 @@ class OrchestratorApp(App):
         self.query_one(StatusPanel).update_snapshot(snap)
         self.query_one(ActiveIssuePanel).update_snapshot(snap)
         self.query_one(ConfigPanel).update_snapshot(snap)
+        self.query_one(ControlsPanel).update_snapshot(snap)
         self.query_one(QueueTable).update_snapshot(snap)
         self.query_one(EventsLog).update_snapshot(snap)
         self.query_one(HistoryTable).update_snapshot(snap)
+
+    # -- Control actions -------------------------------------------------------
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle control panel button clicks."""
+        actions = {
+            "btn-start": self.action_start,
+            "btn-pause": self.action_pause,
+            "btn-resume": self.action_resume,
+            "btn-stop": self.action_stop,
+        }
+        handler = actions.get(event.button.id or "")
+        if handler:
+            handler()
+
+    def action_start(self) -> None:
+        if not self._repo_root or not self._state_dir:
+            self.notify("No project detected", severity="error")
+            return
+        self._run_control_action("start")
+
+    def action_pause(self) -> None:
+        if not self._state_dir:
+            self.notify("No project detected", severity="error")
+            return
+        self._run_control_action("pause")
+
+    def action_resume(self) -> None:
+        if not self._repo_root or not self._state_dir:
+            self.notify("No project detected", severity="error")
+            return
+        self._run_control_action("resume")
+
+    def action_stop(self) -> None:
+        if not self._state_dir:
+            self.notify("No project detected", severity="error")
+            return
+        from amp_orchestrator.tui.modals import ConfirmStopModal
+
+        self.push_screen(ConfirmStopModal(), self._on_stop_confirmed)
+
+    def _on_stop_confirmed(self, confirmed: bool) -> None:
+        if confirmed:
+            self._run_control_action("stop")
+
+    @work(thread=True)
+    def _run_control_action(self, action: str) -> None:
+        """Run a control action in a background thread."""
+        import click
+
+        from amp_orchestrator.control import (
+            pause_orchestrator,
+            resume_orchestrator,
+            start_orchestrator,
+            stop_orchestrator,
+        )
+
+        try:
+            if action == "start":
+                start_orchestrator(self._repo_root, self._state_dir)  # type: ignore[arg-type]
+            elif action == "pause":
+                pause_orchestrator(self._state_dir)  # type: ignore[arg-type]
+            elif action == "resume":
+                resume_orchestrator(self._repo_root, self._state_dir)  # type: ignore[arg-type]
+            elif action == "stop":
+                stop_orchestrator(self._state_dir)  # type: ignore[arg-type]
+            self.call_from_thread(self.notify, f"{action.capitalize()} succeeded")
+        except click.ClickException as exc:
+            self.call_from_thread(
+                self.notify, str(exc.message), severity="error"
+            )
+        except Exception as exc:
+            self.call_from_thread(
+                self.notify, f"{action} failed: {exc}", severity="error"
+            )
+        self.call_from_thread(self._do_full_refresh)

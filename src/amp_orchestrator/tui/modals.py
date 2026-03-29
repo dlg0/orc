@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import VerticalScroll
+from textual.containers import Horizontal, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Label, Static
+from textual.widgets import Button, Label, Static
 
 
 class InspectModal(ModalScreen[None]):
@@ -43,3 +43,49 @@ class InspectModal(ModalScreen[None]):
         with VerticalScroll(id="inspect-dialog"):
             yield Label(self._title, id="inspect-title")
             yield Static(self._body, id="inspect-body")
+
+
+class ConfirmStopModal(ModalScreen[bool]):
+    """Confirmation modal before stopping the orchestrator."""
+
+    DEFAULT_CSS = """
+    ConfirmStopModal {
+        align: center middle;
+    }
+    #confirm-dialog {
+        width: 60;
+        height: auto;
+        border: thick $error;
+        background: $surface;
+        padding: 1 2;
+    }
+    #confirm-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #confirm-buttons {
+        height: auto;
+        margin-top: 1;
+    }
+    #confirm-buttons Button {
+        margin: 0 1;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="confirm-dialog"):
+            yield Label("Stop Orchestrator?", id="confirm-title")
+            yield Static("The orchestrator will stop after the current issue reaches a safe checkpoint.")
+            with Horizontal(id="confirm-buttons"):
+                yield Button("Stop", variant="error", id="confirm-yes")
+                yield Button("Cancel", variant="default", id="confirm-no")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "confirm-yes")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)

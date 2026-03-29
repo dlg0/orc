@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.events import Key
-from textual.widgets import DataTable, Label, RichLog, Static
+from textual.widgets import Button, DataTable, Label, RichLog, Static
 
 from amp_orchestrator.queue import BdIssue
 from amp_orchestrator.state import OrchestratorMode
@@ -140,6 +140,55 @@ class ConfigPanel(Static):
         if cfg.verification_commands:
             lines.append(f"Verify: {', '.join(cfg.verification_commands)}")
         self.query_one("#config-detail", Label).update("\n".join(lines))
+
+
+_ACTION_ENABLED: dict[str, set[OrchestratorMode]] = {
+    "start": {OrchestratorMode.idle, OrchestratorMode.paused},
+    "pause": {OrchestratorMode.running},
+    "resume": {OrchestratorMode.paused},
+    "stop": {OrchestratorMode.running, OrchestratorMode.pause_requested},
+}
+
+
+class ControlsPanel(Static):
+    """Controls panel with start/pause/resume/stop buttons."""
+
+    DEFAULT_CSS = """
+    ControlsPanel {
+        height: auto;
+        border: solid grey;
+        padding: 0 1;
+    }
+    ControlsPanel .panel-title {
+        text-style: bold;
+    }
+    #controls-buttons {
+        height: auto;
+    }
+    #controls-buttons Button {
+        margin: 0 1 0 0;
+        min-width: 10;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Label("Controls", classes="panel-title")
+        with Horizontal(id="controls-buttons"):
+            yield Button("Start", id="btn-start", variant="success")
+            yield Button("Pause", id="btn-pause", variant="warning")
+            yield Button("Resume", id="btn-resume", variant="primary")
+            yield Button("Stop", id="btn-stop", variant="error")
+
+    def update_snapshot(self, snap: DashboardSnapshot) -> None:
+        mode = snap.state.mode
+        for action, btn_id in [
+            ("start", "#btn-start"),
+            ("pause", "#btn-pause"),
+            ("resume", "#btn-resume"),
+            ("stop", "#btn-stop"),
+        ]:
+            btn = self.query_one(btn_id, Button)
+            btn.disabled = mode not in _ACTION_ENABLED[action]
 
 
 class QueueTable(Static):
