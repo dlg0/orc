@@ -116,6 +116,22 @@ class SummaryStrip(Static):
             f"[bright_yellow]{text}[/]"
         )
 
+    def show_frozen(self) -> None:
+        """Prepend a FROZEN badge to the current summary text."""
+        label = self.query_one("#summary-strip-text", Label)
+        current = str(label.renderable)
+        # Avoid stacking multiple FROZEN badges
+        if "FROZEN" not in current:
+            label.update(f"[bold bright_cyan on #003344]❄ FROZEN[/] {current}")
+
+    def hide_frozen(self) -> None:
+        """Remove the FROZEN badge (next update_snapshot will rebuild cleanly)."""
+        label = self.query_one("#summary-strip-text", Label)
+        current = str(label.renderable)
+        # Strip the frozen prefix if present
+        import re
+        label.update(re.sub(r"\[bold bright_cyan on #003344\]❄ FROZEN\[/\] ?", "", current))
+
 
 class StaleBanner(Static):
     """Banner shown when dashboard data is stale or refresh has failed."""

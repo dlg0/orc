@@ -55,6 +55,7 @@ class OrchestratorApp(App):
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("r", "refresh", "Refresh"),
+        ("f", "freeze", "Freeze"),
         ("s", "start", "Start"),
         ("p", "pause", "Pause"),
         ("u", "resume", "Resume"),
@@ -84,6 +85,7 @@ class OrchestratorApp(App):
         self._config = OrchestratorConfig()
         self._pending_action: str | None = None
         self._orch_mode: OrchestratorMode = OrchestratorMode.idle
+        self._frozen: bool = False
         self._last_successful_refresh: datetime | None = None
         self._last_queue_refresh: datetime | None = None
         self._last_refresh_error: str | None = None
@@ -141,7 +143,7 @@ class OrchestratorApp(App):
     @work(thread=True)
     def _do_fast_refresh(self) -> None:
         """Refresh state and events (runs in thread)."""
-        if not self._state_dir:
+        if not self._state_dir or self._frozen:
             return
         try:
             snap = load_snapshot_fast(self._state_dir, self._config)
@@ -153,7 +155,7 @@ class OrchestratorApp(App):
     @work(thread=True)
     def _do_queue_refresh(self) -> None:
         """Refresh queue (runs in thread)."""
-        if not self._repo_root or not self._state_dir:
+        if not self._repo_root or not self._state_dir or self._frozen:
             return
         try:
             snap = load_snapshot(self._repo_root, self._state_dir)
@@ -192,6 +194,8 @@ class OrchestratorApp(App):
 
     def _check_staleness(self) -> None:
         """Show/hide the stale banner based on time since last successful refresh."""
+        if self._frozen:
+            return
         banner = self.query_one(StaleBanner)
         status_panel = self.query_one(StatusPanel)
         if self._last_refresh_error:
@@ -209,7 +213,23 @@ class OrchestratorApp(App):
 
     def action_refresh(self) -> None:
         """Manual refresh triggered by 'r' key."""
+        was_frozen = self._frozen
+        self._frozen = False
         self._do_full_refresh()
+        self._frozen = was_frozen
+        if was_frozen:
+            self.query_one(SummaryStrip).show_frozen()
+
+    def action_freeze(self) -> None:
+        """Toggle freeze/unfreeze of live dashboard updates."""
+        self._frozen = not self._frozen
+        if self._frozen:
+            self.notify("Live updates frozen", severity="warning")
+            self.query_one(SummaryStrip).show_frozen()
+        else:
+            self.notify("Live updates resumed")
+            self.query_one(SummaryStrip).hide_frozen()
+            self._do_full_refresh()
 
     def action_toggle_config(self) -> None:
         """Toggle ConfigPanel visibility."""
