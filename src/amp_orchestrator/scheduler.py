@@ -13,19 +13,31 @@ from amp_orchestrator.config import OrchestratorConfig
 from amp_orchestrator.evaluator import IssueEvaluator
 from amp_orchestrator.events import EventLog, EventType
 from amp_orchestrator.merge import verify_and_merge
-from amp_orchestrator.queue import claim_issue, get_ready_issues, select_next_issue
+from amp_orchestrator.queue import claim_issue, get_ready_issues, select_next_issue, unclaim_issue
 from amp_orchestrator.state import (
     FailureAction,
     FailureCategory,
     IssueFailure,
     OrchestratorMode,
     OrchestratorState,
+    RunCheckpoint,
+    RunStage,
     StateStore,
+    _MAX_RESUME_ATTEMPTS,
 )
-from amp_orchestrator.worktree import WorktreeManager
+from amp_orchestrator.worktree import WorktreeInfo, WorktreeManager
 
 
 _ISSUE_DIVIDER = "-" * 60
+
+_RECOVERY_PROMPT = (
+    "\n\n---\n"
+    "**RECOVERY RUN**: This is a recovery run for an interrupted previous attempt.\n"
+    "Existing work may be present in the worktree/branch.\n"
+    "Before making changes, inspect: `git status`, `git log --oneline -10`, `git diff --stat`\n"
+    "Build on existing work; do not restart from scratch unless changes are clearly wrong.\n"
+    "---\n"
+)
 _QUEUE_RETRY_MAX = 3
 _QUEUE_RETRY_DELAY = 5  # seconds
 
@@ -81,6 +93,258 @@ def _action_for_category(category: FailureCategory) -> FailureAction:
     }[category]
 
 
+def _update_checkpoint(
+    store: StateStore,
+    state: OrchestratorState,
+    stage: RunStage,
+    *,
+    bd_claimed: bool | None = None,
+    amp_result: dict | None = None,
+    eval_result: dict | None = None,
+) -> None:
+    """Update the active run checkpoint's stage and save atomically."""
+    if state.active_run is None:
+        return
+    state.active_run["stage"] = stage.value
+    state.active_run["updated_at"] = _now_iso()
+    if bd_claimed is not None:
+        state.active_run["bd_claimed"] = bd_claimed
+    if amp_result is not None:
+        state.active_run["amp_result"] = amp_result
+    if eval_result is not None:
+        state.active_run["eval_result"] = eval_result
+    store.save(state)
+
+
+def _attempt_resume(
+    repo_root: Path,
+    state_dir: Path,
+    config: OrchestratorConfig,
+    runner: AmpRunner,
+    evaluator: IssueEvaluator | None = None,
+    store: StateStore | None = None,
+    state: OrchestratorState | None = None,
+    events: EventLog | None = None,
+    worktree_mgr: WorktreeManager | None = None,
+    fail_fast: bool = False,
+) -> bool:
+    """Attempt to resume an interrupted run from resume_candidate.
+
+    Returns True if resume was attempted (success or failure),
+    False if candidate was discarded without running.
+    """
+    assert store is not None and state is not None and events is not None
+    assert worktree_mgr is not None
+
+    candidate = state.resume_candidate
+    if not candidate:
+        return False
+
+    issue_id = candidate["issue_id"]
+    stage = candidate.get("stage", "")
+    branch = candidate.get("branch")
+    wt_path = candidate.get("worktree_path")
+    attempts = candidate.get("resume_attempts", 0)
+
+    click.echo("")
+    click.echo(_ISSUE_DIVIDER)
+    click.echo(f"[RESUME] {issue_id} -- attempting recovery (attempt {attempts})")
+    click.echo(_ISSUE_DIVIDER)
+    events.record(EventType.resume_attempted, {
+        "issue_id": issue_id, "stage": stage, "attempt": attempts,
+    })
+
+    # Validate the resume is still possible
+    if not branch or not wt_path:
+        click.echo(f"[RESUME] {issue_id} no branch/worktree — discarding candidate")
+        state.resume_candidate = None
+        store.save(state)
+        events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "no_branch_or_worktree"})
+        return False
+
+    if not worktree_mgr.ensure_resumable_worktree(branch, wt_path):
+        click.echo(f"[RESUME] {issue_id} worktree/branch not recoverable — discarding")
+        # Unclaim if we had a claim
+        if candidate.get("bd_claimed"):
+            unclaim_issue(issue_id, cwd=repo_root)
+        state.resume_candidate = None
+        store.save(state)
+        events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "worktree_not_recoverable"})
+        return False
+
+    # Promote resume_candidate to active_run
+    state.active_run = candidate
+    state.resume_candidate = None
+    store.save(state)
+
+    wt_info = WorktreeInfo(
+        issue_id=issue_id,
+        worktree_path=Path(wt_path),
+        branch_name=branch,
+    )
+    wt_path_str = str(wt_info.worktree_path)
+
+    # Phase-based resume
+    if stage in (RunStage.claimed.value, RunStage.amp_running.value):
+        # Re-run amp with recovery prompt
+        click.echo(f"[RESUME] {issue_id} re-running amp (was at stage={stage})")
+        _update_checkpoint(store, state, RunStage.amp_running)
+
+        description = candidate.get("issue_title", "")
+        ctx = IssueContext(
+            issue_id=issue_id,
+            title=candidate.get("issue_title", ""),
+            description=description + _RECOVERY_PROMPT,
+            acceptance_criteria="",
+            worktree_path=wt_info.worktree_path,
+            repo_root=repo_root,
+        )
+        events.record(EventType.amp_started, {"issue_id": issue_id, "recovery": True})
+        click.echo(f"[AMP] {issue_id} running (recovery) ...")
+
+        try:
+            result = runner.run(ctx)
+        except Exception as exc:
+            click.echo(f"[RESUME] {issue_id} amp failed during recovery: {exc}")
+            _record_failure(
+                store, state, issue_id, FailureCategory.issue_needs_rework, "amp",
+                str(exc), branch, wt_path_str,
+            )
+            _unclaim_active(state, events, repo_root)
+            _clear_active(store, state)
+            events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "amp_exception"})
+            return True
+
+        events.record(EventType.amp_finished, {
+            "issue_id": issue_id, "result": result.result.value,
+            "summary": result.summary, "recovery": True,
+        })
+        click.echo(f"[AMP] {issue_id} result={result.result.value} -- {result.summary}")
+
+        if not result.merge_ready or result.result != ResultType.completed:
+            click.echo(f"[RESUME] {issue_id} not merge-ready after recovery — marking needs_human")
+            _record_failure(
+                store, state, issue_id, FailureCategory.issue_needs_rework, "amp",
+                result.summary, branch, wt_path_str,
+            )
+            _unclaim_active(state, events, repo_root)
+            _clear_active(store, state)
+            _record_run(store, state, issue_id, result.result.value, result.summary,
+                        branch, wt_path_str, amp_mode=config.amp_mode)
+            events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "not_merge_ready"})
+            return True
+
+        _update_checkpoint(
+            store, state, RunStage.amp_finished,
+            amp_result={"result": result.result.value, "summary": result.summary,
+                        "merge_ready": result.merge_ready},
+        )
+
+    elif stage == RunStage.amp_finished.value:
+        # Amp already finished — check stored result
+        amp_result = candidate.get("amp_result", {})
+        if not amp_result.get("merge_ready"):
+            click.echo(f"[RESUME] {issue_id} amp_finished but not merge-ready — discarding")
+            _unclaim_active(state, events, repo_root)
+            _clear_active(store, state)
+            events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "not_merge_ready"})
+            return False
+        click.echo(f"[RESUME] {issue_id} skipping amp (already finished with merge-ready)")
+
+    elif stage == RunStage.ready_to_merge.value:
+        click.echo(f"[RESUME] {issue_id} skipping amp+eval (ready to merge)")
+
+    else:
+        click.echo(f"[RESUME] {issue_id} unknown/non-resumable stage={stage} — discarding")
+        _unclaim_active(state, events, repo_root)
+        _clear_active(store, state)
+        events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "unknown_stage"})
+        return False
+
+    # Run evaluation if needed and stage hasn't passed it
+    if evaluator is not None and stage != RunStage.ready_to_merge.value:
+        _update_checkpoint(store, state, RunStage.evaluation_running)
+        events.record(EventType.evaluation_started, {"issue_id": issue_id, "recovery": True})
+        click.echo(f"[EVAL] {issue_id} running ...")
+
+        ctx_for_eval = IssueContext(
+            issue_id=issue_id,
+            title=candidate.get("issue_title", ""),
+            description="",
+            acceptance_criteria="",
+            worktree_path=wt_info.worktree_path,
+            repo_root=repo_root,
+        )
+        try:
+            eval_result = evaluator.evaluate(
+                context=ctx_for_eval,
+                base_branch=config.base_branch,
+                verification_commands=config.verification_commands,
+            )
+        except Exception as exc:
+            from amp_orchestrator.evaluator import EvaluationResult
+            eval_result = EvaluationResult.fail(f"Evaluator crashed: {exc}")
+
+        events.record(EventType.evaluation_finished, {
+            "issue_id": issue_id, "verdict": eval_result.verdict.value,
+            "summary": eval_result.summary, "recovery": True,
+        })
+
+        if eval_result.passed:
+            click.echo(f"[EVAL] {issue_id} PASSED: {eval_result.summary}")
+            _update_checkpoint(store, state, RunStage.ready_to_merge, eval_result=eval_result.to_dict())
+        else:
+            click.echo(f"[EVAL] {issue_id} FAILED: {eval_result.summary}")
+            _record_failure(
+                store, state, issue_id, FailureCategory.issue_needs_rework, "evaluation",
+                eval_result.summary, branch, wt_path_str,
+            )
+            _unclaim_active(state, events, repo_root)
+            _clear_active(store, state)
+            events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "eval_failed"})
+            return True
+
+    # Merge
+    _update_checkpoint(store, state, RunStage.merge_running)
+    click.echo(f"[MERGE] {issue_id} starting verify-and-merge ...")
+    events.record(EventType.merge_attempt, {"issue_id": issue_id, "recovery": True})
+    merge_result = verify_and_merge(
+        worktree_info=wt_info,
+        repo_root=repo_root,
+        base_branch=config.base_branch,
+        verification_commands=config.verification_commands,
+        auto_push=config.auto_push,
+        issue_id=issue_id,
+        state_dir=state_dir,
+    )
+
+    if merge_result.success:
+        click.echo(f"[MERGE] {issue_id} OK (recovered)")
+        events.record(EventType.issue_closed, {"issue_id": issue_id, "recovery": True})
+        events.record(EventType.resume_succeeded, {"issue_id": issue_id})
+        state.last_completed_issue = issue_id
+        state.issue_failures.pop(issue_id, None)
+        _clear_active(store, state)
+        _record_run(store, state, issue_id, "completed", "recovered from interrupted run",
+                    branch, wt_path_str, amp_mode=config.amp_mode)
+        _try_cleanup(worktree_mgr, wt_info)
+    else:
+        click.echo(f"[MERGE] {issue_id} FAILED at {merge_result.stage}: {merge_result.error}")
+        _record_failure(
+            store, state, issue_id, FailureCategory.stale_or_conflicted,
+            f"merge/{merge_result.stage}",
+            f"merge failed at {merge_result.stage}", branch, wt_path_str,
+        )
+        _unclaim_active(state, events, repo_root)
+        _clear_active(store, state)
+        _record_run(store, state, issue_id, "failed",
+                    f"merge failed at {merge_result.stage} (recovery)",
+                    branch, wt_path_str, amp_mode=config.amp_mode)
+        events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "merge_failed"})
+
+    return True
+
+
 def run_loop(
     repo_root: Path,
     state_dir: Path,
@@ -117,6 +381,17 @@ def run_loop(
 
         if state.mode != OrchestratorMode.running:
             return
+
+        # Check for resume candidate before queue selection
+        if state.resume_candidate:
+            resumed = _attempt_resume(
+                repo_root, state_dir, config, runner, evaluator,
+                store, state, events, worktree_mgr, fail_fast,
+            )
+            # After resume attempt, re-enter loop to check state/queue
+            if resumed:
+                issue_num += 1
+            continue
 
         # Derive skip_ids from persisted issue_failures
         failed_ids: set[str] = set(state.issue_failures.keys())
@@ -173,23 +448,28 @@ def run_loop(
         click.echo(f"[WORKTREE] {issue.id} branch={wt_info.branch_name}")
         click.echo(f"[WORKTREE] {issue.id} path={wt_info.worktree_path}")
 
-        # Update state with active issue
-        state.active_issue_id = issue.id
-        state.active_issue_title = issue.title
-        state.active_branch = wt_info.branch_name
-        state.active_worktree_path = str(wt_info.worktree_path)
-        state.active_stage = "claiming"
-        state.active_started_at = _now_iso()
+        # Update state with active run checkpoint
+        checkpoint = RunCheckpoint(
+            issue_id=issue.id,
+            issue_title=issue.title,
+            branch=wt_info.branch_name,
+            worktree_path=str(wt_info.worktree_path),
+            stage=RunStage.worktree_created,
+            updated_at=_now_iso(),
+        )
+        state.active_run = checkpoint.to_dict()
         store.save(state)
 
         # Claim the issue in bd so it shows as in-progress
-        if not claim_issue(issue.id, cwd=repo_root):
+        claimed = claim_issue(issue.id, cwd=repo_root)
+        if not claimed:
             click.echo(f"[CLAIM] {issue.id} WARNING: bd update --claim failed (continuing)")
             events.record(EventType.error, {"issue_id": issue.id, "stage": "claim", "error": "bd update --claim failed"})
 
+        _update_checkpoint(store, state, RunStage.claimed, bd_claimed=claimed)
+
         # Invoke Amp
-        state.active_stage = "running agent"
-        store.save(state)
+        _update_checkpoint(store, state, RunStage.amp_running)
         ctx = IssueContext(
             issue_id=issue.id,
             title=issue.title,
@@ -210,6 +490,7 @@ def run_loop(
                 store, state, issue.id, FailureCategory.issue_needs_rework, "amp",
                 str(exc), wt_info.branch_name, str(wt_info.worktree_path),
             )
+            _unclaim_active(state, events, repo_root)
             _clear_active(store, state)
             _record_run(store, state, issue.id, "failed", str(exc), worktree_path=str(wt_info.worktree_path), amp_mode=config.amp_mode)
             _try_cleanup(worktree_mgr, wt_info)
@@ -219,6 +500,12 @@ def run_loop(
                 events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
                 return
             continue
+
+        _update_checkpoint(
+            store, state, RunStage.amp_finished,
+            amp_result={"result": result.result.value, "summary": result.summary,
+                        "merge_ready": result.merge_ready},
+        )
 
         amp_finished_data: dict = {
             "issue_id": issue.id,
@@ -277,6 +564,7 @@ def run_loop(
                 store, state, issue.id, FailureCategory.blocked_by_dependency, "amp",
                 result.summary, wt_info.branch_name, wt_path,
             )
+            _unclaim_active(state, events, repo_root)
             _clear_active(store, state)
             _record_run(store, state, issue.id, "decomposed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
@@ -293,6 +581,7 @@ def run_loop(
                 store, state, issue.id, FailureCategory.blocked_by_dependency, "amp",
                 result.summary, wt_info.branch_name, wt_path,
             )
+            _unclaim_active(state, events, repo_root)
             _clear_active(store, state)
             _record_run(store, state, issue.id, result.result.value, result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
@@ -309,6 +598,7 @@ def run_loop(
                 store, state, issue.id, FailureCategory.issue_needs_rework, "amp",
                 result.summary, wt_info.branch_name, wt_path,
             )
+            _unclaim_active(state, events, repo_root)
             _clear_active(store, state)
             _record_run(store, state, issue.id, result.result.value, result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
@@ -325,6 +615,7 @@ def run_loop(
                 store, state, issue.id, FailureCategory.issue_needs_rework, "amp",
                 result.summary, wt_info.branch_name, wt_path,
             )
+            _unclaim_active(state, events, repo_root)
             _clear_active(store, state)
             _record_run(store, state, issue.id, "completed_no_merge", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             if fail_fast:
@@ -336,8 +627,7 @@ def run_loop(
 
         # Independent evaluation
         if evaluator is not None:
-            state.active_stage = "evaluating"
-            store.save(state)
+            _update_checkpoint(store, state, RunStage.evaluation_running)
             events.record(EventType.evaluation_started, {"issue_id": issue.id})
             click.echo(f"[EVAL] {issue.id} running ...")
 
@@ -363,6 +653,10 @@ def run_loop(
 
             if eval_result.passed:
                 click.echo(f"[EVAL] {issue.id} PASSED: {eval_result.summary}")
+                _update_checkpoint(
+                    store, state, RunStage.ready_to_merge,
+                    eval_result=eval_result.to_dict(),
+                )
             else:
                 click.echo(f"[EVAL] {issue.id} FAILED: {eval_result.summary}")
                 events.record(EventType.issue_needs_rework, {
@@ -373,6 +667,7 @@ def run_loop(
                     store, state, issue.id, FailureCategory.issue_needs_rework, "evaluation",
                     eval_result.summary, wt_info.branch_name, wt_path,
                 )
+                _unclaim_active(state, events, repo_root)
                 _clear_active(store, state)
                 rework_extra = {"evaluation": eval_result.to_dict()}
                 rework_extra.update(ctx_extra)
@@ -389,8 +684,7 @@ def run_loop(
                 continue
 
         # Verify and merge
-        state.active_stage = "merging"
-        store.save(state)
+        _update_checkpoint(store, state, RunStage.merge_running)
         click.echo(f"[MERGE] {issue.id} starting verify-and-merge ...")
         events.record(EventType.merge_attempt, {"issue_id": issue.id})
         merge_result = verify_and_merge(
@@ -431,6 +725,7 @@ def run_loop(
                 preserve_worktree=preserve,
             )
             state.last_error = f"{issue.id}: merge failed at {merge_result.stage}"
+            _unclaim_active(state, events, repo_root)
             _clear_active(store, state)
             _record_run(store, state, issue.id, "failed", f"merge failed at {merge_result.stage}", wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             # Preserve worktree for conflict failures
@@ -444,14 +739,27 @@ def run_loop(
 
 
 def _clear_active(store: StateStore, state: OrchestratorState) -> None:
-    """Clear active issue fields and save."""
-    state.active_issue_id = None
-    state.active_issue_title = None
-    state.active_branch = None
-    state.active_worktree_path = None
-    state.active_stage = None
-    state.active_started_at = None
+    """Clear active run checkpoint and save."""
+    state.active_run = None
     store.save(state)
+
+
+def _unclaim_active(
+    state: OrchestratorState,
+    events: EventLog,
+    repo_root: Path,
+) -> None:
+    """Release the bd claim for the active run if one was acquired."""
+    if state.active_run and state.active_run.get("bd_claimed"):
+        issue_id = state.active_run["issue_id"]
+        if unclaim_issue(issue_id, cwd=repo_root):
+            state.active_run["bd_claimed"] = False
+        else:
+            events.record(EventType.error, {
+                "issue_id": issue_id,
+                "stage": "unclaim",
+                "error": "unclaim_issue failed",
+            })
 
 
 def _record_run(

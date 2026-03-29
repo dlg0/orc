@@ -84,6 +84,36 @@ class WorktreeManager:
             branch_name=branch_name,
         )
 
+    def ensure_resumable_worktree(self, branch: str, worktree_path: str) -> bool:
+        """Check if a worktree/branch combination is usable for resume.
+
+        Returns True if the worktree exists (or was recreated from the branch).
+        Returns False if neither worktree nor branch exist.
+        """
+        wt_path = Path(worktree_path)
+        if wt_path.exists() and (wt_path / ".git").exists():
+            return True
+
+        # Check if the branch still exists
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", branch],
+            cwd=self.repo_root,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return False
+
+        # Branch exists but worktree is gone — recreate it
+        wt_path.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ["git", "worktree", "add", str(wt_path), branch],
+            cwd=self.repo_root,
+            capture_output=True,
+            check=False,
+        )
+        return result.returncode == 0
+
     def cleanup_worktree(self, info: WorktreeInfo) -> None:
         """Remove a worktree and delete its branch."""
         subprocess.run(

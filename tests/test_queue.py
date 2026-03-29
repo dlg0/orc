@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from amp_orchestrator.queue import BdIssue, QueueResult, claim_issue, get_ready_issues, select_next_issue
+from amp_orchestrator.queue import BdIssue, QueueResult, claim_issue, get_ready_issues, select_next_issue, unclaim_issue
 
 
 def _issue(
@@ -172,3 +172,28 @@ class TestGetReadyIssues:
         assert result.success is False
         assert "non-list" in result.error
         assert result.issues == []
+
+
+class TestUnclaimIssue:
+    def test_success(self) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            assert unclaim_issue("X-1") is True
+            mock_run.assert_called_once()
+            args = mock_run.call_args[0][0]
+            assert args == ["bd", "update", "X-1", "--status", "open", "--assignee", ""]
+
+    def test_failure_returns_false(self) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            assert unclaim_issue("X-1") is False
+
+    def test_os_error_returns_false(self) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run", side_effect=OSError("no bd")):
+            assert unclaim_issue("X-1") is False
+
+    def test_passes_cwd(self, tmp_path) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            unclaim_issue("X-1", cwd=tmp_path)
+            assert mock_run.call_args[1]["cwd"] == tmp_path

@@ -10,6 +10,8 @@ from amp_orchestrator.state import (
     IssueFailure,
     OrchestratorMode,
     OrchestratorState,
+    RunCheckpoint,
+    RunStage,
     StateStore,
 )
 
@@ -21,11 +23,16 @@ def test_default_state_is_idle() -> None:
 
 def test_save_load_round_trip(tmp_path) -> None:
     store = StateStore(tmp_path)
+    checkpoint = RunCheckpoint(
+        issue_id="ISSUE-42",
+        issue_title="Fix widgets",
+        branch="fix/issue-42",
+        worktree_path="/tmp/wt",
+        stage=RunStage.amp_running,
+    )
     state = OrchestratorState(
         mode=OrchestratorMode.running,
-        active_issue_id="ISSUE-42",
-        active_branch="fix/issue-42",
-        active_worktree_path="/tmp/wt",
+        active_run=checkpoint.to_dict(),
         last_completed_issue="ISSUE-41",
         last_error=None,
         run_history=[{"issue": "ISSUE-41", "result": "ok"}],
@@ -71,7 +78,7 @@ def test_transition_saves_state(tmp_path) -> None:
 
 
 def test_load_backward_compat_missing_fields(tmp_path) -> None:
-    """Old state.json files without active_issue_title still load fine."""
+    """Old state.json files with active_* fields migrate to active_run."""
     import json
     state_file = tmp_path / "state.json"
     state_file.write_text(json.dumps({
@@ -87,7 +94,10 @@ def test_load_backward_compat_missing_fields(tmp_path) -> None:
     state = store.load()
     assert state.mode is OrchestratorMode.running
     assert state.active_issue_id == "X-1"
-    assert state.active_issue_title is None
+    assert state.active_branch == "amp/X-1"
+    assert state.active_worktree_path == "/tmp/wt"
+    assert state.active_run is not None
+    assert state.active_run["issue_id"] == "X-1"
 
 
 def test_issue_failures_round_trip(tmp_path) -> None:
@@ -147,10 +157,14 @@ def test_load_backward_compat_missing_issue_failures(tmp_path) -> None:
 
 def test_active_issue_title_round_trip(tmp_path) -> None:
     store = StateStore(tmp_path)
+    checkpoint = RunCheckpoint(
+        issue_id="X-1",
+        issue_title="Fix the widget",
+        stage=RunStage.amp_running,
+    )
     state = OrchestratorState(
         mode=OrchestratorMode.running,
-        active_issue_id="X-1",
-        active_issue_title="Fix the widget",
+        active_run=checkpoint.to_dict(),
     )
     store.save(state)
     loaded = store.load()
@@ -207,6 +221,136 @@ def test_issue_failure_from_dict_defaults() -> None:
     assert failure.worktree_path is None
     assert failure.preserve_worktree is False
     assert failure.extra is None
+
+
+def test_run_checkpoint_to_dict_from_dict_round_trip() -> None:
+    checkpoint = RunCheckpoint(
+        issue_id="TEST-1",
+        issue_title="Fix the bug",
+        branch="amp/TEST-1-fix-the-bug",
+        worktree_path="/tmp/wt/TEST-1",
+        stage=RunStage.amp_running,
+        bd_claimed=True,
+        amp_result={"result": "completed", "summary": "done"},
+        eval_result=None,
+        preserve_worktree=False,
+        resume_attempts=1,
+        updated_at="2026-01-01T00:00:00+00:00",
+    )
+    d = checkpoint.to_dict()
+    assert d["issue_id"] == "TEST-1"
+    assert d["stage"] == "amp_running"
+    assert d["bd_claimed"] is True
+    assert d["resume_attempts"] == 1
+
+    restored = RunCheckpoint.from_dict(d)
+    assert restored.issue_id == "TEST-1"
+    assert restored.issue_title == "Fix the bug"
+    assert restored.branch == "amp/TEST-1-fix-the-bug"
+    assert restored.stage is RunStage.amp_running
+    assert restored.bd_claimed is True
+    assert restored.amp_result == {"result": "completed", "summary": "done"}
+    assert restored.eval_result is None
+    assert restored.resume_attempts == 1
+    assert restored.updated_at == "2026-01-01T00:00:00+00:00"
+
+
+def test_run_checkpoint_from_dict_defaults() -> None:
+    d = {"issue_id": "X-1", "issue_title": "Test", "stage": "claimed"}
+    checkpoint = RunCheckpoint.from_dict(d)
+    assert checkpoint.branch is None
+    assert checkpoint.worktree_path is None
+    assert checkpoint.bd_claimed is False
+    assert checkpoint.amp_result is None
+    assert checkpoint.resume_attempts == 0
+    assert checkpoint.updated_at == ""
+
+
+def test_run_stage_values() -> None:
+    expected = {
+        "worktree_created", "claimed", "amp_running", "amp_finished",
+        "evaluation_running", "ready_to_merge", "merge_running",
+        "claim_release_pending",
+    }
+    assert {s.value for s in RunStage} == expected
+
+
+def test_active_run_round_trip(tmp_path) -> None:
+    """active_run dict saves and loads correctly."""
+    store = StateStore(tmp_path)
+    checkpoint = RunCheckpoint(
+        issue_id="X-1",
+        issue_title="Test",
+        branch="amp/X-1",
+        stage=RunStage.claimed,
+        bd_claimed=True,
+    )
+    state = OrchestratorState(
+        mode=OrchestratorMode.running,
+        active_run=checkpoint.to_dict(),
+    )
+    store.save(state)
+    loaded = store.load()
+    assert loaded.active_run is not None
+    assert loaded.active_run["issue_id"] == "X-1"
+    assert loaded.active_run["bd_claimed"] is True
+    assert loaded.active_issue_id == "X-1"
+    assert loaded.active_branch == "amp/X-1"
+
+
+def test_active_run_none_round_trip(tmp_path) -> None:
+    store = StateStore(tmp_path)
+    state = OrchestratorState(active_run=None)
+    store.save(state)
+    loaded = store.load()
+    assert loaded.active_run is None
+    assert loaded.active_issue_id is None
+    assert loaded.active_branch is None
+    assert loaded.active_stage is None
+
+
+def test_backward_compat_active_fields_to_active_run(tmp_path) -> None:
+    """Old state.json with active_issue_id but no active_run migrates properly."""
+    import json
+    state_file = tmp_path / "state.json"
+    state_file.write_text(json.dumps({
+        "mode": "running",
+        "active_issue_id": "LEGACY-1",
+        "active_issue_title": "Legacy title",
+        "active_branch": "amp/LEGACY-1",
+        "active_worktree_path": "/tmp/wt/LEGACY-1",
+        "active_stage": "running agent",
+        "active_started_at": "2026-01-01T00:00:00+00:00",
+        "last_completed_issue": None,
+        "last_error": None,
+        "run_history": [],
+    }))
+    store = StateStore(tmp_path)
+    state = store.load()
+    assert state.active_run is not None
+    assert state.active_issue_id == "LEGACY-1"
+    assert state.active_issue_title == "Legacy title"
+    assert state.active_branch == "amp/LEGACY-1"
+    assert state.active_worktree_path == "/tmp/wt/LEGACY-1"
+
+
+def test_backward_compat_null_active_id_to_none_active_run(tmp_path) -> None:
+    """Old state.json with active_issue_id=null → active_run=None."""
+    import json
+    state_file = tmp_path / "state.json"
+    state_file.write_text(json.dumps({
+        "mode": "idle",
+        "active_issue_id": None,
+        "active_branch": None,
+        "active_worktree_path": None,
+        "last_completed_issue": None,
+        "last_error": None,
+        "run_history": [],
+    }))
+    store = StateStore(tmp_path)
+    state = store.load()
+    assert state.active_run is None
+    assert state.active_issue_id is None
 
 
 def test_failure_category_values() -> None:

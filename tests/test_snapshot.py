@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from amp_orchestrator.config import OrchestratorConfig
 from amp_orchestrator.queue import BdIssue, QueueResult
-from amp_orchestrator.state import OrchestratorMode, OrchestratorState, StateStore
+from amp_orchestrator.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
 from amp_orchestrator.tui.snapshot import DashboardSnapshot, load_snapshot, load_snapshot_fast
 
 
@@ -30,10 +30,12 @@ def test_load_snapshot_with_state(tmp_path: Path) -> None:
     state_dir = tmp_path / ".amp-orchestrator"
     state_dir.mkdir()
     store = StateStore(state_dir)
+    checkpoint = RunCheckpoint(
+        issue_id="X-1", issue_title="Fix bug", stage=RunStage.amp_running,
+    )
     store.save(OrchestratorState(
         mode=OrchestratorMode.running,
-        active_issue_id="X-1",
-        active_issue_title="Fix bug",
+        active_run=checkpoint.to_dict(),
     ))
 
     issue = BdIssue(id="X-2", title="New feature", priority=2, created="2026-01-01")

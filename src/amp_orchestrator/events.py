@@ -25,6 +25,9 @@ class EventType(Enum):
     conflict_detected = "conflict_detected"
     conflict_resolution_started = "conflict_resolution_started"
     conflict_resolution_finished = "conflict_resolution_finished"
+    resume_attempted = "resume_attempted"
+    resume_succeeded = "resume_succeeded"
+    resume_failed = "resume_failed"
 
 
 class EventLog:

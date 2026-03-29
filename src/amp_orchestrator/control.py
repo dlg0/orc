@@ -14,8 +14,10 @@ from amp_orchestrator.config import OrchestratorConfig, load_config
 from amp_orchestrator.evaluator import AmpEvaluatorRunner
 from amp_orchestrator.events import EventLog, EventType
 from amp_orchestrator.lock import OrchestratorLock
+from amp_orchestrator.queue import unclaim_issue
 from amp_orchestrator.scheduler import run_loop
-from amp_orchestrator.state import OrchestratorMode, StateStore
+from amp_orchestrator.state import OrchestratorMode, StateStore, _MAX_RESUME_ATTEMPTS, _RESUMABLE_STAGES
+from amp_orchestrator.worktree import WorktreeManager
 
 
 def start_orchestrator(repo_root: Path, state_dir: Path, *, fail_fast: bool = False) -> None:
@@ -41,26 +43,78 @@ def start_orchestrator(repo_root: Path, state_dir: Path, *, fail_fast: bool = Fa
             click.echo(
                 f"[RECOVERY] Detected stale {state.mode.value} state (previous process crashed)"
             )
-            if state.active_issue_id:
-                stale_label = state.active_issue_id
+            events = EventLog(state_dir)
+            events.record(EventType.state_changed, {
+                "to": "idle", "reason": "interrupted_run_detected",
+                "issue_id": state.active_issue_id,
+            })
+
+            if state.active_run:
+                stale_label = state.active_issue_id or "unknown"
                 if state.active_issue_title:
                     stale_label += f" -- {state.active_issue_title}"
                 click.echo(f"[RECOVERY] stale issue: {stale_label}")
                 click.echo(f"[RECOVERY] branch: {state.active_branch}")
                 click.echo(f"[RECOVERY] worktree: {state.active_worktree_path}")
-            # Reset to idle so we can start fresh
-            state.last_error = f"crash recovery from {state.mode.value}"
-            state.active_issue_id = None
-            state.active_issue_title = None
-            state.active_branch = None
-            state.active_worktree_path = None
-            state.active_stage = None
-            state.active_started_at = None
-            state.mode = OrchestratorMode.idle
-            store.save(state)
-            events = EventLog(state_dir)
-            events.record(EventType.state_changed, {"to": "idle", "reason": "crash_recovery"})
-            click.echo("[RECOVERY] Reset to idle.")
+                click.echo(f"[RECOVERY] stage: {state.active_stage}")
+
+                # Determine if the run is resumable
+                stage = state.active_run.get("stage", "")
+                branch = state.active_run.get("branch")
+                wt_path = state.active_run.get("worktree_path")
+                attempts = state.active_run.get("resume_attempts", 0)
+                is_resumable = (
+                    stage in _RESUMABLE_STAGES
+                    and branch
+                    and wt_path
+                    and attempts < _MAX_RESUME_ATTEMPTS
+                )
+
+                if is_resumable:
+                    # Check if worktree/branch still exist
+                    try:
+                        config = load_config(repo_root)
+                    except Exception:
+                        config = OrchestratorConfig()
+                    worktree_mgr = WorktreeManager(repo_root, config.base_branch)
+                    if worktree_mgr.ensure_resumable_worktree(branch, wt_path):
+                        click.echo(f"[RECOVERY] Resumable run detected (stage={stage}, attempts={attempts})")
+                        state.active_run["resume_attempts"] = attempts + 1
+                        state.resume_candidate = state.active_run
+                        state.active_run = None
+                        state.last_error = f"crash recovery from {state.mode.value}"
+                        state.mode = OrchestratorMode.idle
+                        store.save(state)
+                        events.record(EventType.state_changed, {
+                            "to": "idle", "reason": "crash_recovery",
+                            "resume_candidate": state.resume_candidate.get("issue_id"),
+                        })
+                        click.echo("[RECOVERY] Resume candidate saved — will attempt recovery.")
+                    else:
+                        is_resumable = False
+                        click.echo("[RECOVERY] Worktree/branch not recoverable — discarding.")
+
+                if not is_resumable:
+                    # Not resumable — unclaim and discard
+                    if state.active_run.get("bd_claimed"):
+                        issue_id = state.active_run["issue_id"]
+                        if unclaim_issue(issue_id, cwd=repo_root):
+                            click.echo(f"[RECOVERY] Unclaimed {issue_id}")
+                        else:
+                            click.echo(f"[RECOVERY] WARNING: failed to unclaim {issue_id}")
+                    state.last_error = f"crash recovery from {state.mode.value}"
+                    state.active_run = None
+                    state.resume_candidate = None
+                    state.mode = OrchestratorMode.idle
+                    store.save(state)
+                    events.record(EventType.state_changed, {"to": "idle", "reason": "crash_recovery"})
+                    click.echo("[RECOVERY] Reset to idle.")
+            else:
+                state.last_error = f"crash recovery from {state.mode.value}"
+                state.mode = OrchestratorMode.idle
+                store.save(state)
+                events.record(EventType.state_changed, {"to": "idle", "reason": "crash_recovery"})
+                click.echo("[RECOVERY] Reset to idle (no active run).")
 
         if state.mode not in (OrchestratorMode.idle, OrchestratorMode.paused):
             lock.release()

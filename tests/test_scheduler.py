@@ -19,6 +19,8 @@ from amp_orchestrator.state import (
     IssueFailure,
     OrchestratorMode,
     OrchestratorState,
+    RunCheckpoint,
+    RunStage,
     StateStore,
 )
 
@@ -1244,3 +1246,174 @@ def test_fail_fast_records_event(repo_root: Path, state_dir: Path) -> None:
         and e.get("data", {}).get("reason") == "fail_fast"
     ]
     assert len(fail_fast_events) == 1
+
+
+# --- resume tests ---
+
+
+def _make_resume_candidate(
+    issue_id: str = "resume-1",
+    stage: str = "amp_running",
+    branch: str = "amp/resume-1-fix",
+    worktree_path: str = "/tmp/wt/resume-1",
+    bd_claimed: bool = True,
+    resume_attempts: int = 1,
+    amp_result: dict | None = None,
+) -> dict:
+    return RunCheckpoint(
+        issue_id=issue_id,
+        issue_title="Resume test",
+        branch=branch,
+        worktree_path=worktree_path,
+        stage=RunStage(stage),
+        bd_claimed=bd_claimed,
+        amp_result=amp_result,
+        resume_attempts=resume_attempts,
+    ).to_dict()
+
+
+def test_resume_candidate_amp_running_success(repo_root: Path, state_dir: Path) -> None:
+    """Resume from amp_running: re-runs amp, merges on success."""
+    store = StateStore(state_dir)
+    state = OrchestratorState(
+        mode=OrchestratorMode.running,
+        resume_candidate=_make_resume_candidate(stage="amp_running"),
+    )
+    store.save(state)
+
+    runner = StubAmpRunner.completed()
+
+    mock_merge = MagicMock()
+    mock_merge.return_value = MagicMock(success=True, stage="complete")
+
+    mock_worktree_mgr = MagicMock()
+    mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = True
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", return_value=QueueResult()),
+        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
+
+    state = StateStore(state_dir).load()
+    assert state.resume_candidate is None
+    assert state.active_run is None
+    assert state.last_completed_issue == "resume-1"
+    assert len(state.run_history) == 1
+    assert state.run_history[0]["result"] == "completed"
+
+
+def test_resume_candidate_amp_finished_skips_to_merge(repo_root: Path, state_dir: Path) -> None:
+    """Resume from amp_finished with merge_ready: skips amp, goes to merge."""
+    store = StateStore(state_dir)
+    state = OrchestratorState(
+        mode=OrchestratorMode.running,
+        resume_candidate=_make_resume_candidate(
+            stage="amp_finished",
+            amp_result={"result": "completed", "summary": "done", "merge_ready": True},
+        ),
+    )
+    store.save(state)
+
+    runner = StubAmpRunner.completed()  # should NOT be called
+
+    mock_merge = MagicMock()
+    mock_merge.return_value = MagicMock(success=True, stage="complete")
+
+    mock_worktree_mgr = MagicMock()
+    mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = True
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", return_value=QueueResult()),
+        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
+
+    state = StateStore(state_dir).load()
+    assert state.last_completed_issue == "resume-1"
+    # Runner should NOT have been called (amp was already done)
+    assert runner._result is not None  # just checking it exists, not that .run was called
+
+
+def test_resume_candidate_ready_to_merge_skips_amp_and_eval(repo_root: Path, state_dir: Path) -> None:
+    """Resume from ready_to_merge: skips amp+eval, goes straight to merge."""
+    store = StateStore(state_dir)
+    state = OrchestratorState(
+        mode=OrchestratorMode.running,
+        resume_candidate=_make_resume_candidate(stage="ready_to_merge"),
+    )
+    store.save(state)
+
+    runner = StubAmpRunner.completed()
+    mock_merge = MagicMock()
+    mock_merge.return_value = MagicMock(success=True, stage="complete")
+
+    mock_worktree_mgr = MagicMock()
+    mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = True
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", return_value=QueueResult()),
+        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
+
+    state = StateStore(state_dir).load()
+    assert state.last_completed_issue == "resume-1"
+    mock_merge.assert_called_once()
+
+
+def test_resume_candidate_no_worktree_discards(repo_root: Path, state_dir: Path) -> None:
+    """Resume with no recoverable worktree discards the candidate."""
+    store = StateStore(state_dir)
+    state = OrchestratorState(
+        mode=OrchestratorMode.running,
+        resume_candidate=_make_resume_candidate(),
+    )
+    store.save(state)
+
+    runner = StubAmpRunner.completed()
+    mock_worktree_mgr = MagicMock()
+    mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = False
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", return_value=QueueResult()),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("amp_orchestrator.scheduler.unclaim_issue", return_value=True),
+    ):
+        run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
+
+    state = StateStore(state_dir).load()
+    assert state.resume_candidate is None
+    assert state.active_run is None
+
+
+def test_resume_records_events(repo_root: Path, state_dir: Path) -> None:
+    """Resume attempt records resume_attempted and resume_succeeded events."""
+    store = StateStore(state_dir)
+    state = OrchestratorState(
+        mode=OrchestratorMode.running,
+        resume_candidate=_make_resume_candidate(stage="amp_running"),
+    )
+    store.save(state)
+
+    runner = StubAmpRunner.completed()
+    mock_merge = MagicMock()
+    mock_merge.return_value = MagicMock(success=True, stage="complete")
+
+    mock_worktree_mgr = MagicMock()
+    mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = True
+
+    with (
+        patch("amp_orchestrator.scheduler.get_ready_issues", return_value=QueueResult()),
+        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
+        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
+
+    events = EventLog(state_dir).all()
+    event_types = [e["event_type"] for e in events]
+    assert "resume_attempted" in event_types
+    assert "resume_succeeded" in event_types

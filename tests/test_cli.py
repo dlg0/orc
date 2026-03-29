@@ -10,7 +10,7 @@ from click.testing import CliRunner
 from amp_orchestrator.cli import main
 from amp_orchestrator.control import start_orchestrator
 from amp_orchestrator.queue import QueueResult
-from amp_orchestrator.state import OrchestratorMode, OrchestratorState, StateStore
+from amp_orchestrator.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
 
 
 def _make_project(tmp_path: Path) -> Path:
@@ -50,11 +50,16 @@ def test_status_shows_active_issue(tmp_path: Path) -> None:
     state_dir = tmp_path / ".amp-orchestrator"
     state_dir.mkdir()
     store = StateStore(state_dir)
+    checkpoint = RunCheckpoint(
+        issue_id="bz1.5",
+        issue_title="Foo",
+        branch="amp/bz1.5-foo",
+        worktree_path="/tmp/wt",
+        stage=RunStage.amp_running,
+    )
     state = OrchestratorState(
         mode=OrchestratorMode.running,
-        active_issue_id="bz1.5",
-        active_branch="amp/bz1.5-foo",
-        active_worktree_path="/tmp/wt",
+        active_run=checkpoint.to_dict(),
     )
     store.save(state)
 

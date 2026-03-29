@@ -115,6 +115,24 @@ def claim_issue(issue_id: str, cwd: Path | None = None) -> bool:
         return False
 
 
+def unclaim_issue(issue_id: str, cwd: Path | None = None) -> bool:
+    """Release a bd issue claim by resetting status to open.
+
+    Returns True if the unclaim succeeded, False otherwise.
+    """
+    try:
+        result = subprocess.run(
+            ["bd", "update", issue_id, "--status", "open", "--assignee", ""],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            check=False,
+        )
+        return result.returncode == 0
+    except OSError:
+        return False
+
+
 def select_next_issue(
     issues: list[BdIssue],
     skip_ids: set[str] | None = None,

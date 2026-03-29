@@ -8,7 +8,7 @@ import pytest
 
 from amp_orchestrator.config import OrchestratorConfig
 from amp_orchestrator.queue import BdIssue
-from amp_orchestrator.state import OrchestratorMode, OrchestratorState
+from amp_orchestrator.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage
 from amp_orchestrator.tui.app import OrchestratorApp
 from amp_orchestrator.tui.snapshot import DashboardSnapshot
 from amp_orchestrator.tui.widgets import (
@@ -48,13 +48,20 @@ def _snap(
     recent_events: list[dict] | None = None,
     config: OrchestratorConfig | None = None,
 ) -> DashboardSnapshot:
+    active_run = None
+    if active_issue_id:
+        checkpoint = RunCheckpoint(
+            issue_id=active_issue_id,
+            issue_title=active_issue_title or "",
+            branch=active_branch,
+            worktree_path=active_worktree_path,
+            stage=RunStage.amp_running,
+        )
+        active_run = checkpoint.to_dict()
     return DashboardSnapshot(
         state=OrchestratorState(
             mode=mode,
-            active_issue_id=active_issue_id,
-            active_issue_title=active_issue_title,
-            active_branch=active_branch,
-            active_worktree_path=active_worktree_path,
+            active_run=active_run,
             last_completed_issue=last_completed_issue,
             last_error=last_error,
             run_history=run_history or [],

@@ -13,7 +13,7 @@ from amp_orchestrator.control import (
     start_orchestrator,
     stop_orchestrator,
 )
-from amp_orchestrator.state import OrchestratorMode, OrchestratorState, StateStore
+from amp_orchestrator.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
 
 
 def _setup(tmp_path: Path, mode: OrchestratorMode = OrchestratorMode.idle) -> Path:
@@ -94,8 +94,13 @@ def test_start_crash_recovery(tmp_path: Path) -> None:
     state_dir = _setup(tmp_path, OrchestratorMode.running)
     store = StateStore(state_dir)
     state = store.load()
-    state.active_issue_id = "X-stale"
-    state.active_branch = "amp/stale"
+    checkpoint = RunCheckpoint(
+        issue_id="X-stale",
+        issue_title="Stale issue",
+        branch="amp/stale",
+        stage=RunStage.amp_running,
+    )
+    state.active_run = checkpoint.to_dict()
     store.save(state)
 
     with (
@@ -107,6 +112,7 @@ def test_start_crash_recovery(tmp_path: Path) -> None:
     state = StateStore(state_dir).load()
     assert state.mode == OrchestratorMode.running
     assert state.active_issue_id is None  # cleared by crash recovery
+    assert state.active_run is None
 
 
 def test_start_refuses_when_locked(tmp_path: Path) -> None:

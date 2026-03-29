@@ -11,7 +11,7 @@ from textual.widgets import DataTable
 
 from amp_orchestrator.config import OrchestratorConfig
 from amp_orchestrator.queue import BdIssue
-from amp_orchestrator.state import OrchestratorMode, OrchestratorState, StateStore
+from amp_orchestrator.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
 from amp_orchestrator.tui.app import OrchestratorApp
 from amp_orchestrator.tui.snapshot import DashboardSnapshot
 from amp_orchestrator.tui.widgets import (
@@ -53,13 +53,15 @@ async def test_app_has_all_panels() -> None:
 async def test_apply_snapshot_running() -> None:
     app = OrchestratorApp()
     async with app.run_test() as pilot:
+        checkpoint = RunCheckpoint(
+            issue_id="bz1", issue_title="Fix widget",
+            branch="amp/bz1-fix", worktree_path="/tmp/wt",
+            stage=RunStage.amp_running,
+        )
         snap = _make_snap(
             state=OrchestratorState(
                 mode=OrchestratorMode.running,
-                active_issue_id="bz1",
-                active_issue_title="Fix widget",
-                active_branch="amp/bz1-fix",
-                active_worktree_path="/tmp/wt",
+                active_run=checkpoint.to_dict(),
                 last_completed_issue="bz0",
             ),
             ready_issues=[
