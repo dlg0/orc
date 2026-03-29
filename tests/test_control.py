@@ -39,7 +39,11 @@ def test_pause_from_idle_fails(tmp_path: Path) -> None:
 
 def test_resume_from_paused(tmp_path: Path) -> None:
     state_dir = _setup(tmp_path, OrchestratorMode.paused)
-    resume_orchestrator(state_dir)
+    with (
+        patch("amp_orchestrator.control.load_config"),
+        patch("amp_orchestrator.control.run_loop"),
+    ):
+        resume_orchestrator(tmp_path, state_dir)
     state = StateStore(state_dir).load()
     assert state.mode == OrchestratorMode.running
 
@@ -47,7 +51,7 @@ def test_resume_from_paused(tmp_path: Path) -> None:
 def test_resume_from_idle_fails(tmp_path: Path) -> None:
     state_dir = _setup(tmp_path, OrchestratorMode.idle)
     with pytest.raises(Exception, match="Cannot resume"):
-        resume_orchestrator(state_dir)
+        resume_orchestrator(tmp_path, state_dir)
 
 
 def test_stop_from_running(tmp_path: Path) -> None:

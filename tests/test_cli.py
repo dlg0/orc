@@ -23,7 +23,7 @@ def test_help_shows_all_commands() -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["--help"])
     assert result.exit_code == 0
-    for cmd in ["status", "start", "pause", "resume", "stop", "inspect", "logs", "init-config"]:
+    for cmd in ["status", "start", "pause", "resume", "stop", "inspect", "logs", "init-config", "tui"]:
         assert cmd in result.output
 
 
@@ -150,19 +150,21 @@ def test_stop_from_running(tmp_path: Path) -> None:
 
 
 def test_resume_from_paused(tmp_path: Path) -> None:
+    _make_project(tmp_path)
     state_dir = tmp_path / ".amp-orchestrator"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     store.save(OrchestratorState(mode=OrchestratorMode.paused))
 
-    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+    from amp_orchestrator.config import ProjectContext
+
+    with (
+        patch("amp_orchestrator.cli.detect_project", return_value=ProjectContext(repo_root=tmp_path, has_git=True, has_beads=True)),
+        patch("amp_orchestrator.cli.resume_orchestrator"),
+    ):
         runner = CliRunner()
         result = runner.invoke(main, ["resume"])
         assert result.exit_code == 0
-        assert "resumed" in result.output.lower()
-
-        reloaded = store.load()
-        assert reloaded.mode == OrchestratorMode.running
 
 
 def test_logs_empty(tmp_path: Path) -> None:

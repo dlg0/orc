@@ -75,8 +75,10 @@ def pause() -> None:
 @main.command()
 def resume() -> None:
     """Continue from paused state."""
-    state_dir = _get_state_dir()
-    resume_orchestrator(state_dir)
+    project = detect_project()
+    repo_root = project.repo_root
+    state_dir = repo_root / CONFIG_DIR
+    resume_orchestrator(repo_root, state_dir)
 
 
 @main.command()
@@ -134,6 +136,15 @@ def logs(tail: int) -> None:
         if data:
             line += f"  {data}"
         click.echo(line)
+
+
+@main.command()
+def tui() -> None:
+    """Launch the TUI dashboard."""
+    from amp_orchestrator.tui.app import OrchestratorApp
+
+    app = OrchestratorApp()
+    app.run()
 
 
 @main.command("init-config")

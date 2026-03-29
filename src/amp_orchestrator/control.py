@@ -104,8 +104,11 @@ def pause_orchestrator(state_dir: Path) -> None:
     click.echo("Pause requested — will pause after current issue completes")
 
 
-def resume_orchestrator(state_dir: Path) -> None:
+def resume_orchestrator(repo_root: Path, state_dir: Path) -> None:
     """Resume from paused state.
+
+    Transitions to running, loads config, creates a runner, and enters the
+    scheduler loop.  Handles unexpected failures by transitioning to error.
 
     Raises ``click.ClickException`` if not in ``paused`` state.
     """
@@ -117,10 +120,24 @@ def resume_orchestrator(state_dir: Path) -> None:
             f"Cannot resume from {state.mode.value} state (must be paused)"
         )
 
-    store.transition(state, OrchestratorMode.running)
-    events = EventLog(state_dir)
-    events.record(EventType.state_changed, {"from": "paused", "to": "running"})
-    click.echo("Orchestrator resumed")
+    try:
+        store.transition(state, OrchestratorMode.running)
+        events = EventLog(state_dir)
+        events.record(EventType.state_changed, {"from": "paused", "to": "running"})
+        click.echo("Orchestrator resumed")
+
+        config = load_config(repo_root)
+        runner = StubAmpRunner()  # TODO: replace with RealAmpRunner
+        run_loop(repo_root, state_dir, config, runner)
+    except Exception:
+        try:
+            store = StateStore(state_dir)
+            state = store.load()
+            if state.mode == OrchestratorMode.running:
+                store.transition(state, OrchestratorMode.error)
+        except Exception:
+            pass
+        raise
 
 
 def stop_orchestrator(state_dir: Path) -> None:
