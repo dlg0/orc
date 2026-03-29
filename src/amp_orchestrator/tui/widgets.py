@@ -104,14 +104,17 @@ class SummaryStrip(Static):
         if err_count:
             parts.append(f"[bold red]{err_count} error{'s' if err_count != 1 else ''}[/]")
 
-        # Last refresh time
+        # Last refresh time (convert UTC ISO timestamp to local time)
         try:
-            ts = snap.recent_events[-1].get("timestamp", "") if snap.recent_events else ""
-            if "T" in ts:
-                ts = ts.split("T")[1][:8]
-            if ts:
-                parts.append(f"[italic]updated {ts}[/]")
-        except (IndexError, AttributeError):
+            ts_raw = snap.recent_events[-1].get("timestamp", "") if snap.recent_events else ""
+            if ts_raw and "T" in ts_raw:
+                from datetime import datetime as _dt, timezone as _tz
+                utc_dt = _dt.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                local_str = utc_dt.astimezone().strftime("%H:%M:%S")
+                parts.append(f"[italic]updated {local_str}[/]")
+            elif ts_raw:
+                parts.append(f"[italic]updated {ts_raw}[/]")
+        except (IndexError, AttributeError, ValueError):
             pass
 
         self.query_one("#summary-strip-text", Label).update(" | ".join(parts))
@@ -425,14 +428,14 @@ class StatusPanel(Static):
 
     def update_last_refreshed(self, ts: datetime) -> None:
         """Update the 'Last refresh' display with the given timestamp."""
-        time_str = ts.strftime("%H:%M:%S")
+        time_str = ts.astimezone().strftime("%H:%M:%S")
         self.query_one("#last-updated", Label).update(
             f"[italic]Last refresh: {time_str}[/]"
         )
 
     def update_queue_last_refreshed(self, ts: datetime) -> None:
         """Update the 'Queue last refreshed' display with the given timestamp."""
-        time_str = ts.strftime("%H:%M:%S")
+        time_str = ts.astimezone().strftime("%H:%M:%S")
         self.query_one("#queue-last-refreshed", Label).update(
             f"[italic]Queue last refreshed: {time_str}[/]"
         )
