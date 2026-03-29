@@ -1,5 +1,21 @@
-
-# Beads / Dolt files (added by bd init)
+.DS_Store
+.python-version
+.venv/
+dist/
+build/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 .dolt/
 *.db
 .beads-credential-key
+
+# Local orchestrator runtime state
+.amp-orchestrator/
+
+# Temporary worktree parent used by the orchestrator
+.worktrees/
