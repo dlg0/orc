@@ -17,6 +17,7 @@ from amp_orchestrator.tui.widgets import (
     NO_PROJECT_PLACEHOLDER,
     _ACTION_ENABLED,
     _event_severity,
+    _format_run_timestamp,
     _human_message,
     ActiveIssuePanel,
     ConfigPanel,
@@ -324,3 +325,47 @@ def test_events_log_format_entry_includes_severity_prefix() -> None:
 def test_human_message(event_type: str, data: dict | None, expected_substring: str) -> None:
     result = _human_message(event_type, data)
     assert expected_substring in result
+
+
+# --- _format_run_timestamp tests ---
+
+
+def test_format_run_timestamp_old_date_shows_datetime() -> None:
+    result = _format_run_timestamp("2024-01-15T09:30:00Z")
+    assert result == "2024-01-15 09:30"
+
+
+def test_format_run_timestamp_recent_shows_relative() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    recent = datetime.now(timezone.utc) - timedelta(minutes=5)
+    ts = recent.isoformat()
+    result = _format_run_timestamp(ts)
+    assert result == "5m ago"
+
+
+def test_format_run_timestamp_hours_ago() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    recent = datetime.now(timezone.utc) - timedelta(hours=3)
+    ts = recent.isoformat()
+    result = _format_run_timestamp(ts)
+    assert result == "3h ago"
+
+
+def test_format_run_timestamp_just_now() -> None:
+    from datetime import datetime, timezone
+
+    recent = datetime.now(timezone.utc)
+    ts = recent.isoformat()
+    result = _format_run_timestamp(ts)
+    assert result == "just now"
+
+
+def test_format_run_timestamp_invalid_returns_original() -> None:
+    assert _format_run_timestamp("not-a-date") == "not-a-date"
+
+
+def test_format_run_timestamp_no_timezone_suffix() -> None:
+    result = _format_run_timestamp("2024-06-01T14:30:00+00:00")
+    assert result == "2024-06-01 14:30"
