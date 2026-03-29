@@ -523,9 +523,9 @@ def test_queue_table_has_sort_and_filter_bindings() -> None:
 
 
 def test_history_table_failed_only_filter() -> None:
-    """_apply_filters with failed_only should only keep failed/error runs."""
+    """_apply_filters with result_filter='failed' should only keep failed/error runs."""
     table = HistoryTable()
-    table._failed_only = True
+    table._result_filter = "failed"
     runs = [
         {"issue_id": "A-1", "result": "completed"},
         {"issue_id": "A-2", "result": "failed"},
@@ -550,9 +550,9 @@ def test_history_table_filter_by_issue_id() -> None:
 
 
 def test_history_table_combined_filters() -> None:
-    """Both failed_only and filter_text should stack."""
+    """Both result_filter and filter_text should stack."""
     table = HistoryTable()
-    table._failed_only = True
+    table._result_filter = "failed"
     table._filter_text = "a-2"
     runs = [
         {"issue_id": "A-1", "result": "failed"},
@@ -577,11 +577,83 @@ def test_history_table_no_filters_returns_all() -> None:
 
 
 def test_history_table_has_filter_bindings() -> None:
-    """HistoryTable should have bindings for failed-only (f) and filter (/)."""
+    """HistoryTable should have bindings for result filter (f) and filter (/)."""
     table = HistoryTable()
     binding_keys = [b.key for b in table.BINDINGS]
     assert "f" in binding_keys
     assert "slash" in binding_keys
+
+
+def test_history_table_result_filter_modes() -> None:
+    """HistoryTable should cycle through four result filter modes."""
+    table = HistoryTable()
+    assert table._result_filter == "all"
+    modes = HistoryTable._RESULT_FILTER_MODES
+    assert modes == ("all", "failed", "needs_rework", "completed")
+
+
+def test_history_table_completed_filter() -> None:
+    """result_filter='completed' should only keep completed runs."""
+    table = HistoryTable()
+    table._result_filter = "completed"
+    runs = [
+        {"issue_id": "A-1", "result": "completed"},
+        {"issue_id": "A-2", "result": "failed"},
+        {"issue_id": "A-3", "result": "completed"},
+        {"issue_id": "A-4", "result": "needs_human"},
+    ]
+    filtered = table._apply_filters(runs)
+    assert [r["issue_id"] for r in filtered] == ["A-1", "A-3"]
+
+
+def test_history_table_needs_rework_filter() -> None:
+    """result_filter='needs_rework' should match needs_rework/needs_human results."""
+    table = HistoryTable()
+    table._result_filter = "needs_rework"
+    runs = [
+        {"issue_id": "A-1", "result": "completed"},
+        {"issue_id": "A-2", "result": "needs_rework"},
+        {"issue_id": "A-3", "result": "needs_human"},
+        {"issue_id": "A-4", "result": "failed"},
+    ]
+    filtered = table._apply_filters(runs)
+    assert [r["issue_id"] for r in filtered] == ["A-2", "A-3"]
+
+
+# --- EventsLog filter tests ---
+
+
+def test_events_log_has_errors_only_binding() -> None:
+    """EventsLog should have a binding for error-only toggle (e)."""
+    log = EventsLog()
+    binding_keys = [b.key for b in log.BINDINGS]
+    assert "e" in binding_keys
+
+
+def test_events_log_filter_events_all() -> None:
+    """With errors_only=False, all events should pass through."""
+    log = EventsLog()
+    events = [
+        {"event_type": "amp_started", "timestamp": "2025-01-01T00:00:00Z"},
+        {"event_type": "error", "timestamp": "2025-01-01T00:01:00Z"},
+    ]
+    assert log._filter_events(events) == events
+
+
+def test_events_log_filter_events_errors_only() -> None:
+    """With errors_only=True, only ERR-severity events should pass."""
+    log = EventsLog()
+    log._errors_only = True
+    events = [
+        {"event_type": "amp_started", "timestamp": "2025-01-01T00:00:00Z"},
+        {"event_type": "error", "timestamp": "2025-01-01T00:01:00Z"},
+        {"event_type": "amp_finished", "timestamp": "2025-01-01T00:02:00Z"},
+        {"event_type": "conflict_detected", "timestamp": "2025-01-01T00:03:00Z"},
+    ]
+    filtered = log._filter_events(events)
+    assert len(filtered) == 2
+    assert filtered[0]["event_type"] == "error"
+    assert filtered[1]["event_type"] == "conflict_detected"
 
 
 def test_mode_styles_use_high_contrast_colors() -> None:

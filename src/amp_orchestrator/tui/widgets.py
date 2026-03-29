@@ -955,7 +955,7 @@ class QueueTable(Static):
 
 
 class EventsLog(Static):
-    """Live events log with delta-based appending."""
+    """Live events log with delta-based appending and error-only toggle."""
 
     DEFAULT_CSS = """
     EventsLog {
@@ -970,10 +970,16 @@ class EventsLog(Static):
 
     can_focus = True
 
+    BINDINGS = [
+        Binding("e", "toggle_errors_only", "Errors only", show=True),
+    ]
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._seen_count: int = 0
         self._last_event_keys: list[str] = []
+        self._errors_only: bool = False
+        self._all_events: list[dict] = []
 
     @staticmethod
     def _event_key(entry: dict) -> str:
@@ -992,8 +998,14 @@ class EventsLog(Static):
         message = _human_message(etype, data)
         return f"[italic]{ts}[/] [{sev_style}][{severity}][/] [{color}]{message}[/]"
 
+    def _filter_events(self, events: list[dict]) -> list[dict]:
+        """Filter events based on current error-only setting."""
+        if not self._errors_only:
+            return events
+        return [e for e in events if _event_severity(e.get("event_type", "")) == "ERR"]
+
     def compose(self) -> ComposeResult:
-        yield Label("Events", classes="panel-title")
+        yield Label("Events (e errors only)", classes="panel-title")
         yield RichLog(id="events-richlog", wrap=True, max_lines=200)
 
     def show_no_project(self) -> None:
@@ -1001,17 +1013,38 @@ class EventsLog(Static):
         log.clear()
         log.write(NO_PROJECT_PLACEHOLDER)
 
+    def _rebuild_log(self) -> None:
+        """Re-render the log with the current filter."""
+        log = self.query_one("#events-richlog", RichLog)
+        log.clear()
+        filtered = self._filter_events(self._all_events)
+        if not filtered:
+            if self._errors_only:
+                log.write("[italic]No error events[/]")
+            else:
+                log.write("[italic]No events yet[/]")
+            return
+        for entry in filtered:
+            log.write(self._format_entry(entry))
+
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         log = self.query_one("#events-richlog", RichLog)
         new_keys = [self._event_key(e) for e in snap.recent_events]
         if new_keys == self._last_event_keys:
             return
+        self._all_events = list(snap.recent_events)
         if not snap.recent_events:
             if self._last_event_keys:
                 log.clear()
                 log.write("[italic]No events yet[/]")
                 self._last_event_keys = []
                 self._seen_count = 0
+            return
+        # When errors_only is active, always do a full rebuild
+        if self._errors_only:
+            self._last_event_keys = new_keys
+            self._seen_count = len(snap.recent_events)
+            self._rebuild_log()
             return
         # If the log was empty or events were reset, do a full write
         if not self._last_event_keys or new_keys[: len(self._last_event_keys)] != self._last_event_keys:
@@ -1025,11 +1058,24 @@ class EventsLog(Static):
         self._last_event_keys = new_keys
         self._seen_count = len(snap.recent_events)
 
+    def action_toggle_errors_only(self) -> None:
+        """Toggle error-only event filter."""
+        self._errors_only = not self._errors_only
+        label = "Events"
+        if self._errors_only:
+            label += " [bold red][ERRORS ONLY][/]"
+        label += " (e errors only)"
+        self.query_one(".panel-title", Label).update(label)
+        self._rebuild_log()
+
 
 class HistoryTable(Static):
-    """Run history table with failed-only filter and search."""
+    """Run history table with result-type filter cycling and search."""
 
     _FAILED_RESULTS = frozenset({"failed", "error"})
+    _NEEDS_REWORK_RESULTS = frozenset({"needs_rework", "needs_human"})
+    # Cycle: all → failed → needs_rework → completed
+    _RESULT_FILTER_MODES = ("all", "failed", "needs_rework", "completed")
 
     DEFAULT_CSS = """
     HistoryTable {
@@ -1054,7 +1100,7 @@ class HistoryTable(Static):
     BINDINGS = [
         Binding("enter", "inspect", "Inspect", show=True),
         Binding("i", "inspect", "Inspect", show=False),
-        Binding("f", "toggle_failed_only", "Failed only", show=True),
+        Binding("f", "cycle_result_filter", "Result filter", show=True),
         Binding("slash", "toggle_filter", "Filter", show=True),
     ]
 
@@ -1064,11 +1110,11 @@ class HistoryTable(Static):
         self._filtered_runs: list[dict] = []
         self._row_key: list[str] = []
         self._last_snap: DashboardSnapshot | None = None
-        self._failed_only: bool = False
+        self._result_filter: str = "all"
         self._filter_text: str = ""
 
     def compose(self) -> ComposeResult:
-        yield Label("Run History (Enter/i inspect, f failed, / filter)", classes="panel-title")
+        yield Label("Run History (Enter/i inspect, f result filter, / filter)", classes="panel-title")
         yield Input(placeholder="Filter by issue ID…", id="history-filter", classes="filter-bar")
         yield DataTable(id="history-datatable", cursor_type="row")
 
@@ -1092,14 +1138,30 @@ class HistoryTable(Static):
         return f"{run.get('timestamp', '')}:{run.get('issue_id', '')}:{run.get('result', '')}"
 
     def _apply_filters(self, runs: list[dict]) -> list[dict]:
-        """Apply failed-only and text filters."""
+        """Apply result-type and text filters."""
         result = runs
-        if self._failed_only:
+        if self._result_filter == "failed":
             result = [r for r in result if r.get("result", "") in self._FAILED_RESULTS]
+        elif self._result_filter == "needs_rework":
+            result = [r for r in result if r.get("result", "") in self._NEEDS_REWORK_RESULTS
+                      or self._has_rework_category(r)]
+        elif self._result_filter == "completed":
+            result = [r for r in result if r.get("result", "") == "completed"]
         if self._filter_text:
             needle = self._filter_text.lower()
             result = [r for r in result if needle in r.get("issue_id", "").lower()]
         return result
+
+    def _has_rework_category(self, run: dict) -> bool:
+        """Check if a run's issue has a needs_rework failure category."""
+        snap = self._last_snap
+        if not snap:
+            return False
+        issue_id = run.get("issue_id", "")
+        failure_info = snap.state.issue_failures.get(issue_id)
+        if failure_info and isinstance(failure_info, dict):
+            return failure_info.get("category", "") == "issue_needs_rework"
+        return False
 
     def _rebuild_table(self) -> None:
         """Re-render the table with current filters."""
@@ -1109,7 +1171,7 @@ class HistoryTable(Static):
         self._filtered_runs = self._apply_filters(self._runs)
         table.clear()
         if not self._filtered_runs:
-            if self._failed_only or self._filter_text:
+            if self._result_filter != "all" or self._filter_text:
                 table.add_row("-", "-", "[italic]No matching runs[/]", "-", "-")
             else:
                 table.add_row("-", "-", "[italic]No run history[/]", "-", "-")
@@ -1160,13 +1222,18 @@ class HistoryTable(Static):
         self._last_snap = snap
         self._rebuild_table()
 
-    def action_toggle_failed_only(self) -> None:
-        """Toggle failed-only filter."""
-        self._failed_only = not self._failed_only
-        label = "Run History"
-        if self._failed_only:
-            label += " [bold red][FAILED ONLY][/]"
-        label += " (f failed, / filter)"
+    def action_cycle_result_filter(self) -> None:
+        """Cycle through result filter modes: all → failed → needs_rework → completed."""
+        idx = self._RESULT_FILTER_MODES.index(self._result_filter)
+        self._result_filter = self._RESULT_FILTER_MODES[(idx + 1) % len(self._RESULT_FILTER_MODES)]
+        filter_labels = {
+            "all": "",
+            "failed": " [bold red][FAILED ONLY][/]",
+            "needs_rework": " [bold bright_yellow][NEEDS REWORK][/]",
+            "completed": " [bold green][COMPLETED][/]",
+        }
+        label = "Run History" + filter_labels[self._result_filter]
+        label += " (f result filter, / filter)"
         self.query_one(".panel-title", Label).update(label)
         self._row_key = []  # force re-render
         self._rebuild_table()
