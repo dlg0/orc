@@ -10,6 +10,7 @@ from amp_orchestrator.queue import (
     claim_issue,
     get_children_all_closed,
     get_issue_parent,
+    get_issue_status,
     get_ready_issues,
     select_next_issue,
     unclaim_issue,
@@ -263,6 +264,32 @@ class TestGetIssueParent:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = json.dumps(data)
             get_issue_parent("c", cwd=tmp_path)
+            assert mock_run.call_args[1]["cwd"] == tmp_path
+
+
+class TestGetIssueStatus:
+    def test_returns_status(self) -> None:
+        import json
+
+        data = [{"id": "issue-1", "status": "closed"}]
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json.dumps(data)
+            assert get_issue_status("issue-1") == "closed"
+
+    def test_returns_none_on_failure(self) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            assert get_issue_status("issue-1") is None
+
+    def test_passes_cwd(self, tmp_path) -> None:
+        import json
+
+        data = [{"id": "issue-1", "status": "open"}]
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json.dumps(data)
+            get_issue_status("issue-1", cwd=tmp_path)
             assert mock_run.call_args[1]["cwd"] == tmp_path
 
 
