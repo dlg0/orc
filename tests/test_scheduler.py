@@ -7,13 +7,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from amp_orchestrator.amp_runner import AmpResult, ResultType, StubAmpRunner
-from amp_orchestrator.config import OrchestratorConfig
-from amp_orchestrator.evaluator import StubEvaluator
-from amp_orchestrator.events import EventLog
-from amp_orchestrator.queue import BdIssue, QueueResult
-from amp_orchestrator.scheduler import run_loop
-from amp_orchestrator.state import (
+from orc.amp_runner import AmpResult, ResultType, StubAmpRunner
+from orc.config import OrchestratorConfig
+from orc.evaluator import StubEvaluator
+from orc.events import EventLog
+from orc.queue import BdIssue, QueueResult
+from orc.scheduler import run_loop
+from orc.state import (
     FailureAction,
     FailureCategory,
     IssueFailure,
@@ -27,7 +27,7 @@ from amp_orchestrator.state import (
 
 @pytest.fixture()
 def state_dir(tmp_path: Path) -> Path:
-    d = tmp_path / ".amp-orchestrator"
+    d = tmp_path / ".orc"
     d.mkdir()
     return d
 
@@ -55,7 +55,7 @@ def test_empty_queue_goes_idle(repo_root: Path, state_dir: Path) -> None:
     config = OrchestratorConfig()
     runner = StubAmpRunner()
 
-    with patch("amp_orchestrator.scheduler.get_ready_issues", return_value=QueueResult()):
+    with patch("orc.scheduler.get_ready_issues", return_value=QueueResult()):
         run_loop(repo_root, state_dir, config, runner)
 
     state = StateStore(state_dir).load()
@@ -109,9 +109,9 @@ def test_processes_issue_with_stub(repo_root: Path, state_dir: Path) -> None:
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -144,9 +144,9 @@ def test_decomposed_issue_skips_merge(repo_root: Path, state_dir: Path) -> None:
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge") as mock_merge,
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge") as mock_merge,
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -193,9 +193,9 @@ def test_failed_issue_continues_to_next(repo_root: Path, state_dir: Path) -> Non
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, fail_runner)
 
@@ -230,9 +230,9 @@ def test_events_are_recorded(repo_root: Path, state_dir: Path) -> None:
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -271,9 +271,9 @@ def test_evaluation_pass_proceeds_to_merge(repo_root: Path, state_dir: Path) -> 
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner, evaluator=evaluator)
 
@@ -307,9 +307,9 @@ def test_evaluation_fail_blocks_merge(repo_root: Path, state_dir: Path) -> None:
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner, evaluator=evaluator)
 
@@ -347,9 +347,9 @@ def test_evaluation_crash_treated_as_fail(repo_root: Path, state_dir: Path) -> N
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner, evaluator=crash_evaluator)
 
@@ -383,9 +383,9 @@ def test_no_evaluator_skips_evaluation(repo_root: Path, state_dir: Path) -> None
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -420,9 +420,9 @@ def test_evaluation_events_recorded(repo_root: Path, state_dir: Path) -> None:
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner, evaluator=evaluator)
 
@@ -455,9 +455,9 @@ def test_evaluation_failure_persists_needs_rework(repo_root: Path, state_dir: Pa
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge"),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge"),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner, evaluator=evaluator)
 
@@ -495,10 +495,10 @@ def test_claim_issue_called_before_amp(repo_root: Path, state_dir: Path) -> None
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
-        patch("amp_orchestrator.scheduler.claim_issue", return_value=True) as mock_claim,
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.claim_issue", return_value=True) as mock_claim,
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -530,10 +530,10 @@ def test_claim_failure_still_runs_amp(repo_root: Path, state_dir: Path) -> None:
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
-        patch("amp_orchestrator.scheduler.claim_issue", return_value=False),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.claim_issue", return_value=False),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -576,9 +576,9 @@ def test_needs_rework_skipped_on_restart(repo_root: Path, state_dir: Path) -> No
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config=OrchestratorConfig(), runner=runner_mock)
 
@@ -607,8 +607,8 @@ def test_worktree_failure_oserror_records_transient_external(repo_root: Path, st
     mock_worktree_mgr.return_value.create_worktree.side_effect = OSError("disk full")
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -638,8 +638,8 @@ def test_worktree_failure_non_oserror_records_fatal(repo_root: Path, state_dir: 
     mock_worktree_mgr.return_value.create_worktree.side_effect = RuntimeError("git error")
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -672,8 +672,8 @@ def test_amp_crash_records_issue_needs_rework(repo_root: Path, state_dir: Path) 
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, crash_runner)
 
@@ -705,8 +705,8 @@ def test_blocked_result_records_blocked_by_dependency(repo_root: Path, state_dir
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -737,9 +737,9 @@ def test_decomposed_records_blocked_by_dependency(repo_root: Path, state_dir: Pa
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge") as mock_merge,
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge") as mock_merge,
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -775,9 +775,9 @@ def test_merge_conflict_preserves_worktree(repo_root: Path, state_dir: Path) -> 
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -817,9 +817,9 @@ def test_merge_non_conflict_failure_cleans_worktree(repo_root: Path, state_dir: 
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -875,9 +875,9 @@ def test_successful_completion_clears_failure(repo_root: Path, state_dir: Path) 
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config=OrchestratorConfig(), runner=runner)
 
@@ -906,8 +906,8 @@ def test_queue_failure_does_not_transition_idle(repo_root: Path, state_dir: Path
         return QueueResult()
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.time.sleep"),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.time.sleep"),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -945,10 +945,10 @@ def test_queue_failure_retries_before_continuing(repo_root: Path, state_dir: Pat
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
-        patch("amp_orchestrator.scheduler.time.sleep") as mock_sleep,
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.time.sleep") as mock_sleep,
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -997,8 +997,8 @@ def test_failure_increments_attempts(repo_root: Path, state_dir: Path) -> None:
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config=OrchestratorConfig(), runner=runner)
 
@@ -1033,8 +1033,8 @@ def test_failed_and_needs_human_record_issue_needs_rework(repo_root: Path, state
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -1068,8 +1068,8 @@ def test_completed_no_merge_records_issue_needs_rework(repo_root: Path, state_di
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -1103,8 +1103,8 @@ def test_fail_fast_stops_on_failed_issue(repo_root: Path, state_dir: Path) -> No
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner, fail_fast=True)
 
@@ -1144,9 +1144,9 @@ def test_fail_fast_stops_on_merge_failure(repo_root: Path, state_dir: Path) -> N
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner, fail_fast=True)
 
@@ -1179,8 +1179,8 @@ def test_fail_fast_stops_on_evaluation_failure(repo_root: Path, state_dir: Path)
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner, evaluator=evaluator, fail_fast=True)
 
@@ -1208,8 +1208,8 @@ def test_fail_fast_from_config(repo_root: Path, state_dir: Path) -> None:
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -1236,8 +1236,8 @@ def test_fail_fast_records_event(repo_root: Path, state_dir: Path) -> None:
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner, fail_fast=True)
 
@@ -1292,9 +1292,9 @@ def test_resume_candidate_amp_running_success(repo_root: Path, state_dir: Path) 
     mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = True
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", return_value=QueueResult()),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", return_value=QueueResult()),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
 
@@ -1327,9 +1327,9 @@ def test_resume_candidate_amp_finished_skips_to_merge(repo_root: Path, state_dir
     mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = True
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", return_value=QueueResult()),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", return_value=QueueResult()),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
 
@@ -1356,9 +1356,9 @@ def test_resume_candidate_ready_to_merge_skips_amp_and_eval(repo_root: Path, sta
     mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = True
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", return_value=QueueResult()),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", return_value=QueueResult()),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
 
@@ -1381,9 +1381,9 @@ def test_resume_candidate_no_worktree_discards(repo_root: Path, state_dir: Path)
     mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = False
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", return_value=QueueResult()),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
-        patch("amp_orchestrator.scheduler.unclaim_issue", return_value=True),
+        patch("orc.scheduler.get_ready_issues", return_value=QueueResult()),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.unclaim_issue", return_value=True),
     ):
         run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
 
@@ -1409,9 +1409,9 @@ def test_resume_records_events(repo_root: Path, state_dir: Path) -> None:
     mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = True
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", return_value=QueueResult()),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_ready_issues", return_value=QueueResult()),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
 
@@ -1455,11 +1455,11 @@ def test_parent_promoted_after_last_child_closes(repo_root: Path, state_dir: Pat
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
-        patch("amp_orchestrator.scheduler.get_issue_parent", return_value="parent-1"),
-        patch("amp_orchestrator.scheduler.get_children_all_closed", return_value=True),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_issue_parent", return_value="parent-1"),
+        patch("orc.scheduler.get_children_all_closed", return_value=True),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -1503,11 +1503,11 @@ def test_no_promotion_when_siblings_still_open(repo_root: Path, state_dir: Path)
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
-        patch("amp_orchestrator.scheduler.get_issue_parent", return_value="parent-1"),
-        patch("amp_orchestrator.scheduler.get_children_all_closed", return_value=False),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_issue_parent", return_value="parent-1"),
+        patch("orc.scheduler.get_children_all_closed", return_value=False),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -1545,10 +1545,10 @@ def test_no_promotion_when_no_parent(repo_root: Path, state_dir: Path) -> None:
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
-        patch("amp_orchestrator.scheduler.get_issue_parent", return_value=None),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_issue_parent", return_value=None),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
@@ -1597,11 +1597,11 @@ def test_promotion_clears_parent_failure_record(repo_root: Path, state_dir: Path
     mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
 
     with (
-        patch("amp_orchestrator.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("amp_orchestrator.scheduler.verify_and_merge", mock_merge),
-        patch("amp_orchestrator.scheduler.WorktreeManager", mock_worktree_mgr),
-        patch("amp_orchestrator.scheduler.get_issue_parent", return_value="parent-1"),
-        patch("amp_orchestrator.scheduler.get_children_all_closed", return_value=True),
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_issue_parent", return_value="parent-1"),
+        patch("orc.scheduler.get_children_all_closed", return_value=True),
     ):
         run_loop(repo_root, state_dir, config, runner)
 

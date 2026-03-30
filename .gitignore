@@ -15,7 +15,7 @@ htmlcov/
 .beads-credential-key
 
 # Local orchestrator runtime state
-.amp-orchestrator/
+.orc/
 
 # Temporary worktree parent used by the orchestrator
 .worktrees/

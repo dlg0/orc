@@ -1,6 +1,6 @@
 # Research: Fast/Cheap Thread Summary Extraction
 
-**Issue:** amp-orchestrator-9n4  
+**Issue:** orc-9n4  
 **Date:** 2026-03-29  
 **Status:** Investigation complete
 
@@ -170,7 +170,7 @@ a polished one-line summary. This gives:
 ### Configuration addition
 
 ```yaml
-# .amp-orchestrator/config.yaml
+# .orc/config.yaml
 summary_mode: "self-report"  # "self-report" | "rush-extract" | "stream-json"
 summary_amp_mode: "rush"     # mode for rush-extract approach
 ```

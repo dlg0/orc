@@ -1,4 +1,4 @@
-"""Dashboard widgets for the amp-orchestrator TUI."""
+"""Dashboard widgets for the orc TUI."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DataTable, Input, Label, RichLog, Static
 
-from amp_orchestrator.config import OrchestratorConfig
-from amp_orchestrator.queue import BdIssue
-from amp_orchestrator.state import OrchestratorMode
-from amp_orchestrator.tui.snapshot import DashboardSnapshot
+from orc.config import OrchestratorConfig
+from orc.queue import BdIssue
+from orc.state import OrchestratorMode
+from orc.tui.snapshot import DashboardSnapshot
 
 MODE_STYLES: dict[OrchestratorMode, tuple[str, str]] = {
     OrchestratorMode.running: ("bold green", "● RUN"),
@@ -292,7 +292,7 @@ class ErrorAlert(Static):
     def action_inspect_error(self) -> None:
         if not self._full_error:
             return
-        from amp_orchestrator.tui.modals import InspectModal
+        from orc.tui.modals import InspectModal
 
         self.app.push_screen(
             InspectModal(title="Error Details", body=self._full_error)
@@ -650,7 +650,7 @@ class HeldIssuesTable(Static):
                 lines.append(f"[bold]Worktree:[/] {info['worktree_path']}")
             if info.get("summary"):
                 lines.append(f"\n[bold]Summary:[/]\n{info['summary']}")
-        from amp_orchestrator.tui.modals import CopyableField, InspectModal
+        from orc.tui.modals import CopyableField, InspectModal
 
         copyable: list[CopyableField] = []
         if isinstance(info, dict):
@@ -672,7 +672,7 @@ class HeldIssuesTable(Static):
         if row_idx < 0 or row_idx >= len(self._held_items):
             return
         issue_id, _info = self._held_items[row_idx]
-        from amp_orchestrator.tui.modals import ConfirmRetryModal
+        from orc.tui.modals import ConfirmRetryModal
 
         self.app.push_screen(ConfirmRetryModal(issue_id), self._on_retry_confirmed)
 
@@ -764,7 +764,7 @@ class ActiveIssuePanel(Static):
             lines.append(f"[bold]Branch:[/] {state.active_branch}")
         if state.active_worktree_path:
             lines.append(f"[bold]Worktree:[/] {state.active_worktree_path}")
-        from amp_orchestrator.tui.modals import CopyableField, InspectModal
+        from orc.tui.modals import CopyableField, InspectModal
 
         copyable: list[CopyableField] = []
         if state.active_branch:
@@ -854,7 +854,7 @@ class ConfigPanel(Static):
                 lines.append(f"  • {cmd}")
         else:
             lines.append(f"\n[bold]Verification commands:[/] (none)")
-        from amp_orchestrator.tui.modals import InspectModal
+        from orc.tui.modals import InspectModal
 
         self.app.push_screen(InspectModal(title=title, body="\n".join(lines)))
 
@@ -987,7 +987,7 @@ class QueueTable(Static):
         if self._sort_mode == "age_oldest":
             return sorted(issues, key=lambda i: i.created)
         # Default: priority (lower number = higher priority, 0 treated as lowest)
-        from amp_orchestrator.queue import _sort_key
+        from orc.queue import _sort_key
         return sorted(issues, key=_sort_key)
 
     def _apply_filter(self, issues: list[BdIssue]) -> list[BdIssue]:
@@ -1070,7 +1070,7 @@ class QueueTable(Static):
             lines.append(
                 f"\n[bold]Acceptance Criteria:[/]\n{issue.acceptance_criteria}"
             )
-        from amp_orchestrator.tui.modals import InspectModal
+        from orc.tui.modals import InspectModal
 
         self.app.push_screen(InspectModal(title=title, body="\n".join(lines)))
 
@@ -1396,14 +1396,14 @@ class HistoryTable(Static):
         if run.get("worktree_path"):
             lines.append(f"[bold]Worktree:[/] {run['worktree_path']}")
         if run.get("thread_id"):
-            from amp_orchestrator.tui.modals import _THREAD_URL_PREFIX
+            from orc.tui.modals import _THREAD_URL_PREFIX
 
             thread_url = f"{_THREAD_URL_PREFIX}{run['thread_id']}"
             lines.append(f"[bold]Thread:[/] {run['thread_id']}")
             lines.append(f"[bold]Thread URL:[/] {thread_url}")
         if run.get("summary"):
             lines.append(f"\n[bold]Summary:[/]\n{run['summary']}")
-        from amp_orchestrator.tui.modals import CopyableField, InspectModal, _THREAD_URL_PREFIX
+        from orc.tui.modals import CopyableField, InspectModal, _THREAD_URL_PREFIX
 
         copyable: list[CopyableField] = []
         if run.get("thread_id"):

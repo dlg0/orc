@@ -38,11 +38,11 @@ cp -rf source dest          # NOT: cp -r source dest
 
 ## Testing in a Target Repository
 
-When testing `amp-orchestrator` against a real project (e.g., a testing repo), use `uvx --reinstall --from` to install and run the CLI from the local source tree. **Do NOT** activate or run from the `.venv` directly.
+When testing `orc` against a real project (e.g., a testing repo), use `uvx --reinstall --from` to install and run the CLI from the local source tree. **Do NOT** activate or run from the `.venv` directly.
 
 ```bash
-# Run amp-orchestrator from local source in the target repo
-uvx --reinstall --from /path/to/amp-orchestrator amp-orchestrator [args...]
+# Run orc from local source in the target repo
+uvx --reinstall --from /path/to/orc orc [args...]
 ```
 
 This ensures the tool is installed as a proper package (with correct entry points and dependencies) rather than relying on the development virtualenv, which may have path or isolation differences.

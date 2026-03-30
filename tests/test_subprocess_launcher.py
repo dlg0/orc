@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-from amp_orchestrator.subprocess_launcher import (
+from orc.subprocess_launcher import (
     is_orchestrator_running,
     launch_orchestrator,
 )
@@ -20,7 +20,7 @@ def test_launch_orchestrator_spawns_subprocess(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()
 
-    with patch("amp_orchestrator.subprocess_launcher.subprocess.Popen") as mock_popen:
+    with patch("orc.subprocess_launcher.subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.pid = 12345
         mock_popen.return_value = mock_proc
@@ -30,7 +30,7 @@ def test_launch_orchestrator_spawns_subprocess(tmp_path: Path) -> None:
         assert proc.pid == 12345
         call_args = mock_popen.call_args
         cmd = call_args[0][0]
-        assert cmd[1:] == ["-m", "amp_orchestrator.cli", "start"]
+        assert cmd[1:] == ["-m", "orc.cli", "start"]
         assert call_args[1]["cwd"] == str(repo_root)
         assert call_args[1]["start_new_session"] is True
 
@@ -42,7 +42,7 @@ def test_launch_orchestrator_resume(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()
 
-    with patch("amp_orchestrator.subprocess_launcher.subprocess.Popen") as mock_popen:
+    with patch("orc.subprocess_launcher.subprocess.Popen") as mock_popen:
         mock_popen.return_value = MagicMock(pid=99)
         launch_orchestrator("resume", repo_root, state_dir)
 
@@ -56,7 +56,7 @@ def test_launch_orchestrator_creates_state_dir(tmp_path: Path) -> None:
     repo_root.mkdir()
     state_dir = tmp_path / "state" / "nested"
 
-    with patch("amp_orchestrator.subprocess_launcher.subprocess.Popen") as mock_popen:
+    with patch("orc.subprocess_launcher.subprocess.Popen") as mock_popen:
         mock_popen.return_value = MagicMock(pid=1)
         launch_orchestrator("start", repo_root, state_dir)
 

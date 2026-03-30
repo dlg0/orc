@@ -1,10 +1,10 @@
-"""Tests for amp_orchestrator.state."""
+"""Tests for orc.state."""
 
 from __future__ import annotations
 
 import pytest
 
-from amp_orchestrator.state import (
+from orc.state import (
     can_retry_merge,
     FailureAction,
     FailureCategory,

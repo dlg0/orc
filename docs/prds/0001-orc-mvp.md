@@ -1,4 +1,4 @@
-# PRD: amp-orchestrator MVP
+# PRD: orc MVP
 
 ## Summary
 
@@ -71,8 +71,8 @@ The user runs the orchestrator from within the target project directory, for
 example:
 
 ```bash
-amp-orchestrator status
-amp-orchestrator start
+orc status
+orc start
 ```
 
 The orchestrator infers project context from the current working directory:
@@ -164,7 +164,7 @@ For each issue:
 
 Suggested local layout:
 
-- runtime state: `.amp-orchestrator/`
+- runtime state: `.orc/`
 - worktree parent: `.worktrees/<issue-id>/`
 
 ### Amp Worker Adapter
@@ -218,7 +218,7 @@ Store at minimum:
 - last error
 - event history
 
-The simplest acceptable MVP format is JSON files in `.amp-orchestrator/`.
+The simplest acceptable MVP format is JSON files in `.orc/`.
 
 ## MVP State Machine
 
@@ -249,14 +249,14 @@ The MVP must ship with a CLI. TUI support is optional and may come later.
 Required commands:
 
 ```text
-amp-orchestrator init-config
-amp-orchestrator status
-amp-orchestrator start
-amp-orchestrator pause
-amp-orchestrator resume
-amp-orchestrator stop
-amp-orchestrator inspect ISSUE_ID
-amp-orchestrator logs [--tail N]
+orc init-config
+orc status
+orc start
+orc pause
+orc resume
+orc stop
+orc inspect ISSUE_ID
+orc logs [--tail N]
 ```
 
 ### `init-config`
@@ -423,7 +423,7 @@ Use Python with `uv` for the MVP because:
 Suggested structure:
 
 ```text
-src/amp_orchestrator/
+src/orc/
   cli.py
   config.py
   state.py

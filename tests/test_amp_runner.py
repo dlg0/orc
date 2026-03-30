@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from amp_orchestrator.amp_runner import (
+from orc.amp_runner import (
     AmpResult,
     AmpRunner,
     IssueContext,
@@ -212,9 +212,9 @@ def test_context_passed_to_run() -> None:
 # --- RealAmpRunner passes worktree env ---
 
 
-@patch("amp_orchestrator.amp_runner.shutil.which", return_value="/usr/bin/amp")
-@patch("amp_orchestrator.amp_runner.subprocess.run")
-@patch("amp_orchestrator.amp_runner.build_worktree_env")
+@patch("orc.amp_runner.shutil.which", return_value="/usr/bin/amp")
+@patch("orc.amp_runner.subprocess.run")
+@patch("orc.amp_runner.build_worktree_env")
 def test_real_runner_passes_worktree_env(mock_env, mock_run, mock_which) -> None:
     """RealAmpRunner.run() passes env=build_worktree_env() to subprocess."""
     import subprocess as _sp
@@ -292,8 +292,8 @@ def test_parse_stream_json_thread_id_on_error() -> None:
 # --- Rush summary extraction ---
 
 
-@patch("amp_orchestrator.amp_runner.shutil.which", return_value="/usr/bin/amp")
-@patch("amp_orchestrator.amp_runner.subprocess.run")
+@patch("orc.amp_runner.shutil.which", return_value="/usr/bin/amp")
+@patch("orc.amp_runner.subprocess.run")
 def test_extract_rush_summary_success(mock_run, mock_which) -> None:
     import subprocess as _sp
 
@@ -310,8 +310,8 @@ def test_extract_rush_summary_success(mock_run, mock_which) -> None:
     assert "--mode" in cmd
 
 
-@patch("amp_orchestrator.amp_runner.shutil.which", return_value="/usr/bin/amp")
-@patch("amp_orchestrator.amp_runner.subprocess.run")
+@patch("orc.amp_runner.shutil.which", return_value="/usr/bin/amp")
+@patch("orc.amp_runner.subprocess.run")
 def test_extract_rush_summary_failure(mock_run, mock_which) -> None:
     import subprocess as _sp
 
@@ -322,14 +322,14 @@ def test_extract_rush_summary_failure(mock_run, mock_which) -> None:
     assert result is None
 
 
-@patch("amp_orchestrator.amp_runner.shutil.which", return_value=None)
+@patch("orc.amp_runner.shutil.which", return_value=None)
 def test_extract_rush_summary_no_amp(mock_which) -> None:
     result = RealAmpRunner.extract_rush_summary("aaa-bbb", Path("/tmp"))
     assert result is None
 
 
-@patch("amp_orchestrator.amp_runner.shutil.which", return_value="/usr/bin/amp")
-@patch("amp_orchestrator.amp_runner.subprocess.run", side_effect=__import__("subprocess").TimeoutExpired(cmd="amp", timeout=120))
+@patch("orc.amp_runner.shutil.which", return_value="/usr/bin/amp")
+@patch("orc.amp_runner.subprocess.run", side_effect=__import__("subprocess").TimeoutExpired(cmd="amp", timeout=120))
 def test_extract_rush_summary_timeout(mock_run, mock_which) -> None:
     result = RealAmpRunner.extract_rush_summary("aaa-bbb", Path("/tmp"))
     assert result is None

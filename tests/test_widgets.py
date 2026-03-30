@@ -7,12 +7,12 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from amp_orchestrator.config import OrchestratorConfig
-from amp_orchestrator.queue import BdIssue
-from amp_orchestrator.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
-from amp_orchestrator.tui.app import OrchestratorApp
-from amp_orchestrator.tui.snapshot import DashboardSnapshot
-from amp_orchestrator.tui.widgets import (
+from orc.config import OrchestratorConfig
+from orc.queue import BdIssue
+from orc.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
+from orc.tui.app import OrchestratorApp
+from orc.tui.snapshot import DashboardSnapshot
+from orc.tui.widgets import (
     EVENT_SEVERITY,
     MODE_STYLES,
     NO_PROJECT_PLACEHOLDER,
@@ -177,7 +177,7 @@ def test_history_table_composes() -> None:
 
 
 def test_inspect_modal_init() -> None:
-    from amp_orchestrator.tui.modals import InspectModal
+    from orc.tui.modals import InspectModal
 
     modal = InspectModal(title="Test Title", body="Body text")
     assert modal._title == "Test Title"
@@ -262,13 +262,13 @@ def test_pending_action_none_does_not_suppress() -> None:
 
 
 def test_retry_held_issue_notifies_when_issue_is_closed(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir()
     store = StateStore(state_dir)
     store.save(
         OrchestratorState(
             issue_failures={
-                "amp-orchestrator-qyy": {
+                "orc-qyy": {
                     "category": "issue_needs_rework",
                     "action": "hold_for_retry",
                     "stage": "evaluation",
@@ -285,25 +285,25 @@ def test_retry_held_issue_notifies_when_issue_is_closed(tmp_path: Path) -> None:
         patch.object(app, "notify", new=Mock()) as notify_mock,
         patch.object(app, "_do_full_refresh", new=Mock()) as refresh_mock,
         patch.object(app, "call_from_thread", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs)),
-        patch("amp_orchestrator.tui.app.get_issue_status", return_value="closed"),
+        patch("orc.tui.app.get_issue_status", return_value="closed"),
     ):
-        OrchestratorApp._do_retry_held_issue.__wrapped__(app, "amp-orchestrator-qyy")
+        OrchestratorApp._do_retry_held_issue.__wrapped__(app, "orc-qyy")
 
-    assert "amp-orchestrator-qyy" not in store.load().issue_failures
+    assert "orc-qyy" not in store.load().issue_failures
     notify_mock.assert_called_once_with(
-        "amp-orchestrator-qyy is already closed in beads — removed from held list"
+        "orc-qyy is already closed in beads — removed from held list"
     )
     refresh_mock.assert_called_once_with()
 
 
 def test_retry_held_issue_keeps_requeue_message_for_open_issue(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir()
     store = StateStore(state_dir)
     store.save(
         OrchestratorState(
             issue_failures={
-                "amp-orchestrator-qyy": {
+                "orc-qyy": {
                     "category": "issue_needs_rework",
                     "action": "hold_for_retry",
                     "stage": "evaluation",
@@ -320,32 +320,32 @@ def test_retry_held_issue_keeps_requeue_message_for_open_issue(tmp_path: Path) -
         patch.object(app, "notify", new=Mock()) as notify_mock,
         patch.object(app, "_do_full_refresh", new=Mock()) as refresh_mock,
         patch.object(app, "call_from_thread", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs)),
-        patch("amp_orchestrator.tui.app.get_issue_status", return_value="open"),
+        patch("orc.tui.app.get_issue_status", return_value="open"),
     ):
-        OrchestratorApp._do_retry_held_issue.__wrapped__(app, "amp-orchestrator-qyy")
+        OrchestratorApp._do_retry_held_issue.__wrapped__(app, "orc-qyy")
 
-    assert "amp-orchestrator-qyy" not in store.load().issue_failures
+    assert "orc-qyy" not in store.load().issue_failures
     notify_mock.assert_called_once_with(
-        "Cleared failure status for amp-orchestrator-qyy — will be re-queued on next run"
+        "Cleared failure status for orc-qyy — will be re-queued on next run"
     )
     refresh_mock.assert_called_once_with()
 
 
 def test_retry_held_issue_schedules_merge_retry_for_conflict_failure(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir()
     store = StateStore(state_dir)
     store.save(
         OrchestratorState(
             issue_failures={
-                "amp-orchestrator-qzz": {
+                "orc-qzz": {
                     "category": "stale_or_conflicted",
                     "action": "hold_for_retry",
                     "stage": "merge/rebase",
                     "summary": "Needs fresh rebase",
                     "timestamp": "2026-01-01T00:00:00+00:00",
                     "attempts": 1,
-                    "branch": "amp/amp-orchestrator-qzz-fix",
+                    "branch": "amp/orc-qzz-fix",
                     "worktree_path": "/tmp/wt-qzz",
                     "preserve_worktree": True,
                 }
@@ -358,17 +358,17 @@ def test_retry_held_issue_schedules_merge_retry_for_conflict_failure(tmp_path: P
         patch.object(app, "notify", new=Mock()) as notify_mock,
         patch.object(app, "_do_full_refresh", new=Mock()) as refresh_mock,
         patch.object(app, "call_from_thread", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs)),
-        patch("amp_orchestrator.tui.app.get_issue_status", return_value="open"),
+        patch("orc.tui.app.get_issue_status", return_value="open"),
     ):
-        OrchestratorApp._do_retry_held_issue.__wrapped__(app, "amp-orchestrator-qzz")
+        OrchestratorApp._do_retry_held_issue.__wrapped__(app, "orc-qzz")
 
     state = store.load()
-    assert "amp-orchestrator-qzz" not in state.issue_failures
+    assert "orc-qzz" not in state.issue_failures
     assert state.resume_candidate is not None
-    assert state.resume_candidate["issue_id"] == "amp-orchestrator-qzz"
+    assert state.resume_candidate["issue_id"] == "orc-qzz"
     assert state.resume_candidate["stage"] == "ready_to_merge"
     notify_mock.assert_called_once_with(
-        "Scheduled merge retry for amp-orchestrator-qzz — will retry verify-and-merge on next run"
+        "Scheduled merge retry for orc-qzz — will retry verify-and-merge on next run"
     )
     refresh_mock.assert_called_once_with()
 
@@ -388,7 +388,7 @@ def test_app_refresh_tracking_fields() -> None:
 
 
 def test_help_modal_has_bindings() -> None:
-    from amp_orchestrator.tui.modals import get_help_bindings
+    from orc.tui.modals import get_help_bindings
 
     bindings = get_help_bindings()
     assert len(bindings) >= 9
@@ -536,7 +536,7 @@ def test_result_icons_cover_common_results() -> None:
 
 
 def test_category_icons_cover_all_categories() -> None:
-    from amp_orchestrator.state import FailureCategory
+    from orc.state import FailureCategory
 
     for cat in FailureCategory:
         assert cat.value in _CATEGORY_ICONS, f"_CATEGORY_ICONS missing '{cat.value}'"
@@ -833,14 +833,14 @@ def test_held_issues_table_stores_held_items() -> None:
 
 
 def test_confirm_retry_modal_init() -> None:
-    from amp_orchestrator.tui.modals import ConfirmRetryModal
+    from orc.tui.modals import ConfirmRetryModal
 
     modal = ConfirmRetryModal("TEST-42")
     assert modal._issue_id == "TEST-42"
 
 
 def test_confirm_retry_modal_has_bindings() -> None:
-    from amp_orchestrator.tui.modals import ConfirmRetryModal
+    from orc.tui.modals import ConfirmRetryModal
 
     modal = ConfirmRetryModal("TEST-1")
     binding_keys = [b[0] if isinstance(b, tuple) else b.key for b in modal.BINDINGS]
@@ -866,7 +866,7 @@ def test_mode_styles_use_high_contrast_colors() -> None:
 def test_load_config_swallow_fix(tmp_path: Path) -> None:
     """_load_config should record error instead of silently swallowing."""
     # Create a malformed config file that will cause load_config to fail
-    config_dir = tmp_path / ".amp-orchestrator"
+    config_dir = tmp_path / ".orc"
     config_dir.mkdir()
     config_file = config_dir / "config.yaml"
     config_file.write_text("max_workers: 99\n")  # triggers ClickException

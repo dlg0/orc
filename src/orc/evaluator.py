@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol
 
-from amp_orchestrator.amp_runner import IssueContext
-from amp_orchestrator.worktree import build_worktree_env
+from orc.amp_runner import IssueContext
+from orc.worktree import build_worktree_env
 
 logger = logging.getLogger(__name__)
 

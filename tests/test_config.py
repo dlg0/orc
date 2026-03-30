@@ -6,7 +6,7 @@ import pytest
 import yaml
 from click import ClickException
 
-from amp_orchestrator.config import (
+from orc.config import (
     OrchestratorConfig,
     create_default_config,
     detect_project,
@@ -52,7 +52,7 @@ def test_load_config_returns_defaults(tmp_path: Path) -> None:
 
 
 def test_load_config_reads_existing_config(tmp_path: Path) -> None:
-    cfg_dir = tmp_path / ".amp-orchestrator"
+    cfg_dir = tmp_path / ".orc"
     cfg_dir.mkdir()
     (cfg_dir / "config.yaml").write_text(
         yaml.dump({"base_branch": "develop", "auto_push": False})
@@ -94,7 +94,7 @@ def test_summary_mode_defaults() -> None:
 
 
 def test_summary_mode_from_yaml(tmp_path: Path) -> None:
-    cfg_dir = tmp_path / ".amp-orchestrator"
+    cfg_dir = tmp_path / ".orc"
     cfg_dir.mkdir()
     (cfg_dir / "config.yaml").write_text(
         yaml.dump({"summary_mode": "rush-extract", "summary_amp_mode": "smart"})
@@ -112,7 +112,7 @@ def test_create_default_config_includes_summary_fields(tmp_path: Path) -> None:
 
 
 def test_max_workers_gt_1_rejected(tmp_path: Path) -> None:
-    cfg_dir = tmp_path / ".amp-orchestrator"
+    cfg_dir = tmp_path / ".orc"
     cfg_dir.mkdir()
     (cfg_dir / "config.yaml").write_text(yaml.dump({"max_workers": 4}))
 

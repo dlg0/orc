@@ -1,6 +1,6 @@
 """Subprocess launcher for running the orchestrator from the TUI.
 
-Spawns `amp-orchestrator start` or `amp-orchestrator resume` as a detached
+Spawns `orc start` or `orc resume` as a detached
 background process so the TUI remains responsive.  Output is redirected to
 a log file under the state directory.
 """
@@ -36,7 +36,7 @@ def launch_orchestrator(
     log_fh = log_path.open("a")
 
     proc = subprocess.Popen(
-        [sys.executable, "-m", "amp_orchestrator.cli", command],
+        [sys.executable, "-m", "orc.cli", command],
         cwd=str(repo_root),
         stdout=log_fh,
         stderr=subprocess.STDOUT,

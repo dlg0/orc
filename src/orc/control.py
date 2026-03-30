@@ -9,15 +9,15 @@ from pathlib import Path
 
 import click
 
-from amp_orchestrator.amp_runner import RealAmpRunner
-from amp_orchestrator.config import OrchestratorConfig, load_config
-from amp_orchestrator.evaluator import AmpEvaluatorRunner
-from amp_orchestrator.events import EventLog, EventType
-from amp_orchestrator.lock import OrchestratorLock
-from amp_orchestrator.queue import unclaim_issue
-from amp_orchestrator.scheduler import run_loop
-from amp_orchestrator.state import OrchestratorMode, StateStore, _MAX_RESUME_ATTEMPTS, _RESUMABLE_STAGES
-from amp_orchestrator.worktree import WorktreeManager
+from orc.amp_runner import RealAmpRunner
+from orc.config import OrchestratorConfig, load_config
+from orc.evaluator import AmpEvaluatorRunner
+from orc.events import EventLog, EventType
+from orc.lock import OrchestratorLock
+from orc.queue import unclaim_issue
+from orc.scheduler import run_loop
+from orc.state import OrchestratorMode, StateStore, _MAX_RESUME_ATTEMPTS, _RESUMABLE_STAGES
+from orc.worktree import WorktreeManager
 
 
 def start_orchestrator(repo_root: Path, state_dir: Path, *, fail_fast: bool = False) -> None:

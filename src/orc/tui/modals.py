@@ -1,4 +1,4 @@
-"""Modal screens for the amp-orchestrator TUI."""
+"""Modal screens for the orc TUI."""
 
 from __future__ import annotations
 
@@ -224,7 +224,7 @@ def _build_help_bindings() -> list[tuple[str, str]]:
 
     This keeps the help modal always in sync with actual keybindings.
     """
-    from amp_orchestrator.tui.app import OrchestratorApp
+    from orc.tui.app import OrchestratorApp
 
     # Friendly display names for Textual key identifiers
     _KEY_DISPLAY: dict[str, str] = {

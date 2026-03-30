@@ -1,4 +1,4 @@
-"""CLI entry point for amp-orchestrator."""
+"""CLI entry point for orc."""
 
 from __future__ import annotations
 
@@ -6,16 +6,16 @@ from pathlib import Path
 
 import click
 
-from amp_orchestrator.config import CONFIG_DIR, create_default_config, detect_project
-from amp_orchestrator.control import (
+from orc.config import CONFIG_DIR, create_default_config, detect_project
+from orc.control import (
     pause_orchestrator,
     resume_orchestrator,
     start_orchestrator,
     stop_orchestrator,
 )
-from amp_orchestrator.events import EventLog
-from amp_orchestrator.queue import get_issue_status, get_ready_issues, reconcile_issue_failures
-from amp_orchestrator.state import (
+from orc.events import EventLog
+from orc.queue import get_issue_status, get_ready_issues, reconcile_issue_failures
+from orc.state import (
     OrchestratorMode,
     StateStore,
     queue_retry,
@@ -237,7 +237,7 @@ def logs(tail: int) -> None:
 @main.command()
 def tui() -> None:
     """Launch the TUI dashboard."""
-    from amp_orchestrator.tui.app import OrchestratorApp
+    from orc.tui.app import OrchestratorApp
 
     project = detect_project()
     repo_root = project.repo_root
