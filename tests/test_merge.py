@@ -427,6 +427,7 @@ class TestRebaseConflictResolution:
     def test_rebase_conflict_resolved_by_amp(self, mock_run, mock_which) -> None:
         """When rebase conflicts occur and amp resolves them, merge succeeds."""
         conflict_attempt = [False]
+        diff_call_count = [0]
 
         def side_effect(*args, **kwargs):
             cmd = args[0]
@@ -436,8 +437,8 @@ class TestRebaseConflictResolution:
                     raise subprocess.CalledProcessError(1, cmd, stderr=b"CONFLICT (content): Merge conflict in foo.py")
                 return subprocess.CompletedProcess(cmd, 0)
             if isinstance(cmd, list) and cmd[:3] == ["git", "diff", "--name-only"]:
-                # First call returns conflicts, second call (after resolution) returns empty
-                if conflict_attempt[0] and kwargs.get("text"):
+                diff_call_count[0] += 1
+                if diff_call_count[0] > 1:
                     return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
                 return subprocess.CompletedProcess(cmd, 0, stdout="foo.py\n", stderr="")
             if isinstance(cmd, list) and cmd[0].endswith("amp"):
@@ -460,6 +461,61 @@ class TestRebaseConflictResolution:
 
         assert result.success is True
         assert result.conflict_resolved is True
+
+        git_add_calls = [
+            c for c in mock_run.call_args_list
+            if isinstance(c[0][0], list) and c[0][0] == ["git", "add", "-A", "--", "foo.py"]
+        ]
+        assert len(git_add_calls) == 1
+
+    @patch("amp_orchestrator.merge.shutil.which", return_value="/usr/bin/amp")
+    @patch("amp_orchestrator.merge.subprocess.run")
+    def test_rebase_conflict_empty_resolution_skips_commit(self, mock_run, mock_which) -> None:
+        """When conflict resolution makes the rebased commit empty, rebase uses --skip."""
+        conflict_attempt = [False]
+        diff_call_count = [0]
+
+        def side_effect(*args, **kwargs):
+            cmd = args[0]
+            if isinstance(cmd, list) and cmd[:2] == ["git", "rebase"] and "--abort" not in cmd and "--continue" not in cmd and "--skip" not in cmd:
+                if not conflict_attempt[0]:
+                    conflict_attempt[0] = True
+                    raise subprocess.CalledProcessError(1, cmd, stderr=b"CONFLICT (content): Merge conflict in foo.py")
+                return subprocess.CompletedProcess(cmd, 0)
+            if isinstance(cmd, list) and cmd[:3] == ["git", "diff", "--name-only"]:
+                diff_call_count[0] += 1
+                if diff_call_count[0] > 1:
+                    return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+                return subprocess.CompletedProcess(cmd, 0, stdout="foo.py\n", stderr="")
+            if isinstance(cmd, list) and cmd[0].endswith("amp"):
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            if isinstance(cmd, list) and cmd[:2] == ["git", "rebase"] and "--continue" in cmd:
+                raise subprocess.CalledProcessError(1, cmd, stderr="No changes - did you forget to use 'git add'?\n")
+            if isinstance(cmd, list) and cmd[:2] == ["git", "rebase"] and "--skip" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            if isinstance(cmd, list) and cmd[:3] == ["git", "rev-parse", "-q"] and "REBASE_HEAD" in cmd:
+                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+            return _preflight_side_effect(*args, **kwargs)
+
+        mock_run.side_effect = side_effect
+
+        result = verify_and_merge(
+            worktree_info=WORKTREE_INFO,
+            repo_root=REPO_ROOT,
+            base_branch=BASE_BRANCH,
+            verification_commands=[],
+            auto_push=False,
+            issue_id=ISSUE_ID,
+        )
+
+        assert result.success is True
+        assert result.conflict_resolved is True
+
+        rebase_skip_calls = [
+            c for c in mock_run.call_args_list
+            if isinstance(c[0][0], list) and c[0][0] == ["git", "rebase", "--skip"]
+        ]
+        assert len(rebase_skip_calls) == 1
 
     @patch("amp_orchestrator.merge.shutil.which", return_value="/usr/bin/amp")
     @patch("amp_orchestrator.merge.subprocess.run")
