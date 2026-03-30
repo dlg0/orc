@@ -29,6 +29,18 @@ def _decode_output(output: str | bytes | None) -> str:
     return output or ""
 
 
+def _git_status_porcelain(cwd: Path) -> str:
+    """Return porcelain status output for the working tree (empty when clean)."""
+    result = subprocess.run(
+        ["git", "status", "--porcelain=v1"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
 def _merge_in_progress(cwd: Path) -> bool:
     """Check whether a merge is still in progress (MERGE_HEAD exists)."""
     result = subprocess.run(
@@ -42,14 +54,10 @@ def _merge_in_progress(cwd: Path) -> bool:
 def _is_conflict(error: subprocess.CalledProcessError) -> bool:
     """Detect whether a git rebase/merge failure is due to conflicts."""
     stderr = (error.stderr or b"") if isinstance(error.stderr, bytes) else (error.stderr or "").encode()
-    stderr_text = stderr.decode(errors="replace").lower()
+    stdout = (error.stdout or b"") if isinstance(error.stdout, bytes) else (error.stdout or "").encode()
+    combined = (stderr + b"\n" + stdout).decode(errors="replace").lower()
     conflict_signals = ["conflict", "merge conflict", "could not apply", "fix conflicts"]
-    if any(s in stderr_text for s in conflict_signals):
-        return True
-    # Git uses exit code 1 for conflicts in rebase
-    if error.returncode in (1, 2):
-        return True
-    return False
+    return any(s in combined for s in conflict_signals)
 
 
 def _get_conflict_files(cwd: Path) -> list[str]:
@@ -402,6 +410,15 @@ def verify_and_merge(
     )
     if diff_check.returncode == 0:
         return MergeResult(success=False, stage="preflight", error="branch has no diff vs base")
+
+    # Require clean worktree before rebase
+    dirty = _git_status_porcelain(worktree_info.worktree_path)
+    if dirty:
+        return MergeResult(
+            success=False,
+            stage="preflight",
+            error=f"worktree not clean before rebase:\n{dirty[:500]}",
+        )
 
     # Rebase
     conflict_resolved = False
@@ -766,6 +783,15 @@ def agent_merge(
     )
     if diff_check.returncode == 0:
         return MergeResult(success=False, stage="preflight", error="branch has no diff vs base")
+
+    # Require clean worktree
+    dirty = _git_status_porcelain(worktree_info.worktree_path)
+    if dirty:
+        return MergeResult(
+            success=False,
+            stage="preflight",
+            error=f"worktree not clean before merge:\n{dirty[:500]}",
+        )
 
     # Assert clean state
     for check_cmd, check_name in [

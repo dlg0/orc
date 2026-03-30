@@ -25,6 +25,12 @@ from orc.state import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _patch_git_status(monkeypatch):
+    """Worktree paths in tests don't exist on disk; stub out the clean-check."""
+    monkeypatch.setattr("orc.scheduler._git_status_porcelain", lambda cwd: "")
+
+
 @pytest.fixture()
 def state_dir(tmp_path: Path) -> Path:
     d = tmp_path / ".orc"
@@ -165,7 +171,7 @@ def test_failed_issue_continues_to_next(repo_root: Path, state_dir: Path) -> Non
     fail_runner = MagicMock()
     call_count = 0
 
-    def run_side_effect(ctx):
+    def run_side_effect(ctx, **kwargs):
         if ctx.issue_id == "fail-1":
             return AmpResult(result=ResultType.failed, summary="boom")
         return AmpResult(result=ResultType.completed, summary="done", merge_ready=True)

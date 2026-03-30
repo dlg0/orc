@@ -12,7 +12,7 @@ from orc.amp_runner import AmpRunner, IssueContext, ResultType
 from orc.config import OrchestratorConfig
 from orc.evaluator import IssueEvaluator
 from orc.events import EventLog, EventType
-from orc.merge import verify_and_merge
+from orc.merge import _git_status_porcelain, verify_and_merge
 from orc.queue import (
     claim_issue,
     get_children_all_closed,
@@ -502,6 +502,12 @@ def run_loop(
         click.echo(f"[WORKTREE] {issue.id} branch={wt_info.branch_name}")
         click.echo(f"[WORKTREE] {issue.id} path={wt_info.worktree_path}")
 
+        # Prepare per-run AMP log path for live monitoring
+        amp_logs_dir = state_dir / "amp-runs"
+        amp_logs_dir.mkdir(parents=True, exist_ok=True)
+        ts_slug = _now_iso().replace(":", "-").replace("+", "p")
+        amp_log_path = amp_logs_dir / f"{ts_slug}-{issue.id}.jsonl"
+
         # Update state with active run checkpoint
         checkpoint = RunCheckpoint(
             issue_id=issue.id,
@@ -509,6 +515,7 @@ def run_loop(
             branch=wt_info.branch_name,
             worktree_path=str(wt_info.worktree_path),
             stage=RunStage.worktree_created,
+            amp_log_path=str(amp_log_path),
             updated_at=_now_iso(),
         )
         state.active_run = checkpoint.to_dict()
@@ -534,9 +541,10 @@ def run_loop(
         )
         events.record(EventType.amp_started, {"issue_id": issue.id})
         click.echo(f"[AMP] {issue.id} running ...")
+        click.echo(f"[AMP] {issue.id} log={amp_log_path}")
 
         try:
-            result = runner.run(ctx)
+            result = runner.run(ctx, log_path=amp_log_path)
         except Exception as exc:
             click.echo(f"[AMP] {issue.id} FAILED: {exc}")
             events.record(EventType.error, {"issue_id": issue.id, "stage": "amp", "error": str(exc)})
@@ -604,12 +612,14 @@ def run_loop(
 
         wt_path = str(wt_info.worktree_path)
 
-        # Build extra dict with context usage and thread ID if available
+        # Build extra dict with context usage, thread ID, and log path
         ctx_extra: dict = {}
         if result.context_window_usage_pct is not None:
             ctx_extra["context_window_usage_pct"] = result.context_window_usage_pct
         if result.thread_id:
             ctx_extra["thread_id"] = result.thread_id
+        if amp_log_path.exists():
+            ctx_extra["amp_log_path"] = str(amp_log_path)
 
         # Handle non-merge outcomes
         if result.result == ResultType.decomposed:
@@ -678,6 +688,29 @@ def run_loop(
                 events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
                 return
             continue
+
+        # Enforce clean worktree before merge/evaluation
+        if config.require_clean_worktree:
+            dirty = _git_status_porcelain(wt_info.worktree_path)
+            if dirty:
+                click.echo(f"[WORKTREE] {issue.id} dirty after amp -- attempting finalize commit")
+                _finalize_dirty_worktree(wt_info.worktree_path, issue.id)
+                dirty = _git_status_porcelain(wt_info.worktree_path)
+            if dirty:
+                click.echo(f"[WORKTREE] {issue.id} still dirty after finalize:\n{dirty[:300]}")
+                _record_failure(
+                    store, state, issue.id, FailureCategory.issue_needs_rework, "worktree_dirty",
+                    f"worktree not clean: {dirty[:200]}", wt_info.branch_name, wt_path,
+                )
+                _unclaim_active(state, events, repo_root)
+                _clear_active(store, state)
+                _record_run(store, state, issue.id, "failed", f"worktree not clean: {dirty[:200]}", wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
+                if fail_fast:
+                    click.echo("[SCHEDULER] Fail-fast: stopping after dirty worktree")
+                    store.transition(state, OrchestratorMode.idle)
+                    events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
+                    return
+                continue
 
         # Independent evaluation
         if evaluator is not None:
@@ -889,4 +922,30 @@ def _try_cleanup(worktree_mgr: WorktreeManager, wt_info) -> None:
     try:
         worktree_mgr.cleanup_worktree(wt_info)
     except Exception:
+        pass
+
+
+def _finalize_dirty_worktree(worktree_path: Path, issue_id: str) -> None:
+    """Commit all uncommitted changes left by amp in the worktree.
+
+    This handles the common case where amp leaves modified/untracked files
+    (e.g. regenerated lockfiles) without committing them.
+    """
+    import subprocess
+
+    try:
+        subprocess.run(
+            ["git", "add", "-A"],
+            cwd=worktree_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", f"chore: commit uncommitted changes for {issue_id}"],
+            cwd=worktree_path,
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError:
+        # If commit fails (e.g. nothing to commit after add), leave as-is
         pass

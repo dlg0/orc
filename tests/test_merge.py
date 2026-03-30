@@ -8,6 +8,7 @@ from unittest.mock import call, patch
 
 from orc.merge import (
     MergeResult,
+    _git_status_porcelain,
     _is_conflict,
     _build_conflict_prompt,
     verify_and_merge,
@@ -92,42 +93,47 @@ class TestVerifyAndMergeSuccess:
             ["git", "diff", "--quiet", f"origin/{BASE_BRANCH}..{WORKTREE_INFO.branch_name}"],
             cwd=WORKTREE_INFO.worktree_path, capture_output=True,
         )
-        # rebase
+        # clean worktree check
         assert calls[3] == call(
+            ["git", "status", "--porcelain=v1"],
+            cwd=WORKTREE_INFO.worktree_path, capture_output=True, text=True, check=True,
+        )
+        # rebase
+        assert calls[4] == call(
             ["git", "rebase", "origin/main"],
             cwd=WORKTREE_INFO.worktree_path, check=True, capture_output=True,
         )
         # verify commands (env= is set by build_worktree_env)
-        assert calls[4][0][0] == "make test"
-        assert calls[4][1]["cwd"] == WORKTREE_INFO.worktree_path
-        assert calls[4][1]["shell"] is True
-        assert "env" in calls[4][1]
-        assert calls[5][0][0] == "make lint"
+        assert calls[5][0][0] == "make test"
         assert calls[5][1]["cwd"] == WORKTREE_INFO.worktree_path
         assert calls[5][1]["shell"] is True
         assert "env" in calls[5][1]
+        assert calls[6][0][0] == "make lint"
+        assert calls[6][1]["cwd"] == WORKTREE_INFO.worktree_path
+        assert calls[6][1]["shell"] is True
+        assert "env" in calls[6][1]
         # checkout
-        assert calls[6] == call(
+        assert calls[7] == call(
             ["git", "checkout", "main"],
             cwd=REPO_ROOT, check=True, capture_output=True,
         )
         # pull
-        assert calls[7] == call(
+        assert calls[8] == call(
             ["git", "pull", "origin", "main"],
             cwd=REPO_ROOT, check=True, capture_output=True,
         )
         # merge
-        assert calls[8] == call(
+        assert calls[9] == call(
             ["git", "merge", "--no-ff", "amp/ISSUE-1-fix-bug", "-m", "Merge amp/ISSUE-1-fix-bug"],
             cwd=REPO_ROOT, check=True, capture_output=True,
         )
         # push
-        assert calls[9] == call(
+        assert calls[10] == call(
             ["git", "push", "origin", "main"],
             cwd=REPO_ROOT, check=True, capture_output=True,
         )
         # bd close
-        assert calls[10] == call(
+        assert calls[11] == call(
             ["bd", "close", "ISSUE-1"],
             cwd=REPO_ROOT, check=True, capture_output=True,
         )
@@ -352,6 +358,37 @@ class TestPreflightChecks:
         assert "no diff" in result.error
 
 
+class TestDirtyWorktreePreflight:
+    @patch("orc.merge.subprocess.run")
+    def test_dirty_worktree_rejects_before_rebase(self, mock_run: object) -> None:
+        def side_effect(*args, **kwargs):
+            cmd = args[0]
+            if isinstance(cmd, list) and cmd[:3] == ["git", "status", "--porcelain=v1"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout=" M uv.lock\n", stderr="")
+            return _preflight_side_effect(*args, **kwargs)
+
+        mock_run.side_effect = side_effect
+
+        result = verify_and_merge(
+            worktree_info=WORKTREE_INFO,
+            repo_root=REPO_ROOT,
+            base_branch=BASE_BRANCH,
+            verification_commands=[],
+            auto_push=True,
+            issue_id=ISSUE_ID,
+        )
+
+        assert result.success is False
+        assert result.stage == "preflight"
+        assert "worktree not clean" in result.error
+        assert "uv.lock" in result.error
+
+        # No rebase should have been attempted
+        calls = mock_run.call_args_list
+        rebase_calls = [c for c in calls if isinstance(c[0][0], list) and c[0][0][:2] == ["git", "rebase"]]
+        assert len(rebase_calls) == 0
+
+
 class TestAutoPushFalse:
     @patch("orc.merge.subprocess.run")
     def test_push_and_close_skipped_when_auto_push_false(self, mock_run: object) -> None:
@@ -390,13 +427,13 @@ class TestIsConflict:
         e = subprocess.CalledProcessError(1, ["git", "rebase"], stderr=b"error: could not apply abc123")
         assert _is_conflict(e) is True
 
-    def test_exit_code_1_is_conflict(self) -> None:
-        e = subprocess.CalledProcessError(1, ["git", "rebase"], stderr=b"")
-        assert _is_conflict(e) is True
+    def test_exit_code_1_no_conflict_text_is_not_conflict(self) -> None:
+        e = subprocess.CalledProcessError(1, ["git", "rebase"], stderr=b"error: cannot rebase: You have unstaged changes.")
+        assert _is_conflict(e) is False
 
-    def test_exit_code_2_is_conflict(self) -> None:
+    def test_exit_code_2_no_conflict_text_is_not_conflict(self) -> None:
         e = subprocess.CalledProcessError(2, ["git", "merge"], stderr=b"")
-        assert _is_conflict(e) is True
+        assert _is_conflict(e) is False
 
     def test_exit_code_128_not_conflict(self) -> None:
         e = subprocess.CalledProcessError(128, ["git", "rebase"], stderr=b"fatal: not a git repo")
@@ -404,6 +441,11 @@ class TestIsConflict:
 
     def test_none_stderr(self) -> None:
         e = subprocess.CalledProcessError(1, ["git", "rebase"], stderr=None)
+        assert _is_conflict(e) is False
+
+    def test_conflict_in_stdout(self) -> None:
+        e = subprocess.CalledProcessError(1, ["git", "rebase"], stderr=b"")
+        e.stdout = b"CONFLICT (content): Merge conflict in foo.py"
         assert _is_conflict(e) is True
 
 
