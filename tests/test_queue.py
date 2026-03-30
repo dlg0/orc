@@ -6,12 +6,15 @@ from unittest.mock import patch
 
 from amp_orchestrator.queue import (
     BdIssue,
+    IssueState,
     QueueResult,
     claim_issue,
     get_children_all_closed,
     get_issue_parent,
+    get_issue_state,
     get_issue_status,
     get_ready_issues,
+    reconcile_issue_failures,
     select_next_issue,
     unclaim_issue,
 )
@@ -331,3 +334,123 @@ class TestGetChildrenAllClosed:
     def test_oserror_returns_none(self) -> None:
         with patch("amp_orchestrator.queue.subprocess.run", side_effect=OSError("no bd")):
             assert get_children_all_closed("parent-1") is None
+
+
+class TestGetIssueState:
+    def test_returns_open(self) -> None:
+        import json
+
+        data = [{"id": "i1", "status": "open"}]
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json.dumps(data)
+            assert get_issue_state("i1") is IssueState.open
+
+    def test_returns_closed(self) -> None:
+        import json
+
+        data = [{"id": "i1", "status": "closed"}]
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json.dumps(data)
+            assert get_issue_state("i1") is IssueState.closed
+
+    def test_returns_in_progress_as_open(self) -> None:
+        import json
+
+        data = [{"id": "i1", "status": "in_progress"}]
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json.dumps(data)
+            assert get_issue_state("i1") is IssueState.open
+
+    def test_returns_missing_when_not_found(self) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stderr = 'Error: no issue found matching "xyz"'
+            assert get_issue_state("xyz") is IssueState.missing
+
+    def test_returns_missing_for_not_found_variant(self) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stderr = "not found"
+            assert get_issue_state("xyz") is IssueState.missing
+
+    def test_returns_unknown_on_generic_failure(self) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stderr = "database connection error"
+            assert get_issue_state("i1") is IssueState.unknown
+
+    def test_returns_unknown_on_oserror(self) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run", side_effect=OSError("no bd")):
+            assert get_issue_state("i1") is IssueState.unknown
+
+    def test_returns_missing_for_empty_list(self) -> None:
+        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "[]"
+            assert get_issue_state("i1") is IssueState.missing
+
+
+class TestReconcileIssueFailures:
+    def _failure_entry(self) -> dict:
+        return {"category": "stale_or_conflicted", "action": "hold_for_retry", "summary": "merge failed"}
+
+    def test_prunes_closed_issues(self) -> None:
+        failures = {"i1": self._failure_entry(), "i2": self._failure_entry()}
+        with patch("amp_orchestrator.queue.get_issue_state") as mock_state:
+            mock_state.side_effect = lambda id, cwd=None: (
+                IssueState.closed if id == "i1" else IssueState.open
+            )
+            pruned = reconcile_issue_failures(failures)
+        assert "i1" not in failures
+        assert "i2" in failures
+        assert pruned == [("i1", "closed")]
+
+    def test_prunes_missing_issues(self) -> None:
+        failures = {"gone": self._failure_entry()}
+        with patch("amp_orchestrator.queue.get_issue_state", return_value=IssueState.missing):
+            pruned = reconcile_issue_failures(failures)
+        assert failures == {}
+        assert pruned == [("gone", "missing")]
+
+    def test_keeps_open_issues(self) -> None:
+        failures = {"i1": self._failure_entry()}
+        with patch("amp_orchestrator.queue.get_issue_state", return_value=IssueState.open):
+            pruned = reconcile_issue_failures(failures)
+        assert "i1" in failures
+        assert pruned == []
+
+    def test_keeps_unknown_issues(self) -> None:
+        failures = {"i1": self._failure_entry()}
+        with patch("amp_orchestrator.queue.get_issue_state", return_value=IssueState.unknown):
+            pruned = reconcile_issue_failures(failures)
+        assert "i1" in failures
+        assert pruned == []
+
+    def test_empty_failures_is_noop(self) -> None:
+        failures: dict = {}
+        pruned = reconcile_issue_failures(failures)
+        assert pruned == []
+
+    def test_mixed_states(self) -> None:
+        failures = {
+            "closed1": self._failure_entry(),
+            "open1": self._failure_entry(),
+            "missing1": self._failure_entry(),
+            "unknown1": self._failure_entry(),
+        }
+        state_map = {
+            "closed1": IssueState.closed,
+            "open1": IssueState.open,
+            "missing1": IssueState.missing,
+            "unknown1": IssueState.unknown,
+        }
+        with patch("amp_orchestrator.queue.get_issue_state") as mock_state:
+            mock_state.side_effect = lambda id, cwd=None: state_map[id]
+            pruned = reconcile_issue_failures(failures)
+        assert set(failures.keys()) == {"open1", "unknown1"}
+        assert len(pruned) == 2
+        pruned_ids = {p[0] for p in pruned}
+        assert pruned_ids == {"closed1", "missing1"}

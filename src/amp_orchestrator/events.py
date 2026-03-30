@@ -29,6 +29,7 @@ class EventType(Enum):
     resume_succeeded = "resume_succeeded"
     resume_failed = "resume_failed"
     parent_promoted = "parent_promoted"
+    issue_failure_pruned = "issue_failure_pruned"
 
 
 class EventLog:

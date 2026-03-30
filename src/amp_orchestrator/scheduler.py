@@ -18,6 +18,7 @@ from amp_orchestrator.queue import (
     get_children_all_closed,
     get_issue_parent,
     get_ready_issues,
+    reconcile_issue_failures,
     select_next_issue,
     unclaim_issue,
 )
@@ -400,6 +401,15 @@ def run_loop(
             if resumed:
                 issue_num += 1
             continue
+
+        # Reconcile issue_failures against beads state
+        if state.issue_failures:
+            pruned = reconcile_issue_failures(state.issue_failures, cwd=repo_root)
+            if pruned:
+                store.save(state)
+                for issue_id, reason in pruned:
+                    click.echo(f"[SCHEDULER] Pruned held issue {issue_id} ({reason})")
+                    events.record(EventType.issue_failure_pruned, {"issue_id": issue_id, "reason": reason})
 
         # Derive skip_ids from persisted issue_failures
         failed_ids: set[str] = set(state.issue_failures.keys())

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 
 
@@ -199,6 +200,63 @@ def get_issue_status(issue_id: str, cwd: Path | None = None) -> str | None:
         return None
     except (OSError, json.JSONDecodeError):
         return None
+
+
+class IssueState(Enum):
+    """Broad state of a beads issue for reconciliation purposes."""
+
+    open = "open"
+    closed = "closed"
+    missing = "missing"
+    unknown = "unknown"  # transient bd failure — keep the entry
+
+
+def get_issue_state(issue_id: str, cwd: Path | None = None) -> IssueState:
+    """Return the broad state of a beads issue.
+
+    Distinguishes between closed/missing issues (safe to prune) and
+    transient failures (should keep the failure entry).
+    """
+    try:
+        result = subprocess.run(
+            ["bd", "show", issue_id, "--json"],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            check=False,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip().lower() if result.stderr else ""
+            if "no issue" in stderr or "not found" in stderr:
+                return IssueState.missing
+            return IssueState.unknown
+        data = json.loads(result.stdout)
+        if isinstance(data, list) and len(data) > 0:
+            status = data[0].get("status", "")
+            if status == "closed":
+                return IssueState.closed
+            return IssueState.open
+        return IssueState.missing
+    except (OSError, json.JSONDecodeError):
+        return IssueState.unknown
+
+
+def reconcile_issue_failures(
+    issue_failures: dict[str, dict],
+    cwd: Path | None = None,
+) -> list[tuple[str, str]]:
+    """Prune issue_failures entries whose beads issue is closed or missing.
+
+    Returns a list of ``(issue_id, reason)`` tuples for each pruned entry.
+    Mutates *issue_failures* in place.
+    """
+    pruned: list[tuple[str, str]] = []
+    for issue_id in list(issue_failures):
+        bd_state = get_issue_state(issue_id, cwd=cwd)
+        if bd_state in (IssueState.closed, IssueState.missing):
+            del issue_failures[issue_id]
+            pruned.append((issue_id, bd_state.value))
+    return pruned
 
 
 def get_children_all_closed(parent_id: str, cwd: Path | None = None) -> bool | None:
