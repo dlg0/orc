@@ -326,7 +326,49 @@ def test_retry_held_issue_keeps_requeue_message_for_open_issue(tmp_path: Path) -
 
     assert "amp-orchestrator-qyy" not in store.load().issue_failures
     notify_mock.assert_called_once_with(
-        "Cleared failure status for amp-orchestrator-qyy — will be re-queued"
+        "Cleared failure status for amp-orchestrator-qyy — will be re-queued on next run"
+    )
+    refresh_mock.assert_called_once_with()
+
+
+def test_retry_held_issue_schedules_merge_retry_for_conflict_failure(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir()
+    store = StateStore(state_dir)
+    store.save(
+        OrchestratorState(
+            issue_failures={
+                "amp-orchestrator-qzz": {
+                    "category": "stale_or_conflicted",
+                    "action": "hold_for_retry",
+                    "stage": "merge/rebase",
+                    "summary": "Needs fresh rebase",
+                    "timestamp": "2026-01-01T00:00:00+00:00",
+                    "attempts": 1,
+                    "branch": "amp/amp-orchestrator-qzz-fix",
+                    "worktree_path": "/tmp/wt-qzz",
+                    "preserve_worktree": True,
+                }
+            }
+        )
+    )
+    app = OrchestratorApp(repo_root=tmp_path, state_dir=state_dir)
+
+    with (
+        patch.object(app, "notify", new=Mock()) as notify_mock,
+        patch.object(app, "_do_full_refresh", new=Mock()) as refresh_mock,
+        patch.object(app, "call_from_thread", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs)),
+        patch("amp_orchestrator.tui.app.get_issue_status", return_value="open"),
+    ):
+        OrchestratorApp._do_retry_held_issue.__wrapped__(app, "amp-orchestrator-qzz")
+
+    state = store.load()
+    assert "amp-orchestrator-qzz" not in state.issue_failures
+    assert state.resume_candidate is not None
+    assert state.resume_candidate["issue_id"] == "amp-orchestrator-qzz"
+    assert state.resume_candidate["stage"] == "ready_to_merge"
+    notify_mock.assert_called_once_with(
+        "Scheduled merge retry for amp-orchestrator-qzz — will retry verify-and-merge on next run"
     )
     refresh_mock.assert_called_once_with()
 

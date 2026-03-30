@@ -214,6 +214,63 @@ _RESUMABLE_STAGES = {
 _MAX_RESUME_ATTEMPTS = 2
 
 
+def can_retry_merge(info: object) -> bool:
+    """Return True when a held failure can resume at verify-and-merge."""
+    failure = _normalize_issue_failure(info)
+    return (
+        failure["category"] == FailureCategory.stale_or_conflicted.value
+        and failure["preserve_worktree"] is True
+        and isinstance(failure["branch"], str)
+        and bool(failure["branch"])
+        and isinstance(failure["worktree_path"], str)
+        and bool(failure["worktree_path"])
+    )
+
+
+def queue_retry(
+    state: OrchestratorState,
+    issue_id: str,
+    *,
+    issue_title: str = "",
+    merge_only: bool = False,
+) -> str:
+    """Queue a held issue for retry and return a user-facing status message."""
+    failure = state.issue_failures.get(issue_id)
+    if failure is None:
+        raise KeyError(issue_id)
+
+    if state.active_run and state.active_run.get("issue_id") != issue_id:
+        raise ValueError(
+            f"Cannot queue {issue_id} while {state.active_run['issue_id']} is active"
+        )
+    if state.resume_candidate and state.resume_candidate.get("issue_id") != issue_id:
+        raise ValueError(
+            "Another retry is already queued — run it or clear it before queueing a new one"
+        )
+
+    if merge_only and not can_retry_merge(failure):
+        raise ValueError(f"{issue_id} is not eligible for merge-only retry")
+
+    if merge_only or can_retry_merge(failure):
+        checkpoint = RunCheckpoint(
+            issue_id=issue_id,
+            issue_title=issue_title,
+            branch=failure["branch"],
+            worktree_path=failure["worktree_path"],
+            stage=RunStage.ready_to_merge,
+            preserve_worktree=True,
+            updated_at=failure.get("timestamp", ""),
+        )
+        state.resume_candidate = checkpoint.to_dict()
+        del state.issue_failures[issue_id]
+        return (
+            f"Scheduled merge retry for {issue_id} — will retry verify-and-merge on next run"
+        )
+
+    del state.issue_failures[issue_id]
+    return f"Cleared failure status for {issue_id} — will be re-queued on next run"
+
+
 @dataclass
 class OrchestratorState:
     mode: OrchestratorMode = OrchestratorMode.idle

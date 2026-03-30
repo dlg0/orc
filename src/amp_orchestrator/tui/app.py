@@ -13,7 +13,7 @@ from textual.widgets import Button, Footer, Header
 
 from amp_orchestrator.config import OrchestratorConfig
 from amp_orchestrator.queue import get_issue_status
-from amp_orchestrator.state import OrchestratorMode, StateStore
+from amp_orchestrator.state import OrchestratorMode, StateStore, queue_retry
 from amp_orchestrator.tui.snapshot import (
     DashboardSnapshot,
     load_snapshot,
@@ -390,12 +390,13 @@ class OrchestratorApp(App):
                     self.notify, f"{issue_id} is not in held/failed state", severity="warning"
                 )
                 return
-            del state.issue_failures[issue_id]
-            store.save(state)
             issue_status = get_issue_status(issue_id, cwd=self._repo_root or self._state_dir.parent)
-            message = f"Cleared failure status for {issue_id} — will be re-queued"
             if issue_status == "closed":
+                del state.issue_failures[issue_id]
                 message = f"{issue_id} is already closed in beads — removed from held list"
+            else:
+                message = queue_retry(state, issue_id)
+            store.save(state)
             self.call_from_thread(
                 self.notify, message
             )
