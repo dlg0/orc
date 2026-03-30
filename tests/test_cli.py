@@ -265,8 +265,9 @@ def test_retry_schedules_merge_retry_for_conflict_failure(tmp_path: Path) -> Non
 
 
 def test_retry_merge_requires_merge_retryable_failure(tmp_path: Path) -> None:
+    _make_project(tmp_path)
     state_dir = tmp_path / ".orc"
-    state_dir.mkdir(parents=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
     store = StateStore(state_dir)
     store.save(
         OrchestratorState(
@@ -282,8 +283,10 @@ def test_retry_merge_requires_merge_retryable_failure(tmp_path: Path) -> None:
         )
     )
 
+    from orc.config import ProjectContext
     with (
-        patch("orc.cli._get_state_dir", return_value=state_dir),
+        patch("orc.cli.detect_project", return_value=ProjectContext(
+            repo_root=tmp_path, has_git=True, has_beads=True)),
         patch("orc.cli.get_issue_status", return_value="open"),
     ):
         runner = CliRunner()
@@ -293,8 +296,9 @@ def test_retry_merge_requires_merge_retryable_failure(tmp_path: Path) -> None:
 
 
 def test_retry_merge_queues_ready_to_merge_resume(tmp_path: Path) -> None:
+    _make_project(tmp_path)
     state_dir = tmp_path / ".orc"
-    state_dir.mkdir(parents=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
     store = StateStore(state_dir)
     store.save(
         OrchestratorState(
@@ -313,8 +317,10 @@ def test_retry_merge_queues_ready_to_merge_resume(tmp_path: Path) -> None:
         )
     )
 
+    from orc.config import ProjectContext
     with (
-        patch("orc.cli._get_state_dir", return_value=state_dir),
+        patch("orc.cli.detect_project", return_value=ProjectContext(
+            repo_root=tmp_path, has_git=True, has_beads=True)),
         patch("orc.cli.get_issue_status", return_value="open"),
     ):
         runner = CliRunner()

@@ -361,8 +361,15 @@ def run_loop(
     runner: AmpRunner,
     evaluator: IssueEvaluator | None = None,
     fail_fast: bool = False,
+    only_issue: str | None = None,
 ) -> None:
-    """Run the main scheduler loop until the queue is empty or stopped."""
+    """Run the main scheduler loop until the queue is empty or stopped.
+
+    When *only_issue* is set the loop processes **at most one issue** and then
+    transitions to idle.  If a ``resume_candidate`` exists but belongs to a
+    different issue, the loop exits with an error message instead of silently
+    running the wrong issue.
+    """
     store = StateStore(state_dir)
     events = EventLog(state_dir)
     worktree_mgr = WorktreeManager(repo_root, config.base_branch)
@@ -393,6 +400,15 @@ def run_loop(
 
         # Check for resume candidate before queue selection
         if state.resume_candidate:
+            candidate_id = state.resume_candidate.get("issue_id")
+            if only_issue and candidate_id != only_issue:
+                click.echo(
+                    f"[SCHEDULER] --only {only_issue} but resume candidate is "
+                    f"{candidate_id} — aborting"
+                )
+                store.transition(state, OrchestratorMode.idle)
+                events.record(EventType.state_changed, {"to": "idle", "reason": "only_issue_mismatch"})
+                return
             resumed = _attempt_resume(
                 repo_root, state_dir, config, runner, evaluator,
                 store, state, events, worktree_mgr, fail_fast,
@@ -400,6 +416,13 @@ def run_loop(
             # After resume attempt, re-enter loop to check state/queue
             if resumed:
                 issue_num += 1
+                if only_issue:
+                    click.echo("[SCHEDULER] --only: single issue processed — stopping")
+                    state = store.load()
+                    if state.mode == OrchestratorMode.running:
+                        store.transition(state, OrchestratorMode.idle)
+                        events.record(EventType.state_changed, {"to": "idle", "reason": "only_issue_done"})
+                    return
             continue
 
         # Reconcile issue_failures against beads state
@@ -444,6 +467,13 @@ def run_loop(
             click.echo("[SCHEDULER] No ready issues -- queue exhausted.")
             store.transition(state, OrchestratorMode.idle)
             events.record(EventType.state_changed, {"to": "idle", "reason": "queue_empty"})
+            return
+
+        # --only guard: skip issues that don't match
+        if only_issue and issue.id != only_issue:
+            click.echo(f"[SCHEDULER] --only {only_issue} but selected {issue.id} — stopping")
+            store.transition(state, OrchestratorMode.idle)
+            events.record(EventType.state_changed, {"to": "idle", "reason": "only_issue_not_found"})
             return
 
         issue_num += 1
@@ -761,6 +791,14 @@ def run_loop(
                 store.transition(state, OrchestratorMode.idle)
                 events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
                 return
+
+        if only_issue:
+            click.echo("[SCHEDULER] --only: single issue processed — stopping")
+            state = store.load()
+            if state.mode == OrchestratorMode.running:
+                store.transition(state, OrchestratorMode.idle)
+                events.record(EventType.state_changed, {"to": "idle", "reason": "only_issue_done"})
+            return
 
 
 def _check_parent_promotion(

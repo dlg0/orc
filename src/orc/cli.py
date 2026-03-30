@@ -132,6 +132,10 @@ def retry(issue_id: str) -> None:
     store = StateStore(state_dir)
     state = store.load()
     if issue_id not in state.issue_failures:
+        # Already queued as resume_candidate (e.g. previous retry-merge crashed before running)
+        if state.resume_candidate and state.resume_candidate.get("issue_id") == issue_id:
+            click.echo(f"{issue_id} is already queued as a resume candidate — use 'orc start --only {issue_id}' to run it")
+            return
         raise click.ClickException(f"{issue_id} is not in held/failed state")
     if get_issue_status(issue_id, cwd=state_dir.parent) == "closed":
         del state.issue_failures[issue_id]
@@ -157,6 +161,14 @@ def retry_merge(issue_id: str, run_now: bool) -> None:
     store = StateStore(state_dir)
     state = store.load()
     if issue_id not in state.issue_failures:
+        # Already queued as resume_candidate (e.g. previous retry-merge crashed before running)
+        if state.resume_candidate and state.resume_candidate.get("issue_id") == issue_id:
+            click.echo(f"{issue_id} is already queued as a resume candidate")
+            if run_now:
+                start_orchestrator(repo_root, state_dir, only_issue=issue_id)
+            else:
+                click.echo(f"Use 'orc start --only {issue_id}' to run it")
+            return
         raise click.ClickException(f"{issue_id} is not in held/failed state")
     if get_issue_status(issue_id, cwd=state_dir.parent) == "closed":
         del state.issue_failures[issue_id]

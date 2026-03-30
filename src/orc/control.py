@@ -20,7 +20,13 @@ from orc.state import OrchestratorMode, StateStore, _MAX_RESUME_ATTEMPTS, _RESUM
 from orc.worktree import WorktreeManager
 
 
-def start_orchestrator(repo_root: Path, state_dir: Path, *, fail_fast: bool = False) -> None:
+def start_orchestrator(
+    repo_root: Path,
+    state_dir: Path,
+    *,
+    fail_fast: bool = False,
+    only_issue: str | None = None,
+) -> None:
     """Begin processing ready issues.
 
     Acquires the process lock, handles crash recovery, transitions to running,
@@ -134,7 +140,7 @@ def start_orchestrator(repo_root: Path, state_dir: Path, *, fail_fast: bool = Fa
             mode=config.evaluation_mode or config.amp_mode,
             timeout=config.evaluation_timeout,
         ) if config.enable_evaluation else None
-        run_loop(repo_root, state_dir, config, runner, evaluator=evaluator, fail_fast=fail_fast)
+        run_loop(repo_root, state_dir, config, runner, evaluator=evaluator, fail_fast=fail_fast, only_issue=only_issue)
     except Exception:
         # Ensure state goes back to error on unexpected failure
         try:
