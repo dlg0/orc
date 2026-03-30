@@ -619,6 +619,60 @@ class TestMergeConflictResolution:
         assert result.conflict_resolved is True
 
 
+    @patch("amp_orchestrator.merge.shutil.which", return_value="/usr/bin/amp")
+    @patch("amp_orchestrator.merge.subprocess.run")
+    def test_merge_conflict_amp_already_committed(self, mock_run, mock_which) -> None:
+        """When amp consumes MERGE_HEAD during conflict resolution, merge still succeeds."""
+        merge_attempt = [False]
+        diff_call_count = [0]
+        merge_head_consumed = [False]
+
+        def side_effect(*args, **kwargs):
+            cmd = args[0]
+            if isinstance(cmd, list) and cmd[:2] == ["git", "merge"] and "--no-ff" in cmd:
+                if not merge_attempt[0]:
+                    merge_attempt[0] = True
+                    raise subprocess.CalledProcessError(1, cmd, stderr=b"CONFLICT (content)")
+                return subprocess.CompletedProcess(cmd, 0)
+            if isinstance(cmd, list) and cmd[:3] == ["git", "diff", "--name-only"]:
+                diff_call_count[0] += 1
+                if merge_attempt[0] and diff_call_count[0] > 1:
+                    return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+                return subprocess.CompletedProcess(cmd, 0, stdout="bar.py\n", stderr="")
+            if isinstance(cmd, list) and cmd[0].endswith("amp"):
+                # amp resolves conflicts AND commits (consuming MERGE_HEAD)
+                merge_head_consumed[0] = True
+                return subprocess.CompletedProcess(cmd, 0)
+            # MERGE_HEAD check returns failure when amp consumed it
+            if isinstance(cmd, list) and "MERGE_HEAD" in cmd:
+                if merge_head_consumed[0]:
+                    return subprocess.CompletedProcess(cmd, 1)
+                return subprocess.CompletedProcess(cmd, 0)
+            if isinstance(cmd, list) and cmd[:2] == ["git", "commit"]:
+                return subprocess.CompletedProcess(cmd, 0)
+            return _preflight_side_effect(*args, **kwargs)
+
+        mock_run.side_effect = side_effect
+
+        result = verify_and_merge(
+            worktree_info=WORKTREE_INFO,
+            repo_root=REPO_ROOT,
+            base_branch=BASE_BRANCH,
+            verification_commands=[],
+            auto_push=False,
+            issue_id=ISSUE_ID,
+        )
+
+        assert result.success is True
+        assert result.conflict_resolved is True
+        # git commit --no-edit should NOT have been called since MERGE_HEAD was consumed
+        commit_calls = [
+            c for c in mock_run.call_args_list
+            if isinstance(c[0][0], list) and c[0][0][:2] == ["git", "commit"]
+        ]
+        assert len(commit_calls) == 0
+
+
 class TestWorktreeEnvPassed:
     @patch("amp_orchestrator.merge.build_worktree_env")
     @patch("amp_orchestrator.merge.subprocess.run")

@@ -14,7 +14,7 @@ from amp_orchestrator.control import (
     stop_orchestrator,
 )
 from amp_orchestrator.events import EventLog
-from amp_orchestrator.queue import get_ready_issues
+from amp_orchestrator.queue import get_ready_issues, reconcile_issue_failures
 from amp_orchestrator.state import FailureCategory, IssueFailure, OrchestratorMode, StateStore
 
 
@@ -48,6 +48,14 @@ def status() -> None:
         click.echo(f"Last completed: {state.last_completed_issue}")
     if state.last_error:
         click.echo(f"Last error: {state.last_error}")
+
+    # Reconcile held issues against beads before displaying
+    if state.issue_failures:
+        pruned = reconcile_issue_failures(state.issue_failures, cwd=state_dir.parent)
+        if pruned:
+            store.save(state)
+            for issue_id, reason in pruned:
+                click.echo(f"Pruned held issue {issue_id} ({reason})")
 
     queue_result = get_ready_issues(state_dir.parent)
     if queue_result.success:

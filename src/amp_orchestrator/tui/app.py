@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -54,6 +55,7 @@ class OrchestratorApp(App):
     """
 
     BINDINGS = [
+        ("ctrl+c", "ctrl_c", "Quit (×2)"),
         ("q", "quit", "Quit"),
         ("r", "refresh", "Refresh"),
         ("f", "freeze", "Freeze"),
@@ -87,6 +89,7 @@ class OrchestratorApp(App):
         self._pending_action: str | None = None
         self._orch_mode: OrchestratorMode = OrchestratorMode.idle
         self._frozen: bool = False
+        self._last_ctrl_c: float = 0.0
         self._last_successful_refresh: datetime | None = None
         self._last_queue_refresh: datetime | None = None
         self._last_refresh_error: str | None = None
@@ -247,6 +250,17 @@ class OrchestratorApp(App):
         from amp_orchestrator.tui.modals import HelpModal
 
         self.push_screen(HelpModal())
+
+    _CTRL_C_TIMEOUT = 2.0
+
+    def action_ctrl_c(self) -> None:
+        """Quit on double Ctrl+C within the timeout window."""
+        now = monotonic()
+        if now - self._last_ctrl_c <= self._CTRL_C_TIMEOUT:
+            self.exit()
+            return
+        self._last_ctrl_c = now
+        self.notify("Press Ctrl+C again to quit", severity="warning")
 
     def _check_pending_action(self, snap: DashboardSnapshot) -> bool:
         """Check if a pending action's expected mode has been reached.

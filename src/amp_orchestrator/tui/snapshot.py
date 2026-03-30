@@ -6,7 +6,7 @@ from pathlib import Path
 
 from amp_orchestrator.config import OrchestratorConfig, load_config
 from amp_orchestrator.events import EventLog
-from amp_orchestrator.queue import BdIssue, get_ready_issues
+from amp_orchestrator.queue import BdIssue, get_ready_issues, reconcile_issue_failures
 from amp_orchestrator.state import OrchestratorState, StateStore
 
 
@@ -37,7 +37,15 @@ def load_snapshot_fast(
 
 def load_snapshot(repo_root: Path, state_dir: Path) -> DashboardSnapshot:
     """Load all dashboard data in a single call."""
-    state = StateStore(state_dir).load()
+    store = StateStore(state_dir)
+    state = store.load()
+
+    # Reconcile held issues against beads so closed/missing issues
+    # disappear from the TUI even when the scheduler isn't running.
+    if state.issue_failures:
+        pruned = reconcile_issue_failures(state.issue_failures, cwd=repo_root)
+        if pruned:
+            store.save(state)
 
     config_error: str | None = None
     try:

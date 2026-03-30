@@ -22,6 +22,16 @@ class MergeResult:
     conflict_resolved: bool = False
 
 
+def _merge_in_progress(cwd: Path) -> bool:
+    """Check whether a merge is still in progress (MERGE_HEAD exists)."""
+    result = subprocess.run(
+        ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+        cwd=cwd,
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
 def _is_conflict(error: subprocess.CalledProcessError) -> bool:
     """Detect whether a git rebase/merge failure is due to conflicts."""
     stderr = (error.stderr or b"") if isinstance(error.stderr, bytes) else (error.stderr or "").encode()
@@ -398,21 +408,39 @@ def verify_and_merge(
                     capture_output=True,
                 )
                 return MergeResult(success=False, stage="merge", error="conflict resolution failed")
-            # After merge conflict resolution, commit the merge
-            try:
-                subprocess.run(
-                    ["git", "commit", "--no-edit"],
-                    cwd=repo_root,
-                    check=True,
-                    capture_output=True,
+            # After merge conflict resolution, commit the merge — unless amp
+            # already completed it (consuming MERGE_HEAD).
+            if _merge_in_progress(repo_root):
+                try:
+                    subprocess.run(
+                        ["git", "commit", "--no-edit"],
+                        cwd=repo_root,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                except subprocess.CalledProcessError as commit_err:
+                    logger.error(
+                        "git commit --no-edit failed rc=%s stderr=%r",
+                        commit_err.returncode,
+                        commit_err.stderr,
+                    )
+                    subprocess.run(
+                        ["git", "merge", "--abort"],
+                        cwd=repo_root,
+                        capture_output=True,
+                    )
+                    return MergeResult(
+                        success=False,
+                        stage="merge",
+                        error=f"commit after conflict resolution failed: {commit_err.stderr or commit_err.stdout or str(commit_err)}",
+                    )
+            else:
+                logger.warning(
+                    "Merge state (MERGE_HEAD) already consumed during amp conflict resolution for %s; "
+                    "accepting existing commit",
+                    issue_id,
                 )
-            except subprocess.CalledProcessError:
-                subprocess.run(
-                    ["git", "merge", "--abort"],
-                    cwd=repo_root,
-                    capture_output=True,
-                )
-                return MergeResult(success=False, stage="merge", error="commit after conflict resolution failed")
             conflict_resolved = True
         else:
             subprocess.run(
