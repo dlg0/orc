@@ -180,6 +180,27 @@ def get_issue_parent(issue_id: str, cwd: Path | None = None) -> str | None:
         return None
 
 
+def get_issue_status(issue_id: str, cwd: Path | None = None) -> str | None:
+    """Return the beads status for *issue_id*, or ``None`` if unavailable."""
+    try:
+        result = subprocess.run(
+            ["bd", "show", issue_id, "--json"],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout)
+        if isinstance(data, list) and len(data) > 0:
+            status = data[0].get("status")
+            return status if isinstance(status, str) else None
+        return None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def get_children_all_closed(parent_id: str, cwd: Path | None = None) -> bool | None:
     """Check whether all children of *parent_id* are closed.
 

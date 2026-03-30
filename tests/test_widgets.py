@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import pytest
 
 from amp_orchestrator.config import OrchestratorConfig
 from amp_orchestrator.queue import BdIssue
-from amp_orchestrator.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage
+from amp_orchestrator.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
 from amp_orchestrator.tui.app import OrchestratorApp
 from amp_orchestrator.tui.snapshot import DashboardSnapshot
 from amp_orchestrator.tui.widgets import (
@@ -258,6 +259,76 @@ def test_pending_action_none_does_not_suppress() -> None:
     app = OrchestratorApp()
     snap = _snap(mode=OrchestratorMode.idle)
     assert app._check_pending_action(snap) is False
+
+
+def test_retry_held_issue_notifies_when_issue_is_closed(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir()
+    store = StateStore(state_dir)
+    store.save(
+        OrchestratorState(
+            issue_failures={
+                "amp-orchestrator-qyy": {
+                    "category": "issue_needs_rework",
+                    "action": "hold_for_retry",
+                    "stage": "evaluation",
+                    "summary": "Needs retry",
+                    "timestamp": "2026-01-01T00:00:00+00:00",
+                    "attempts": 1,
+                }
+            }
+        )
+    )
+    app = OrchestratorApp(repo_root=tmp_path, state_dir=state_dir)
+
+    with (
+        patch.object(app, "notify", new=Mock()) as notify_mock,
+        patch.object(app, "_do_full_refresh", new=Mock()) as refresh_mock,
+        patch.object(app, "call_from_thread", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs)),
+        patch("amp_orchestrator.tui.app.get_issue_status", return_value="closed"),
+    ):
+        OrchestratorApp._do_retry_held_issue.__wrapped__(app, "amp-orchestrator-qyy")
+
+    assert "amp-orchestrator-qyy" not in store.load().issue_failures
+    notify_mock.assert_called_once_with(
+        "amp-orchestrator-qyy is already closed in beads — removed from held list"
+    )
+    refresh_mock.assert_called_once_with()
+
+
+def test_retry_held_issue_keeps_requeue_message_for_open_issue(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir()
+    store = StateStore(state_dir)
+    store.save(
+        OrchestratorState(
+            issue_failures={
+                "amp-orchestrator-qyy": {
+                    "category": "issue_needs_rework",
+                    "action": "hold_for_retry",
+                    "stage": "evaluation",
+                    "summary": "Needs retry",
+                    "timestamp": "2026-01-01T00:00:00+00:00",
+                    "attempts": 1,
+                }
+            }
+        )
+    )
+    app = OrchestratorApp(repo_root=tmp_path, state_dir=state_dir)
+
+    with (
+        patch.object(app, "notify", new=Mock()) as notify_mock,
+        patch.object(app, "_do_full_refresh", new=Mock()) as refresh_mock,
+        patch.object(app, "call_from_thread", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs)),
+        patch("amp_orchestrator.tui.app.get_issue_status", return_value="open"),
+    ):
+        OrchestratorApp._do_retry_held_issue.__wrapped__(app, "amp-orchestrator-qyy")
+
+    assert "amp-orchestrator-qyy" not in store.load().issue_failures
+    notify_mock.assert_called_once_with(
+        "Cleared failure status for amp-orchestrator-qyy — will be re-queued"
+    )
+    refresh_mock.assert_called_once_with()
 
 
 def test_stale_banner_composes() -> None:
