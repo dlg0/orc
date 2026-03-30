@@ -116,6 +116,14 @@ def _is_empty_rebase_step(error: subprocess.CalledProcessError) -> bool:
     return any(signal in combined_output for signal in empty_signals)
 
 
+def _format_conflict_resolution_error(detail: str | None) -> str:
+    """Build a user-facing conflict resolution error with optional diagnostics."""
+    detail_text = (detail or "").strip()
+    if not detail_text:
+        return "conflict resolution failed"
+    return f"conflict resolution failed: {detail_text}"
+
+
 def _spawn_amp_for_conflicts(
     worktree_path: Path,
     conflict_files: list[str],
@@ -212,8 +220,8 @@ def _resolve_conflicts_with_amp(
     issue_id: str,
     events: EventLog | None,
     conflict_resolution_timeout: int = 600,
-) -> bool:
-    """Resolve merge/rebase conflicts using amp. Handles multi-commit rebases. Returns True if resolved."""
+) -> tuple[bool, str | None]:
+    """Resolve merge/rebase conflicts using amp. Returns success and optional failure detail."""
     resolved = _spawn_amp_for_conflicts(
         worktree_path=worktree_path,
         conflict_files=conflict_files,
@@ -224,7 +232,7 @@ def _resolve_conflicts_with_amp(
         conflict_resolution_timeout=conflict_resolution_timeout,
     )
     if not resolved:
-        return False
+        return False, None
 
     # If rebase, continue — may need multiple rounds for multi-commit rebases
     if stage == "rebase":
@@ -260,7 +268,7 @@ def _resolve_conflicts_with_amp(
                     )
                     if not re_resolved:
                         logger.warning("Failed to resolve conflicts on round %d", _round + 1)
-                        return False
+                        return False, None
                     # Loop back to try --continue again
                 elif _is_empty_rebase_step(rebase_err):
                     logger.info(
@@ -288,15 +296,16 @@ def _resolve_conflicts_with_amp(
                                 "success": False,
                                 "reason": "rebase_skip_failed",
                             })
-                        return False
+                        return False, None
 
                     if not _rebase_in_progress(worktree_path):
                         break
                 else:
+                    rebase_stderr = _decode_output(rebase_err.stderr).strip()
                     logger.warning(
                         "git rebase --continue failed after conflict resolution rc=%s stderr=%r",
                         rebase_err.returncode,
-                        _decode_output(rebase_err.stderr),
+                        rebase_stderr,
                     )
                     if events:
                         events.record(EventType.conflict_resolution_finished, {
@@ -304,8 +313,10 @@ def _resolve_conflicts_with_amp(
                             "stage": stage,
                             "success": False,
                             "reason": "rebase_continue_failed",
+                            "stderr": rebase_stderr,
+                            "returncode": rebase_err.returncode,
                         })
-                    return False
+                    return False, _format_conflict_resolution_error(rebase_stderr)
 
     logger.info("Conflict resolution succeeded for %s stage", stage)
     if events:
@@ -314,7 +325,7 @@ def _resolve_conflicts_with_amp(
             "stage": stage,
             "success": True,
         })
-    return True
+    return True, None
 
 
 def _build_conflict_prompt(
@@ -405,7 +416,7 @@ def verify_and_merge(
                 })
             logger.info("Rebase conflict detected, attempting resolution for %s", issue_id)
 
-            resolved = _resolve_conflicts_with_amp(
+            resolved, resolution_error = _resolve_conflicts_with_amp(
                 worktree_path=worktree_info.worktree_path,
                 conflict_files=conflict_files,
                 stage="rebase",
@@ -420,7 +431,11 @@ def verify_and_merge(
                     cwd=worktree_info.worktree_path,
                     capture_output=True,
                 )
-                return MergeResult(success=False, stage="rebase", error="conflict resolution failed")
+                return MergeResult(
+                    success=False,
+                    stage="rebase",
+                    error=resolution_error or "conflict resolution failed",
+                )
             conflict_resolved = True
         else:
             subprocess.run(
@@ -492,7 +507,7 @@ def verify_and_merge(
                 })
             logger.info("Merge conflict detected, attempting resolution for %s", issue_id)
 
-            resolved = _resolve_conflicts_with_amp(
+            resolved, resolution_error = _resolve_conflicts_with_amp(
                 worktree_path=repo_root,
                 conflict_files=conflict_files,
                 stage="merge",
@@ -507,7 +522,11 @@ def verify_and_merge(
                     cwd=repo_root,
                     capture_output=True,
                 )
-                return MergeResult(success=False, stage="merge", error="conflict resolution failed")
+                return MergeResult(
+                    success=False,
+                    stage="merge",
+                    error=resolution_error or "conflict resolution failed",
+                )
             # After merge conflict resolution, commit the merge — unless amp
             # already completed it (consuming MERGE_HEAD).
             if _merge_in_progress(repo_root):

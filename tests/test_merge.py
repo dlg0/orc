@@ -631,6 +631,64 @@ class TestConflictResolutionEvents:
         assert len(finished) == 1
         assert finished[0]["data"]["success"] is True
 
+    @patch("amp_orchestrator.merge.shutil.which", return_value="/usr/bin/amp")
+    @patch("amp_orchestrator.merge.subprocess.run")
+    def test_rebase_continue_failure_records_stderr(self, mock_run, mock_which, tmp_path: Path, caplog) -> None:
+        """Rebase --continue failures surface stderr in logs, events, and MergeResult."""
+        rebase_continue_stderr = "error: cannot rebase: You have unstaged changes."
+        diff_call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal diff_call_count
+            cmd = args[0]
+            if isinstance(cmd, list) and cmd[:2] == ["git", "rebase"] and "--abort" not in cmd and "--continue" not in cmd:
+                raise subprocess.CalledProcessError(1, cmd, stderr=b"CONFLICT")
+            if isinstance(cmd, list) and cmd[:3] == ["git", "diff", "--name-only"]:
+                diff_call_count += 1
+                stdout = "foo.py\n" if diff_call_count == 1 else ""
+                return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+            if isinstance(cmd, list) and cmd[0].endswith("amp"):
+                return subprocess.CompletedProcess(cmd, 0)
+            if isinstance(cmd, list) and cmd[:2] == ["git", "rebase"] and "--continue" in cmd:
+                raise subprocess.CalledProcessError(1, cmd, stderr=rebase_continue_stderr)
+            return _preflight_side_effect(*args, **kwargs)
+
+        mock_run.side_effect = side_effect
+        state_dir = tmp_path / ".amp-orchestrator"
+        state_dir.mkdir()
+        caplog.set_level("WARNING", logger="amp_orchestrator.merge")
+
+        result = verify_and_merge(
+            worktree_info=WORKTREE_INFO,
+            repo_root=REPO_ROOT,
+            base_branch=BASE_BRANCH,
+            verification_commands=[],
+            auto_push=False,
+            issue_id=ISSUE_ID,
+            state_dir=state_dir,
+        )
+
+        assert result.success is False
+        assert result.stage == "rebase"
+        assert result.error == f"conflict resolution failed: {rebase_continue_stderr}"
+        assert "git rebase --continue failed after conflict resolution" in caplog.text
+        assert rebase_continue_stderr in caplog.text
+
+        from amp_orchestrator.events import EventLog
+        finished = [
+            e for e in EventLog(state_dir).all()
+            if e["event_type"] == "conflict_resolution_finished"
+        ]
+        assert len(finished) == 1
+        assert finished[0]["data"] == {
+            "issue_id": ISSUE_ID,
+            "stage": "rebase",
+            "success": False,
+            "reason": "rebase_continue_failed",
+            "stderr": rebase_continue_stderr,
+            "returncode": 1,
+        }
+
 
 class TestMergeConflictResolution:
     @patch("amp_orchestrator.merge.shutil.which", return_value="/usr/bin/amp")
