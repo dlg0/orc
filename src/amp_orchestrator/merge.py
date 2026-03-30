@@ -22,6 +22,13 @@ class MergeResult:
     conflict_resolved: bool = False
 
 
+def _decode_output(output: str | bytes | None) -> str:
+    """Return subprocess output as text for logging and message matching."""
+    if isinstance(output, bytes):
+        return output.decode(errors="replace")
+    return output or ""
+
+
 def _merge_in_progress(cwd: Path) -> bool:
     """Check whether a merge is still in progress (MERGE_HEAD exists)."""
     result = subprocess.run(
@@ -60,6 +67,53 @@ def _get_conflict_files(cwd: Path) -> list[str]:
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
     return []
+
+
+def _stage_conflict_files(cwd: Path, conflict_files: list[str]) -> bool:
+    """Stage the files that originally had conflicts after markers are resolved."""
+    if not conflict_files:
+        return True
+
+    try:
+        subprocess.run(
+            ["git", "add", "-A", "--", *conflict_files],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as err:
+        logger.warning(
+            "Failed to stage resolved conflict files %s: stderr=%r",
+            conflict_files,
+            _decode_output(err.stderr),
+        )
+        return False
+
+    return True
+
+
+def _rebase_in_progress(cwd: Path) -> bool:
+    """Check whether a rebase is still paused and awaiting user action."""
+    result = subprocess.run(
+        ["git", "rev-parse", "-q", "--verify", "REBASE_HEAD"],
+        cwd=cwd,
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def _is_empty_rebase_step(error: subprocess.CalledProcessError) -> bool:
+    """Detect when rebase --continue fails because the patch became empty."""
+    combined_output = "\n".join(
+        part for part in (_decode_output(error.stdout), _decode_output(error.stderr)) if part
+    ).lower()
+    empty_signals = [
+        "no changes",
+        "nothing to commit",
+        "previous cherry-pick is now empty",
+    ]
+    return any(signal in combined_output for signal in empty_signals)
 
 
 def _spawn_amp_for_conflicts(
@@ -136,6 +190,17 @@ def _spawn_amp_for_conflicts(
             })
         return False
 
+    if not _stage_conflict_files(worktree_path, conflict_files):
+        if events:
+            events.record(EventType.conflict_resolution_finished, {
+                "issue_id": issue_id,
+                "stage": stage,
+                "success": False,
+                "reason": "git_add_failed",
+                "remaining_files": conflict_files,
+            })
+        return False
+
     return True
 
 
@@ -172,6 +237,7 @@ def _resolve_conflicts_with_amp(
                     cwd=worktree_path,
                     check=True,
                     capture_output=True,
+                    text=True,
                     env=rebase_env,
                 )
                 break  # rebase finished successfully
@@ -196,8 +262,42 @@ def _resolve_conflicts_with_amp(
                         logger.warning("Failed to resolve conflicts on round %d", _round + 1)
                         return False
                     # Loop back to try --continue again
+                elif _is_empty_rebase_step(rebase_err):
+                    logger.info(
+                        "git rebase --continue reported no changes after conflict resolution; skipping empty commit"
+                    )
+                    try:
+                        subprocess.run(
+                            ["git", "rebase", "--skip"],
+                            cwd=worktree_path,
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                            env=rebase_env,
+                        )
+                    except subprocess.CalledProcessError as skip_err:
+                        logger.warning(
+                            "git rebase --skip failed after empty rebase step rc=%s stderr=%r",
+                            skip_err.returncode,
+                            _decode_output(skip_err.stderr),
+                        )
+                        if events:
+                            events.record(EventType.conflict_resolution_finished, {
+                                "issue_id": issue_id,
+                                "stage": stage,
+                                "success": False,
+                                "reason": "rebase_skip_failed",
+                            })
+                        return False
+
+                    if not _rebase_in_progress(worktree_path):
+                        break
                 else:
-                    logger.warning("git rebase --continue failed after conflict resolution")
+                    logger.warning(
+                        "git rebase --continue failed after conflict resolution rc=%s stderr=%r",
+                        rebase_err.returncode,
+                        _decode_output(rebase_err.stderr),
+                    )
                     if events:
                         events.record(EventType.conflict_resolution_finished, {
                             "issue_id": issue_id,
