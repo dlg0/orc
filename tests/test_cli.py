@@ -25,7 +25,7 @@ def test_help_shows_all_commands() -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["--help"])
     assert result.exit_code == 0
-    for cmd in ["status", "start", "pause", "resume", "stop", "inspect", "logs", "init-config", "tui", "retry"]:
+    for cmd in ["status", "start", "pause", "resume", "stop", "inspect", "logs", "init-config", "tui", "retry", "retry-merge"]:
         assert cmd in result.output
 
 
@@ -202,7 +202,10 @@ def test_retry_clears_failure(tmp_path: Path) -> None:
     )
     store.save(state)
 
-    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+    with (
+        patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir),
+        patch("amp_orchestrator.cli.get_issue_status", return_value="open"),
+    ):
         runner = CliRunner()
         result = runner.invoke(main, ["retry", "bz5"])
         assert result.exit_code == 0
@@ -223,6 +226,106 @@ def test_retry_not_in_failures(tmp_path: Path) -> None:
         result = runner.invoke(main, ["retry", "bz99"])
         assert result.exit_code != 0
         assert "not in held/failed state" in result.output
+
+
+def test_retry_schedules_merge_retry_for_conflict_failure(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir(parents=True)
+    store = StateStore(state_dir)
+    state = OrchestratorState(
+        mode=OrchestratorMode.idle,
+        issue_failures={"bz6": {
+            "category": "stale_or_conflicted",
+            "action": "hold_for_retry",
+            "stage": "merge/rebase",
+            "summary": "Rebase conflict",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "attempts": 1,
+            "branch": "amp/bz6-conflict",
+            "worktree_path": "/tmp/wt-bz6",
+            "preserve_worktree": True,
+        }},
+    )
+    store.save(state)
+
+    with (
+        patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir),
+        patch("amp_orchestrator.cli.get_issue_status", return_value="open"),
+    ):
+        runner = CliRunner()
+        result = runner.invoke(main, ["retry", "bz6"])
+        assert result.exit_code == 0
+        assert "Scheduled merge retry for bz6" in result.output
+
+    reloaded = store.load()
+    assert "bz6" not in reloaded.issue_failures
+    assert reloaded.resume_candidate is not None
+    assert reloaded.resume_candidate["issue_id"] == "bz6"
+    assert reloaded.resume_candidate["stage"] == "ready_to_merge"
+
+
+def test_retry_merge_requires_merge_retryable_failure(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir(parents=True)
+    store = StateStore(state_dir)
+    store.save(
+        OrchestratorState(
+            mode=OrchestratorMode.idle,
+            issue_failures={"bz7": {
+                "category": "issue_needs_rework",
+                "action": "hold_for_retry",
+                "stage": "evaluation",
+                "summary": "Tests failing",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "attempts": 1,
+            }},
+        )
+    )
+
+    with (
+        patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir),
+        patch("amp_orchestrator.cli.get_issue_status", return_value="open"),
+    ):
+        runner = CliRunner()
+        result = runner.invoke(main, ["retry-merge", "bz7"])
+        assert result.exit_code != 0
+        assert "not eligible for merge-only retry" in result.output
+
+
+def test_retry_merge_queues_ready_to_merge_resume(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir(parents=True)
+    store = StateStore(state_dir)
+    store.save(
+        OrchestratorState(
+            mode=OrchestratorMode.idle,
+            issue_failures={"bz8": {
+                "category": "stale_or_conflicted",
+                "action": "hold_for_retry",
+                "stage": "merge/rebase",
+                "summary": "Rebase conflict",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "attempts": 1,
+                "branch": "amp/bz8-conflict",
+                "worktree_path": "/tmp/wt-bz8",
+                "preserve_worktree": True,
+            }},
+        )
+    )
+
+    with (
+        patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir),
+        patch("amp_orchestrator.cli.get_issue_status", return_value="open"),
+    ):
+        runner = CliRunner()
+        result = runner.invoke(main, ["retry-merge", "bz8"])
+        assert result.exit_code == 0
+        assert "Scheduled merge retry for bz8" in result.output
+
+    reloaded = store.load()
+    assert reloaded.resume_candidate is not None
+    assert reloaded.resume_candidate["issue_id"] == "bz8"
+    assert reloaded.resume_candidate["stage"] == "ready_to_merge"
 
 
 def test_status_shows_held_issues(tmp_path: Path) -> None:

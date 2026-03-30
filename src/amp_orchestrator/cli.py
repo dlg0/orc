@@ -14,8 +14,12 @@ from amp_orchestrator.control import (
     stop_orchestrator,
 )
 from amp_orchestrator.events import EventLog
-from amp_orchestrator.queue import get_ready_issues, reconcile_issue_failures
-from amp_orchestrator.state import FailureCategory, IssueFailure, OrchestratorMode, StateStore
+from amp_orchestrator.queue import get_issue_status, get_ready_issues, reconcile_issue_failures
+from amp_orchestrator.state import (
+    OrchestratorMode,
+    StateStore,
+    queue_retry,
+)
 
 
 def _get_state_dir(path: Path | None = None) -> Path:
@@ -128,9 +132,39 @@ def retry(issue_id: str) -> None:
     state = store.load()
     if issue_id not in state.issue_failures:
         raise click.ClickException(f"{issue_id} is not in held/failed state")
-    del state.issue_failures[issue_id]
+    if get_issue_status(issue_id, cwd=state_dir.parent) == "closed":
+        del state.issue_failures[issue_id]
+        store.save(state)
+        click.echo(f"{issue_id} is already closed in beads — removed from held list")
+        return
+    try:
+        message = queue_retry(state, issue_id)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
     store.save(state)
-    click.echo(f"Cleared failure status for {issue_id} — will be re-queued on next run")
+    click.echo(message)
+
+
+@main.command("retry-merge")
+@click.argument("issue_id")
+def retry_merge(issue_id: str) -> None:
+    """Queue ISSUE_ID to retry only the verify-and-merge step on next run."""
+    state_dir = _get_state_dir()
+    store = StateStore(state_dir)
+    state = store.load()
+    if issue_id not in state.issue_failures:
+        raise click.ClickException(f"{issue_id} is not in held/failed state")
+    if get_issue_status(issue_id, cwd=state_dir.parent) == "closed":
+        del state.issue_failures[issue_id]
+        store.save(state)
+        click.echo(f"{issue_id} is already closed in beads — removed from held list")
+        return
+    try:
+        message = queue_retry(state, issue_id, merge_only=True)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    store.save(state)
+    click.echo(message)
 
 
 @main.command()

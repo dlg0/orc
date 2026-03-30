@@ -5,11 +5,13 @@ from __future__ import annotations
 import pytest
 
 from amp_orchestrator.state import (
+    can_retry_merge,
     FailureAction,
     FailureCategory,
     IssueFailure,
     OrchestratorMode,
     OrchestratorState,
+    queue_retry,
     RunCheckpoint,
     RunStage,
     StateStore,
@@ -204,6 +206,67 @@ def test_load_backward_compat_missing_issue_failures(tmp_path) -> None:
     store = StateStore(tmp_path)
     state = store.load()
     assert state.issue_failures == {}
+
+
+def test_can_retry_merge_requires_preserved_branch_and_worktree() -> None:
+    assert can_retry_merge({
+        "category": "stale_or_conflicted",
+        "summary": "conflict",
+        "timestamp": "2026-01-01T00:00:00+00:00",
+        "branch": "amp/X-1",
+        "worktree_path": "/tmp/wt",
+        "preserve_worktree": True,
+    }) is True
+    assert can_retry_merge({
+        "category": "stale_or_conflicted",
+        "summary": "conflict",
+        "timestamp": "2026-01-01T00:00:00+00:00",
+        "branch": "amp/X-1",
+        "worktree_path": None,
+        "preserve_worktree": True,
+    }) is False
+
+
+def test_queue_retry_uses_resume_candidate_for_merge_retryable_failures() -> None:
+    state = OrchestratorState(
+        issue_failures={
+            "X-1": {
+                "category": "stale_or_conflicted",
+                "action": "hold_for_retry",
+                "stage": "merge/rebase",
+                "summary": "conflict",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "branch": "amp/X-1",
+                "worktree_path": "/tmp/wt",
+                "preserve_worktree": True,
+            }
+        }
+    )
+
+    message = queue_retry(state, "X-1")
+
+    assert message == "Scheduled merge retry for X-1 — will retry verify-and-merge on next run"
+    assert "X-1" not in state.issue_failures
+    assert state.resume_candidate is not None
+    assert state.resume_candidate["issue_id"] == "X-1"
+    assert state.resume_candidate["stage"] == "ready_to_merge"
+
+
+def test_queue_retry_merge_only_rejects_non_merge_failure() -> None:
+    state = OrchestratorState(
+        issue_failures={
+            "X-2": {
+                "category": "issue_needs_rework",
+                "action": "hold_for_retry",
+                "stage": "evaluation",
+                "summary": "tests",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="not eligible for merge-only retry"):
+        queue_retry(state, "X-2", merge_only=True)
 
 
 def test_active_issue_title_round_trip(tmp_path) -> None:
