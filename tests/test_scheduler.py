@@ -825,8 +825,10 @@ def test_merge_non_conflict_failure_cleans_worktree(repo_root: Path, state_dir: 
 
     state = StateStore(state_dir).load()
     assert "test-1" in state.issue_failures
-    assert state.issue_failures["test-1"]["category"] == "stale_or_conflicted"
-    assert state.issue_failures["test-1"]["preserve_worktree"] is False
+    failure = state.issue_failures["test-1"]
+    assert failure["category"] == "fatal_run_error"
+    assert failure["action"] == "pause_orchestrator"
+    assert failure["preserve_worktree"] is False
     mock_worktree_mgr.return_value.cleanup_worktree.assert_called_once()
 
 

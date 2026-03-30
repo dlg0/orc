@@ -742,7 +742,7 @@ def run_loop(
                 "error": merge_result.error,
             })
             is_conflict = merge_result.stage in ("rebase", "merge") and merge_result.error and "conflict" in merge_result.error.lower()
-            merge_category = FailureCategory.stale_or_conflicted if is_conflict else FailureCategory.stale_or_conflicted
+            merge_category = FailureCategory.stale_or_conflicted if is_conflict else FailureCategory.fatal_run_error
             preserve = is_conflict
             _record_failure(
                 store, state, issue.id, merge_category, f"merge/{merge_result.stage}",
