@@ -345,6 +345,36 @@ def check_held_issues(ctx: DoctorContext) -> list[Finding]:
             except (ValueError, TypeError):
                 pass
 
+        # Check for merge diagnostics
+        merge_diag = info.get("extra", {}).get("merge_diagnostics") if info.get("extra") else None
+        if merge_diag:
+            merge_stage = info.get("extra", {}).get("merge_stage", "unknown")
+            reason = merge_diag.get("reason", "unknown")
+            rec = f"Run 'orc inspect {issue_id}' for full diagnostics."
+            if can_retry_merge(info):
+                rec += f" Run 'orc queue-merge {issue_id}' to retry merge."
+            findings.append(Finding(
+                code="held.merge_diagnostics_available",
+                severity="info",
+                summary=f"Merge diagnostics for {issue_id}: reason={reason}, stage={merge_stage}.",
+                recommendation=rec,
+                issue_id=issue_id,
+            ))
+
+            if reason == "repo_root_dirty_tracked":
+                git_state = merge_diag.get("git_state", {})
+                dirty_paths = git_state.get("repo_root_dirty", []) if git_state else []
+                path_summary = ", ".join(dirty_paths[:5]) if dirty_paths else "(unknown paths)"
+                if len(dirty_paths) > 5:
+                    path_summary += f" … and {len(dirty_paths) - 5} more"
+                findings.append(Finding(
+                    code="held.repo_root_dirty_at_merge",
+                    severity="warn",
+                    summary=f"Merge for {issue_id} blocked by dirty tracked files in repo root: {path_summary}.",
+                    recommendation=f"Clean the repo root (git checkout/stash the blocking paths) then 'orc queue-merge {issue_id}'.",
+                    issue_id=issue_id,
+                ))
+
         # High attempt count
         if attempts >= 3:
             findings.append(Finding(

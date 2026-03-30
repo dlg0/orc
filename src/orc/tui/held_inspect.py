@@ -88,6 +88,10 @@ def build_model(
             "error": extra.get("merge_error"),
             "conflict_resolved": extra.get("conflict_resolved", False),
         }
+    if extra.get("merge_diagnostics"):
+        if merge_details is None:
+            merge_details = {}
+        merge_details["diagnostics"] = extra["merge_diagnostics"]
 
     amp_log_path = extra.get("amp_log_path") or latest_run.get("amp_log_path")
     thread_id = extra.get("thread_id") or latest_run.get("thread_id")
@@ -445,6 +449,41 @@ class HeldIssueInspectScreen(Screen[None]):
             lines.append(f"[bold red]Error:[/] {md['error']}")
         if md.get("conflict_resolved"):
             lines.append("[bold green]Conflict auto-resolved: True[/]")
+
+        diag = md.get("diagnostics")
+        if diag:
+            lines.append("")
+            lines.append("[bold]Diagnostics:[/]")
+            if diag.get("reason"):
+                lines.append(f"  Reason: {diag['reason']}")
+            if diag.get("command"):
+                lines.append(f"  Command: {' '.join(diag['command'])}")
+            if diag.get("returncode") is not None:
+                lines.append(f"  Return code: {diag['returncode']}")
+            if diag.get("stdout"):
+                stdout = diag["stdout"][:200]
+                if len(diag["stdout"]) > 200:
+                    stdout += "…"
+                lines.append(f"  Stdout: {stdout}")
+            if diag.get("stderr"):
+                stderr = diag["stderr"][:200]
+                if len(diag["stderr"]) > 200:
+                    stderr += "…"
+                lines.append(f"  Stderr: {stderr}")
+            git_state = diag.get("git_state")
+            if git_state:
+                dirty = git_state.get("repo_root_dirty", [])
+                wt_dirty = git_state.get("worktree_dirty", [])
+                if dirty:
+                    lines.append(f"  Dirty repo-root paths: {', '.join(dirty[:10])}")
+                if wt_dirty:
+                    lines.append(f"  Dirty worktree paths: {', '.join(wt_dirty[:10])}")
+
+            from orc.state import can_retry_merge
+            if can_retry_merge(self._model.failure):
+                lines.append("")
+                lines.append("[bold bright_yellow]Retryable:[/] run 'orc queue-merge " + self._model.issue_id + "' to retry merge")
+
         return "\n".join(lines) if lines else "[dim]No merge data available[/]"
 
     def _render_hints(self) -> str:

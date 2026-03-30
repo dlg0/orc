@@ -18,7 +18,7 @@ class OrchestratorMode(Enum):
     error = "error"
 
 
-from orc.workflow import WorkflowPhase, RESUMABLE_PHASES  # noqa: E402
+from orc.workflow import WorkflowPhase, RESUMABLE_PHASES, normalize_failure_phase  # noqa: E402
 
 # Backward-compatible alias — new code should use WorkflowPhase directly.
 RunStage = WorkflowPhase
@@ -207,16 +207,24 @@ _RESUMABLE_STAGES = RESUMABLE_PHASES
 _MAX_RESUME_ATTEMPTS = 2
 
 
+_MERGE_RETRYABLE_FAILURE_STAGES = {
+    WorkflowPhase.ready_to_merge.value,
+    WorkflowPhase.merge_running.value,
+    WorkflowPhase.conflict_resolution.value,
+}
+
+
 def can_retry_merge(info: object) -> bool:
-    """Return True when a held failure can resume at verify-and-merge."""
+    """Return True when a held failure has preserved merge-stage retry context."""
     failure = _normalize_issue_failure(info)
+    stage = failure.get("stage", "")
     return (
-        failure["category"] == FailureCategory.stale_or_conflicted.value
-        and failure["preserve_worktree"] is True
+        failure["preserve_worktree"] is True
         and isinstance(failure["branch"], str)
         and bool(failure["branch"])
         and isinstance(failure["worktree_path"], str)
         and bool(failure["worktree_path"])
+        and normalize_failure_phase(stage) in _MERGE_RETRYABLE_FAILURE_STAGES
     )
 
 

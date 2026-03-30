@@ -93,47 +93,57 @@ class TestVerifyAndMergeSuccess:
             ["git", "diff", "--quiet", f"origin/{BASE_BRANCH}..{WORKTREE_INFO.branch_name}"],
             cwd=WORKTREE_INFO.worktree_path, capture_output=True,
         )
-        # clean worktree check
+        # lockfile-noise check (inside _commit_lockfile_noise)
         assert calls[3] == call(
             ["git", "status", "--porcelain=v1"],
             cwd=WORKTREE_INFO.worktree_path, capture_output=True, text=True, check=True,
         )
-        # rebase
+        # clean worktree check (preflight)
         assert calls[4] == call(
+            ["git", "status", "--porcelain=v1"],
+            cwd=WORKTREE_INFO.worktree_path, capture_output=True, text=True, check=True,
+        )
+        # repo-root preflight
+        assert calls[5] == call(
+            ["git", "status", "--porcelain=v1"],
+            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+        )
+        # rebase
+        assert calls[6] == call(
             ["git", "rebase", "origin/main"],
             cwd=WORKTREE_INFO.worktree_path, check=True, capture_output=True,
         )
         # verify commands (env= is set by build_worktree_env)
-        assert calls[5][0][0] == "make test"
-        assert calls[5][1]["cwd"] == WORKTREE_INFO.worktree_path
-        assert calls[5][1]["shell"] is True
-        assert "env" in calls[5][1]
-        assert calls[6][0][0] == "make lint"
-        assert calls[6][1]["cwd"] == WORKTREE_INFO.worktree_path
-        assert calls[6][1]["shell"] is True
-        assert "env" in calls[6][1]
+        assert calls[7][0][0] == "make test"
+        assert calls[7][1]["cwd"] == WORKTREE_INFO.worktree_path
+        assert calls[7][1]["shell"] is True
+        assert "env" in calls[7][1]
+        assert calls[8][0][0] == "make lint"
+        assert calls[8][1]["cwd"] == WORKTREE_INFO.worktree_path
+        assert calls[8][1]["shell"] is True
+        assert "env" in calls[8][1]
         # checkout
-        assert calls[7] == call(
+        assert calls[9] == call(
             ["git", "checkout", "main"],
             cwd=REPO_ROOT, check=True, capture_output=True,
         )
         # pull
-        assert calls[8] == call(
+        assert calls[10] == call(
             ["git", "pull", "origin", "main"],
             cwd=REPO_ROOT, check=True, capture_output=True,
         )
         # merge
-        assert calls[9] == call(
+        assert calls[11] == call(
             ["git", "merge", "--no-ff", "amp/ISSUE-1-fix-bug", "-m", "Merge amp/ISSUE-1-fix-bug"],
             cwd=REPO_ROOT, check=True, capture_output=True,
         )
         # push
-        assert calls[10] == call(
+        assert calls[12] == call(
             ["git", "push", "origin", "main"],
             cwd=REPO_ROOT, check=True, capture_output=True,
         )
         # bd close
-        assert calls[11] == call(
+        assert calls[13] == call(
             ["bd", "close", "ISSUE-1"],
             cwd=REPO_ROOT, check=True, capture_output=True,
         )
@@ -361,10 +371,11 @@ class TestPreflightChecks:
 class TestDirtyWorktreePreflight:
     @patch("orc.merge.subprocess.run")
     def test_dirty_worktree_rejects_before_rebase(self, mock_run: object) -> None:
+        """Non-lockfile dirty files should still block the merge."""
         def side_effect(*args, **kwargs):
             cmd = args[0]
             if isinstance(cmd, list) and cmd[:3] == ["git", "status", "--porcelain=v1"]:
-                return subprocess.CompletedProcess(cmd, 0, stdout=" M uv.lock\n", stderr="")
+                return subprocess.CompletedProcess(cmd, 0, stdout=" M src/app.py\n", stderr="")
             return _preflight_side_effect(*args, **kwargs)
 
         mock_run.side_effect = side_effect
@@ -381,12 +392,75 @@ class TestDirtyWorktreePreflight:
         assert result.success is False
         assert result.stage == "preflight"
         assert "worktree not clean" in result.error
-        assert "uv.lock" in result.error
+        assert "src/app.py" in result.error
 
         # No rebase should have been attempted
         calls = mock_run.call_args_list
         rebase_calls = [c for c in calls if isinstance(c[0][0], list) and c[0][0][:2] == ["git", "rebase"]]
         assert len(rebase_calls) == 0
+
+    @patch("orc.merge.subprocess.run")
+    def test_lockfile_only_dirt_auto_committed(self, mock_run: object) -> None:
+        """When only uv.lock is dirty, it should be auto-committed and merge proceeds."""
+        status_call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal status_call_count
+            cmd = args[0]
+            if isinstance(cmd, list) and cmd[:3] == ["git", "status", "--porcelain=v1"]:
+                status_call_count += 1
+                if status_call_count == 1:
+                    # First call: dirty with uv.lock
+                    return subprocess.CompletedProcess(cmd, 0, stdout=" M uv.lock\n", stderr="")
+                # After auto-commit: clean
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            return _preflight_side_effect(*args, **kwargs)
+
+        mock_run.side_effect = side_effect
+
+        result = verify_and_merge(
+            worktree_info=WORKTREE_INFO,
+            repo_root=REPO_ROOT,
+            base_branch=BASE_BRANCH,
+            verification_commands=[],
+            auto_push=True,
+            issue_id=ISSUE_ID,
+        )
+
+        # Should succeed (lockfile noise was auto-committed)
+        assert result.success is True
+
+        # Verify git add and commit were called for the lockfile
+        calls = mock_run.call_args_list
+        cmd_lists = [c.args[0] for c in calls if c.args and isinstance(c.args[0], list)]
+        add_calls = [cmd for cmd in cmd_lists if cmd[:2] == ["git", "add"]]
+        assert any("uv.lock" in cmd for cmd in add_calls)
+        commit_calls = [cmd for cmd in cmd_lists if cmd[:2] == ["git", "commit"] and any("lockfiles" in a for a in cmd)]
+        assert len(commit_calls) == 1
+
+    @patch("orc.merge.subprocess.run")
+    def test_lockfile_plus_source_dirt_not_auto_committed(self, mock_run: object) -> None:
+        """When uv.lock AND source files are dirty, nothing is auto-committed."""
+        def side_effect(*args, **kwargs):
+            cmd = args[0]
+            if isinstance(cmd, list) and cmd[:3] == ["git", "status", "--porcelain=v1"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout=" M uv.lock\n M src/app.py\n", stderr="")
+            return _preflight_side_effect(*args, **kwargs)
+
+        mock_run.side_effect = side_effect
+
+        result = verify_and_merge(
+            worktree_info=WORKTREE_INFO,
+            repo_root=REPO_ROOT,
+            base_branch=BASE_BRANCH,
+            verification_commands=[],
+            auto_push=True,
+            issue_id=ISSUE_ID,
+        )
+
+        assert result.success is False
+        assert result.stage == "preflight"
+        assert "worktree not clean" in result.error
 
 
 class TestAutoPushFalse:

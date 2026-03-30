@@ -213,22 +213,46 @@ def test_load_backward_compat_missing_issue_failures(tmp_path) -> None:
 
 
 def test_can_retry_merge_requires_preserved_branch_and_worktree() -> None:
+    # Valid merge-stage failure with preserved worktree
     assert can_retry_merge({
         "category": "stale_or_conflicted",
+        "stage": "merge_running",
         "summary": "conflict",
         "timestamp": "2026-01-01T00:00:00+00:00",
         "branch": "amp/X-1",
         "worktree_path": "/tmp/wt",
         "preserve_worktree": True,
     }) is True
+    # Missing worktree_path → not retryable
     assert can_retry_merge({
         "category": "stale_or_conflicted",
+        "stage": "merge_running",
         "summary": "conflict",
         "timestamp": "2026-01-01T00:00:00+00:00",
         "branch": "amp/X-1",
         "worktree_path": None,
         "preserve_worktree": True,
     }) is False
+    # Non-merge stage → not retryable even with preserved worktree
+    assert can_retry_merge({
+        "category": "stale_or_conflicted",
+        "stage": "amp_running",
+        "summary": "conflict",
+        "timestamp": "2026-01-01T00:00:00+00:00",
+        "branch": "amp/X-1",
+        "worktree_path": "/tmp/wt",
+        "preserve_worktree": True,
+    }) is False
+    # Legacy merge/ prefix normalizes to merge_running → retryable
+    assert can_retry_merge({
+        "category": "stale_or_conflicted",
+        "stage": "merge/rebase",
+        "summary": "conflict",
+        "timestamp": "2026-01-01T00:00:00+00:00",
+        "branch": "amp/X-1",
+        "worktree_path": "/tmp/wt",
+        "preserve_worktree": True,
+    }) is True
 
 
 def test_queue_merge_resume_sets_resume_candidate() -> None:

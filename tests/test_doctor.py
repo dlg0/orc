@@ -298,6 +298,80 @@ class TestHeldIssues:
             findings = check_held_issues(ctx)
         assert any(f.code == "held.high_attempt_count" for f in findings)
 
+    def test_merge_diagnostics_finding(self, tmp_path: Path) -> None:
+        state = OrchestratorState(
+            issue_failures={
+                "ISSUE-15": {
+                    "category": "stale_or_conflicted",
+                    "action": "hold_for_retry",
+                    "stage": "merge/rebase",
+                    "summary": "rebase conflict",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "attempts": 1,
+                    "branch": "amp/test",
+                    "worktree_path": "/tmp/wt",
+                    "preserve_worktree": True,
+                    "extra": {
+                        "merge_stage": "rebase",
+                        "merge_error": "conflict",
+                        "merge_diagnostics": {
+                            "reason": "rebase_conflict",
+                            "command": ["git", "rebase", "main"],
+                            "returncode": 1,
+                            "stdout": "",
+                            "stderr": "CONFLICT (content): Merge conflict in foo.py",
+                        },
+                    },
+                },
+            },
+        )
+        ctx = _make_ctx(tmp_path, state=state)
+        with patch("orc.doctor.get_issue_state", return_value=__import__("orc.queue", fromlist=["IssueState"]).IssueState.open):
+            findings = check_held_issues(ctx)
+        diag_findings = [f for f in findings if f.code == "held.merge_diagnostics_available"]
+        assert len(diag_findings) == 1
+        assert "rebase_conflict" in diag_findings[0].summary
+        assert "orc inspect" in diag_findings[0].recommendation
+        assert "orc queue-merge" in diag_findings[0].recommendation
+
+    def test_merge_diagnostics_dirty_repo_root(self, tmp_path: Path) -> None:
+        state = OrchestratorState(
+            issue_failures={
+                "ISSUE-16": {
+                    "category": "stale_or_conflicted",
+                    "action": "hold_for_retry",
+                    "stage": "merge/pre-check",
+                    "summary": "dirty repo root",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "attempts": 1,
+                    "branch": "amp/test",
+                    "worktree_path": "/tmp/wt",
+                    "preserve_worktree": True,
+                    "extra": {
+                        "merge_stage": "pre-check",
+                        "merge_error": "repo root dirty",
+                        "merge_diagnostics": {
+                            "reason": "repo_root_dirty_tracked",
+                            "command": ["git", "status", "--porcelain"],
+                            "returncode": 0,
+                            "stdout": " M dirty_file.txt",
+                            "stderr": "",
+                            "git_state": {
+                                "repo_root_dirty": ["dirty_file.txt"],
+                            },
+                        },
+                    },
+                },
+            },
+        )
+        ctx = _make_ctx(tmp_path, state=state)
+        with patch("orc.doctor.get_issue_state", return_value=__import__("orc.queue", fromlist=["IssueState"]).IssueState.open):
+            findings = check_held_issues(ctx)
+        dirty_findings = [f for f in findings if f.code == "held.repo_root_dirty_at_merge"]
+        assert len(dirty_findings) == 1
+        assert "dirty_file.txt" in dirty_findings[0].summary
+        assert dirty_findings[0].severity == "warn"
+
     def test_merge_retryable(self, tmp_path: Path) -> None:
         state = OrchestratorState(
             issue_failures={

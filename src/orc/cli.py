@@ -287,9 +287,40 @@ def inspect(issue_id: str) -> None:
             click.echo(f"Worktree: {failure_info['worktree_path']}")
         if failure_info.get("summary"):
             click.echo(f"Summary: {failure_info['summary']}")
+
+        # Show structured merge diagnostics if available
+        merge_diag = failure_info.get("extra", {}).get("merge_diagnostics") if failure_info.get("extra") else None
+        if merge_diag:
+            click.echo("")
+            click.echo("Merge Diagnostics:")
+            click.echo(f"  Merge stage: {failure_info.get('extra', {}).get('merge_stage', 'unknown')}")
+            click.echo(f"  Reason: {merge_diag.get('reason', 'unknown')}")
+            if merge_diag.get("command"):
+                click.echo(f"  Command: {' '.join(merge_diag['command'])}")
+            if merge_diag.get("returncode") is not None:
+                click.echo(f"  Return code: {merge_diag['returncode']}")
+            if merge_diag.get("stdout"):
+                stdout = merge_diag["stdout"][:200]
+                if len(merge_diag["stdout"]) > 200:
+                    stdout += "…"
+                click.echo(f"  Stdout: {stdout}")
+            if merge_diag.get("stderr"):
+                stderr = merge_diag["stderr"][:200]
+                if len(merge_diag["stderr"]) > 200:
+                    stderr += "…"
+                click.echo(f"  Stderr: {stderr}")
+            git_state = merge_diag.get("git_state")
+            if git_state:
+                dirty = git_state.get("repo_root_dirty", [])
+                if dirty:
+                    click.echo(f"  Dirty repo-root paths: {', '.join(dirty[:10])}")
+
         from orc.state import can_retry_merge
         if can_retry_merge(failure_info):
-            click.echo(f"Suggested: orc queue-merge {issue_id}")
+            reason_note = ""
+            if merge_diag:
+                reason_note = f" (blocker: {merge_diag.get('reason', 'unknown')})"
+            click.echo(f"Suggested: orc queue-merge {issue_id}{reason_note}")
         else:
             click.echo(f"Suggested: orc unhold {issue_id}")
         return

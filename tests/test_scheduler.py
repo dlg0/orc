@@ -773,7 +773,10 @@ def test_merge_conflict_preserves_worktree(repo_root: Path, state_dir: Path) -> 
     mock_merge = MagicMock()
     mock_merge.return_value = MagicMock(
         success=False, stage="rebase", error="conflict resolution failed",
+        spec=["success", "stage", "error", "conflict_resolved", "diagnostics"],
     )
+    mock_merge.return_value.conflict_resolved = False
+    mock_merge.return_value.diagnostics = None
 
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
@@ -797,7 +800,8 @@ def test_merge_conflict_preserves_worktree(repo_root: Path, state_dir: Path) -> 
     mock_worktree_mgr.return_value.cleanup_worktree.assert_not_called()
 
 
-def test_merge_non_conflict_failure_cleans_worktree(repo_root: Path, state_dir: Path) -> None:
+def test_merge_non_conflict_failure_preserves_worktree(repo_root: Path, state_dir: Path) -> None:
+    """All merge-stage failures now preserve the worktree for retry."""
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     runner = StubAmpRunner.completed()
@@ -815,7 +819,10 @@ def test_merge_non_conflict_failure_cleans_worktree(repo_root: Path, state_dir: 
     mock_merge = MagicMock()
     mock_merge.return_value = MagicMock(
         success=False, stage="push", error="network timeout",
+        spec=["success", "stage", "error", "conflict_resolved", "diagnostics"],
     )
+    mock_merge.return_value.conflict_resolved = False
+    mock_merge.return_value.diagnostics = None
 
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
@@ -833,10 +840,10 @@ def test_merge_non_conflict_failure_cleans_worktree(repo_root: Path, state_dir: 
     state = StateStore(state_dir).load()
     assert "test-1" in state.issue_failures
     failure = state.issue_failures["test-1"]
-    assert failure["category"] == "fatal_run_error"
-    assert failure["action"] == "pause_orchestrator"
-    assert failure["preserve_worktree"] is False
-    mock_worktree_mgr.return_value.cleanup_worktree.assert_called_once()
+    assert failure["category"] == "stale_or_conflicted"
+    assert failure["preserve_worktree"] is True
+    # Worktree should NOT have been cleaned up — all merge failures preserve
+    mock_worktree_mgr.return_value.cleanup_worktree.assert_not_called()
 
 
 def test_successful_completion_clears_failure(repo_root: Path, state_dir: Path) -> None:

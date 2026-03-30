@@ -420,10 +420,20 @@ def _attempt_resume(
         _check_parent_promotion(issue_id, repo_root, store, state_dir, state, events)
     else:
         click.echo(f"[MERGE] {issue_id} FAILED at {merge_result.stage}: {merge_result.error}")
+        resume_merge_extra: dict = {
+            "merge_stage": merge_result.stage,
+            "merge_error": merge_result.error,
+            "conflict_resolved": bool(getattr(merge_result, "conflict_resolved", False)),
+        }
+        resume_merge_diagnostics = getattr(merge_result, 'diagnostics', None)
+        if isinstance(resume_merge_diagnostics, dict):
+            resume_merge_extra["merge_diagnostics"] = resume_merge_diagnostics
         _record_failure(
             store, state_dir, state, issue_id, FailureCategory.stale_or_conflicted,
             WorkflowPhase.merge_running.value,
             f"merge failed at {merge_result.stage}", branch, wt_path_str,
+            preserve_worktree=True,
+            extra=resume_merge_extra,
         )
         _unclaim_active(state, events, repo_root)
         _clear_active(store, state_dir, state)
@@ -915,28 +925,26 @@ def run_loop(
                 "stage": merge_result.stage,
                 "error": merge_result.error,
             })
-            is_conflict = merge_result.stage in ("rebase", "merge") and merge_result.error and "conflict" in merge_result.error.lower()
-            merge_category = FailureCategory.stale_or_conflicted if is_conflict else FailureCategory.fatal_run_error
-            preserve = is_conflict
+            merge_category = FailureCategory.stale_or_conflicted
             merge_failure_extra = {
                 "merge_stage": merge_result.stage,
                 "merge_error": merge_result.error,
                 "conflict_resolved": bool(getattr(merge_result, "conflict_resolved", False)),
             }
+            merge_diagnostics = getattr(merge_result, 'diagnostics', None)
+            if isinstance(merge_diagnostics, dict):
+                merge_failure_extra["merge_diagnostics"] = merge_diagnostics
             merge_failure_extra.update(ctx_extra)
             _record_failure(
                 store, state_dir, state, issue.id, merge_category, WorkflowPhase.merge_running.value,
                 f"merge failed at {merge_result.stage}", wt_info.branch_name, wt_path,
-                preserve_worktree=preserve,
+                preserve_worktree=True,
                 extra=merge_failure_extra,
             )
             state.last_error = f"{issue.id}: merge failed at {merge_result.stage}"
             _unclaim_active(state, events, repo_root)
             _clear_active(store, state_dir, state)
             _record_run(store, state_dir, state, issue.id, "failed", f"merge failed at {merge_result.stage}", wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
-            # Preserve worktree for conflict failures
-            if not preserve:
-                _try_cleanup(worktree_mgr, wt_info)
             if fail_fast:
                 click.echo("[SCHEDULER] Fail-fast: stopping after merge failure")
                 store.transition(state, OrchestratorMode.idle)
