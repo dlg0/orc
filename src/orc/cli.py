@@ -91,12 +91,13 @@ def status() -> None:
 
 @main.command()
 @click.option("--fail-fast", is_flag=True, default=False, help="Stop on the first issue failure instead of continuing.")
-def start(fail_fast: bool) -> None:
+@click.option("--only", "only_issue", default=None, help="Process only this issue ID, then stop.")
+def start(fail_fast: bool, only_issue: str | None) -> None:
     """Begin processing ready issues."""
     project = detect_project()
     repo_root = project.repo_root
     state_dir = repo_root / CONFIG_DIR
-    start_orchestrator(repo_root, state_dir, fail_fast=fail_fast)
+    start_orchestrator(repo_root, state_dir, fail_fast=fail_fast, only_issue=only_issue)
 
 
 @main.command()
@@ -147,9 +148,12 @@ def retry(issue_id: str) -> None:
 
 @main.command("retry-merge")
 @click.argument("issue_id")
-def retry_merge(issue_id: str) -> None:
+@click.option("--run-now", is_flag=True, default=False, help="Immediately start the orchestrator to process this retry.")
+def retry_merge(issue_id: str, run_now: bool) -> None:
     """Queue ISSUE_ID to retry only the verify-and-merge step on next run."""
-    state_dir = _get_state_dir()
+    project = detect_project()
+    repo_root = project.repo_root
+    state_dir = repo_root / CONFIG_DIR
     store = StateStore(state_dir)
     state = store.load()
     if issue_id not in state.issue_failures:
@@ -165,6 +169,8 @@ def retry_merge(issue_id: str) -> None:
         raise click.ClickException(str(exc)) from exc
     store.save(state)
     click.echo(message)
+    if run_now:
+        start_orchestrator(repo_root, state_dir, only_issue=issue_id)
 
 
 @main.command()
@@ -244,6 +250,50 @@ def tui() -> None:
     state_dir = repo_root / CONFIG_DIR
     app = OrchestratorApp(repo_root=repo_root, state_dir=state_dir)
     app.run()
+
+
+@main.command()
+@click.option("--fix", is_flag=True, default=False, help="Apply safe auto-remediations.")
+@click.option("--json-output", "as_json", is_flag=True, default=False, help="Output findings as JSON.")
+@click.option("--stale-days", default=7, help="Days before a held issue is considered stale.")
+def doctor(fix: bool, as_json: bool, stale_days: int) -> None:
+    """Diagnose common issues and recommend fixes."""
+    import json as json_mod
+    import sys
+
+    from orc.doctor import build_context, run_doctor
+
+    state_dir = _get_state_dir()
+    repo_root = state_dir.parent
+    ctx = build_context(repo_root, state_dir, stale_days=stale_days)
+    findings = run_doctor(ctx, apply_fixes=fix)
+
+    if as_json:
+        click.echo(json_mod.dumps([f.to_dict() for f in findings], indent=2))
+    else:
+        if not findings:
+            click.echo("No issues found.")
+        else:
+            errors = [f for f in findings if f.severity == "error"]
+            warns = [f for f in findings if f.severity == "warn"]
+            infos = [f for f in findings if f.severity == "info"]
+            fixable = [f for f in findings if f.auto_fixable]
+
+            click.echo(f"Doctor summary: {len(errors)} error(s), {len(warns)} warning(s), {len(infos)} info")
+            if fixable and not fix:
+                click.echo(f"Safe fixes available: {len(fixable)} (run with --fix to apply)")
+            click.echo("")
+
+            severity_order = {"error": 0, "warn": 1, "info": 2}
+            for f in sorted(findings, key=lambda x: severity_order.get(x.severity, 9)):
+                tag = f.severity.upper().ljust(5)
+                issue_label = f"  issue={f.issue_id}" if f.issue_id else ""
+                click.echo(f"{tag}  {f.code}{issue_label}")
+                click.echo(f"  {f.summary}")
+                click.echo(f"  → {f.recommendation}")
+                click.echo("")
+
+    sys.exit(1 if findings else 0)
 
 
 @main.command("init-config")
