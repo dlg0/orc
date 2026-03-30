@@ -194,6 +194,10 @@ class StatusPanel(Static):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._frozen: bool = False
+        # Cached queue counts from last full refresh
+        self._cached_beads_ready: int | str = 0
+        self._cached_runnable: int | str = 0
+        self._cached_held_ready: int | str = 0
 
     def compose(self) -> ComposeResult:
         yield Label("Status", classes="panel-title")
@@ -292,6 +296,9 @@ class StatusPanel(Static):
         counts = self.query_one("#counts-summary", Label)
         if not snap.is_fast and snap.queue_breakdown is not None:
             bd = snap.queue_breakdown
+            self._cached_beads_ready = bd.beads_ready
+            self._cached_runnable = bd.runnable
+            self._cached_held_ready = bd.held_and_ready
             beads_part = str(bd.beads_ready)
             runnable_part = f"[bold green]{bd.runnable}[/]" if bd.runnable else "0"
             active_part = f"[bold dodger_blue]{active}[/]" if active else "0"
@@ -301,18 +308,15 @@ class StatusPanel(Static):
                 f"In-progress: {active_part} | Held (ready): {held_part}"
             )
         else:
-            # Fast refresh: update active and held only (queue unchanged)
-            current = str(counts.render())
-            import re
-            m = re.search(r"Beads ready: (\d+)", current)
-            beads_str = m.group(1) if m else "?"
-            m2 = re.search(r"Runnable: (\d+)", current)
-            runnable_str = m2.group(1) if m2 else "?"
-            runnable_part = f"[bold green]{runnable_str}[/]" if runnable_str != "0" else "0"
+            # Fast refresh: use cached queue counts with staleness marker
+            beads_str = f"~{self._cached_beads_ready}"
+            runnable_str = str(self._cached_runnable)
+            held_ready_str = str(self._cached_held_ready)
+            runnable_part = f"[bold green]~{runnable_str}[/]" if runnable_str != "0" else "~0"
             active_part = f"[bold dodger_blue]{active}[/]" if active else "0"
-            held_part = f"[bold bright_yellow]{held}[/]" if held else "0"
+            held_part = f"[bold bright_yellow]~{held_ready_str}[/]" if held_ready_str != "0" else "~0"
             counts.update(
-                f"Beads ready: {beads_str} | Runnable: {runnable_part} | "
+                f"Beads ready: [dim]{beads_str}[/] | Runnable: {runnable_part} | "
                 f"In-progress: {active_part} | Held (ready): {held_part}"
             )
 
