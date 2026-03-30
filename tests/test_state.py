@@ -110,7 +110,18 @@ def test_issue_failures_round_trip(tmp_path) -> None:
     store.save(state)
     loaded = store.load()
     assert loaded.issue_failures == {
-        "ISSUE-10": {"summary": "Missing tests", "timestamp": "2026-01-01T00:00:00+00:00"},
+        "ISSUE-10": {
+            "category": "issue_needs_rework",
+            "action": "hold_until_backlog_changes",
+            "stage": "legacy",
+            "summary": "Missing tests",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "attempts": 1,
+            "branch": None,
+            "worktree_path": None,
+            "preserve_worktree": False,
+            "extra": None,
+        },
     }
 
 
@@ -133,9 +144,49 @@ def test_load_backward_compat_needs_rework_migrated(tmp_path) -> None:
     store = StateStore(tmp_path)
     state = store.load()
     assert state.issue_failures == {
-        "ISSUE-5": {"summary": "Bad output", "timestamp": "2026-01-01T00:00:00+00:00"},
+        "ISSUE-5": {
+            "category": "issue_needs_rework",
+            "action": "hold_until_backlog_changes",
+            "stage": "legacy",
+            "summary": "Bad output",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "attempts": 1,
+            "branch": None,
+            "worktree_path": None,
+            "preserve_worktree": False,
+            "extra": None,
+        },
     }
 
+
+def test_load_normalizes_legacy_issue_failures(tmp_path) -> None:
+    import json
+
+    state_file = tmp_path / "state.json"
+    state_file.write_text(json.dumps({
+        "mode": "idle",
+        "last_completed_issue": None,
+        "last_error": None,
+        "run_history": [],
+        "issue_failures": {
+            "ISSUE-5": {"summary": "Bad output", "timestamp": "2026-01-01T00:00:00+00:00"},
+            "ISSUE-6": "Needs another pass",
+        },
+    }))
+
+    store = StateStore(tmp_path)
+    state = store.load()
+
+    assert state.issue_failures["ISSUE-5"]["category"] == "issue_needs_rework"
+    assert state.issue_failures["ISSUE-5"]["action"] == "hold_until_backlog_changes"
+    assert state.issue_failures["ISSUE-5"]["stage"] == "legacy"
+    assert state.issue_failures["ISSUE-5"]["summary"] == "Bad output"
+
+    assert state.issue_failures["ISSUE-6"]["category"] == "issue_needs_rework"
+    assert state.issue_failures["ISSUE-6"]["action"] == "hold_until_backlog_changes"
+    assert state.issue_failures["ISSUE-6"]["stage"] == "legacy"
+    assert state.issue_failures["ISSUE-6"]["summary"] == "Needs another pass"
+    assert state.issue_failures["ISSUE-6"]["timestamp"] == ""
 
 def test_load_backward_compat_missing_issue_failures(tmp_path) -> None:
     """Old state.json without needs_rework or issue_failures loads as empty dict."""

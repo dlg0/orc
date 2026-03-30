@@ -91,6 +91,50 @@ class FailureAction(Enum):
     pause_orchestrator = "pause_orchestrator"
 
 
+def _default_failure_action(category: FailureCategory) -> FailureAction:
+    return {
+        FailureCategory.transient_external: FailureAction.auto_retry,
+        FailureCategory.stale_or_conflicted: FailureAction.hold_for_retry,
+        FailureCategory.issue_needs_rework: FailureAction.hold_until_backlog_changes,
+        FailureCategory.blocked_by_dependency: FailureAction.hold_until_backlog_changes,
+        FailureCategory.fatal_run_error: FailureAction.pause_orchestrator,
+    }[category]
+
+
+def _normalize_issue_failure(info: object) -> dict:
+    if isinstance(info, str):
+        normalized = {"summary": info}
+    elif isinstance(info, dict):
+        normalized = dict(info)
+    else:
+        normalized = {"summary": str(info)}
+
+    category = normalized.get("category") or FailureCategory.issue_needs_rework.value
+    normalized["category"] = category
+
+    try:
+        action = normalized.get("action") or _default_failure_action(FailureCategory(category)).value
+    except ValueError:
+        action = normalized.get("action") or FailureAction.hold_until_backlog_changes.value
+    normalized["action"] = action
+
+    normalized.setdefault("stage", "legacy")
+    normalized.setdefault("summary", "")
+    normalized.setdefault("timestamp", "")
+    normalized.setdefault("attempts", 1)
+    normalized.setdefault("branch", None)
+    normalized.setdefault("worktree_path", None)
+    normalized.setdefault("preserve_worktree", False)
+    normalized.setdefault("extra", None)
+    return normalized
+
+
+def _normalize_issue_failures(entries: object) -> dict[str, dict]:
+    if not isinstance(entries, dict):
+        return {}
+    return {issue_id: _normalize_issue_failure(info) for issue_id, info in entries.items()}
+
+
 @dataclass
 class IssueFailure:
     category: FailureCategory
@@ -226,6 +270,7 @@ class StateStore:
         if "needs_rework" in raw and "issue_failures" not in raw:
             raw["issue_failures"] = raw.pop("needs_rework")
         raw.pop("needs_rework", None)
+        raw["issue_failures"] = _normalize_issue_failures(raw.get("issue_failures", {}))
         # Migrate legacy active_* fields → active_run
         if "active_issue_id" in raw and "active_run" not in raw:
             aid = raw.pop("active_issue_id", None)

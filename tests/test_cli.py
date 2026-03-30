@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -251,6 +252,28 @@ def test_status_shows_held_issues(tmp_path: Path) -> None:
             assert "Held issues: 1" in result.output
             assert "[issue_needs_rework]" in result.output
             assert "bz7: Tests failing" in result.output
+
+
+def test_status_normalizes_legacy_held_issues(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir.mkdir(parents=True)
+    (state_dir / "state.json").write_text(json.dumps({
+        "mode": "idle",
+        "last_completed_issue": None,
+        "last_error": None,
+        "run_history": [],
+        "issue_failures": {
+            "bz7": {"summary": "Tests failing", "timestamp": "2026-01-01T00:00:00+00:00"},
+        },
+    }))
+
+    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+        with patch("amp_orchestrator.cli.get_ready_issues", return_value=QueueResult()):
+            runner = CliRunner()
+            result = runner.invoke(main, ["status"])
+            assert result.exit_code == 0
+            assert "[issue_needs_rework]" in result.output
+            assert "[unknown]" not in result.output
 
 
 def test_inspect_shows_failure_details(tmp_path: Path) -> None:
