@@ -201,7 +201,7 @@ class StatusPanel(Static):
         yield Label("", id="refresh-error")
         yield Label("[italic]Last refresh: —[/]", id="last-updated")
         yield Label("[italic]Queue last refreshed: —[/]", id="queue-last-refreshed")
-        yield Label("Ready: 0 | In-progress: 0 | Held: 0", id="counts-summary")
+        yield Label("Beads ready: 0 | Runnable: 0 | In-progress: 0 | Held (ready): 0", id="counts-summary")
         yield Label("[italic]Events: —[/]", id="event-severity-counts")
         yield Label("[italic]Last completed: —[/]", id="last-completed")
         yield Label("[italic]Last error: —[/]", id="last-error")
@@ -286,27 +286,35 @@ class StatusPanel(Static):
         else:
             self.remove_class("error-state")
 
-        # Consolidated counts: Ready | In-progress | Held
+        # Consolidated counts: Beads ready | Runnable | In-progress | Held
         active = 1 if snap.state.active_issue_id else 0
         held = len(snap.state.issue_failures)
         counts = self.query_one("#counts-summary", Label)
-        if not snap.is_fast:
-            ready = len(snap.ready_issues) if snap.ready_issues is not None else 0
-            ready_part = f"[bold green]{ready}[/]" if ready else "0"
+        if not snap.is_fast and snap.queue_breakdown is not None:
+            bd = snap.queue_breakdown
+            beads_part = str(bd.beads_ready)
+            runnable_part = f"[bold green]{bd.runnable}[/]" if bd.runnable else "0"
             active_part = f"[bold dodger_blue]{active}[/]" if active else "0"
-            held_part = f"[bold bright_yellow]{held}[/]" if held else "0"
-            counts.update(f"Ready: {ready_part} | In-progress: {active_part} | Held: {held_part}")
+            held_part = f"[bold bright_yellow]{bd.held_and_ready}[/]" if bd.held_and_ready else "0"
+            counts.update(
+                f"Beads ready: {beads_part} | Runnable: {runnable_part} | "
+                f"In-progress: {active_part} | Held (ready): {held_part}"
+            )
         else:
-            # Fast refresh: update active and held only (ready unchanged)
+            # Fast refresh: update active and held only (queue unchanged)
             current = str(counts.render())
-            # Extract the current ready count from the label
             import re
-            m = re.search(r"Ready: (\d+)", current)
-            ready_str = m.group(1) if m else "?"
-            ready_part = f"[bold green]{ready_str}[/]" if ready_str != "0" else "0"
+            m = re.search(r"Beads ready: (\d+)", current)
+            beads_str = m.group(1) if m else "?"
+            m2 = re.search(r"Runnable: (\d+)", current)
+            runnable_str = m2.group(1) if m2 else "?"
+            runnable_part = f"[bold green]{runnable_str}[/]" if runnable_str != "0" else "0"
             active_part = f"[bold dodger_blue]{active}[/]" if active else "0"
             held_part = f"[bold bright_yellow]{held}[/]" if held else "0"
-            counts.update(f"Ready: {ready_part} | In-progress: {active_part} | Held: {held_part}")
+            counts.update(
+                f"Beads ready: {beads_str} | Runnable: {runnable_part} | "
+                f"In-progress: {active_part} | Held (ready): {held_part}"
+            )
 
         # Event severity counts
         sev_label = self.query_one("#event-severity-counts", Label)

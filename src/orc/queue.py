@@ -259,6 +259,40 @@ def reconcile_issue_failures(
     return pruned
 
 
+@dataclass
+class QueueBreakdown:
+    """Breakdown of beads-ready issues into raw, held, and runnable counts."""
+
+    beads_ready: int
+    held_and_ready: int
+    runnable: int
+
+    @property
+    def has_held_blocking(self) -> bool:
+        """True when there are beads-ready issues but none are runnable."""
+        return self.beads_ready > 0 and self.runnable == 0 and self.held_and_ready > 0
+
+
+def compute_queue_breakdown(
+    ready_issues: list[BdIssue],
+    issue_failures: dict[str, object],
+) -> QueueBreakdown:
+    """Compute the operator-facing queue breakdown.
+
+    *ready_issues* comes from ``bd ready --json``.
+    *issue_failures* is the held-issue dict from orchestrator state.
+    """
+    held_ids = set(issue_failures)
+    beads_ready = len(ready_issues)
+    held_and_ready = sum(1 for i in ready_issues if i.id in held_ids)
+    runnable = beads_ready - held_and_ready
+    return QueueBreakdown(
+        beads_ready=beads_ready,
+        held_and_ready=held_and_ready,
+        runnable=runnable,
+    )
+
+
 def get_children_all_closed(parent_id: str, cwd: Path | None = None) -> bool | None:
     """Check whether all children of *parent_id* are closed.
 

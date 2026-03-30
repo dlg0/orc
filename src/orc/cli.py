@@ -14,7 +14,7 @@ from orc.control import (
     stop_orchestrator,
 )
 from orc.events import EventLog
-from orc.queue import get_issue_status, get_ready_issues, reconcile_issue_failures
+from orc.queue import compute_queue_breakdown, get_issue_status, get_ready_issues, reconcile_issue_failures
 from orc.lock import OrchestratorLock
 from orc.state import (
     OrchestratorMode,
@@ -69,7 +69,12 @@ def status() -> None:
 
     queue_result = get_ready_issues(state_dir.parent)
     if queue_result.success:
-        click.echo(f"Queue: {len(queue_result.issues)} issue(s) ready")
+        breakdown = compute_queue_breakdown(queue_result.issues, state.issue_failures)
+        click.echo(
+            f"Queue: {breakdown.beads_ready} beads-ready, "
+            f"{breakdown.held_and_ready} held, "
+            f"{breakdown.runnable} runnable"
+        )
     else:
         click.echo(f"Queue: error fetching issues ({queue_result.error})")
 

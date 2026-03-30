@@ -555,7 +555,15 @@ def run_loop(
             _save_with_requests(store, state, state_dir)
 
         if issue is None:
-            click.echo("[SCHEDULER] No ready issues -- queue exhausted.")
+            total_ready = len(queue_result.issues)
+            held_count = len(failed_ids)
+            if total_ready > 0 and held_count > 0:
+                click.echo(
+                    f"[SCHEDULER] No runnable issues -- {total_ready} beads-ready "
+                    f"but {held_count} held locally. Use 'orc status' or 'orc unhold' to inspect."
+                )
+            else:
+                click.echo("[SCHEDULER] No ready issues -- queue exhausted.")
             store.transition(state, OrchestratorMode.idle)
             events.record(EventType.state_changed, {"to": "idle", "reason": "queue_empty"})
             return
