@@ -340,7 +340,7 @@ Decompose when any of these are true:
 
 If decomposed:
 
-1. create child issues in `bd`
+1. create child issues with `bd create "<title>" --parent <current-issue-id>` (do **not** use `--deps "parent:<id>"` — that creates a flat dependency, not a true parent-child relationship)
 2. let `bd` parent-child blocking govern readiness
 3. rewrite the parent into a verification/integration issue
 4. mark the current issue outcome as `decomposed`
