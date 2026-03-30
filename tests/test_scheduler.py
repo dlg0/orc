@@ -19,6 +19,7 @@ from orc.state import (
     IssueFailure,
     OrchestratorMode,
     OrchestratorState,
+    RequestQueue,
     RunCheckpoint,
     RunStage,
     StateStore,
@@ -472,7 +473,7 @@ def test_evaluation_failure_persists_needs_rework(repo_root: Path, state_dir: Pa
     failure = state.issue_failures["test-1"]
     assert failure["summary"] == "Missing tests"
     assert failure["category"] == "issue_needs_rework"
-    assert failure["stage"] == "evaluation"
+    assert failure["stage"] == "evaluation_running"
     assert "timestamp" in failure
 
 
@@ -622,7 +623,7 @@ def test_worktree_failure_oserror_records_transient_external(repo_root: Path, st
     assert "test-1" in state.issue_failures
     failure = state.issue_failures["test-1"]
     assert failure["category"] == "transient_external"
-    assert failure["stage"] == "worktree"
+    assert failure["stage"] == "worktree_created"
 
 
 def test_worktree_failure_non_oserror_records_fatal(repo_root: Path, state_dir: Path) -> None:
@@ -686,7 +687,7 @@ def test_amp_crash_records_issue_needs_rework(repo_root: Path, state_dir: Path) 
     state = StateStore(state_dir).load()
     assert "test-1" in state.issue_failures
     assert state.issue_failures["test-1"]["category"] == "issue_needs_rework"
-    assert state.issue_failures["test-1"]["stage"] == "amp"
+    assert state.issue_failures["test-1"]["stage"] == "amp_running"
 
 
 def test_blocked_result_records_blocked_by_dependency(repo_root: Path, state_dir: Path) -> None:
@@ -1614,3 +1615,206 @@ def test_promotion_clears_parent_failure_record(repo_root: Path, state_dir: Path
     state = StateStore(state_dir).load()
     # parent-1 should not be in failures (cleared by promotion, then processed)
     assert "parent-1" not in state.issue_failures
+
+
+def test_pause_request_during_amp_stops_after_amp(repo_root: Path, state_dir: Path) -> None:
+    """A pause request enqueued while amp is running should stop the scheduler
+    after amp finishes, without proceeding to merge."""
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    issue = _make_issue()
+
+    rq = RequestQueue(state_dir)
+
+    def runner_with_pause(ctx, **kwargs):
+        # Simulate pause being requested while amp is running
+        rq.enqueue("pause")
+        return AmpResult(result=ResultType.completed, summary="done", merge_ready=True)
+
+    mock_runner = MagicMock()
+    mock_runner.run.side_effect = runner_with_pause
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return QueueResult(issues=[issue])
+        return QueueResult()
+
+    mock_merge = MagicMock()
+    mock_merge.return_value = MagicMock(success=True, stage="complete")
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
+    mock_wt_info.branch_name = "amp/test-1"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, config, mock_runner)
+
+    state = StateStore(state_dir).load()
+    assert state.mode == OrchestratorMode.paused
+    # Merge should NOT have been called
+    mock_merge.assert_not_called()
+    # Active run should be preserved as resume_candidate
+    assert state.active_run is None
+    assert state.resume_candidate is not None
+    assert state.resume_candidate["issue_id"] == "test-1"
+    # No terminal run_history entry (run is not finished)
+    assert len(state.run_history) == 0
+
+
+def test_stop_request_during_amp_stops_after_amp(repo_root: Path, state_dir: Path) -> None:
+    """A stop request enqueued while amp is running should stop the scheduler
+    after amp finishes, transitioning to idle."""
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    issue = _make_issue()
+
+    rq = RequestQueue(state_dir)
+
+    def runner_with_stop(ctx, **kwargs):
+        rq.enqueue("stop")
+        return AmpResult(result=ResultType.completed, summary="done", merge_ready=True)
+
+    mock_runner = MagicMock()
+    mock_runner.run.side_effect = runner_with_stop
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return QueueResult(issues=[issue])
+        return QueueResult()
+
+    mock_merge = MagicMock()
+    mock_merge.return_value = MagicMock(success=True, stage="complete")
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
+    mock_wt_info.branch_name = "amp/test-1"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, config, mock_runner)
+
+    state = StateStore(state_dir).load()
+    assert state.mode == OrchestratorMode.idle
+    mock_merge.assert_not_called()
+    # Resume candidate preserved for potential restart
+    assert state.resume_candidate is not None
+    assert state.resume_candidate["issue_id"] == "test-1"
+    assert len(state.run_history) == 0
+
+
+def test_pause_request_before_eval_stops_before_eval(repo_root: Path, state_dir: Path) -> None:
+    """A pause request applied before evaluation should prevent eval from running."""
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    issue = _make_issue()
+
+    rq = RequestQueue(state_dir)
+
+    def runner_with_pause(ctx, **kwargs):
+        rq.enqueue("pause")
+        return AmpResult(result=ResultType.completed, summary="done", merge_ready=True)
+
+    mock_runner = MagicMock()
+    mock_runner.run.side_effect = runner_with_pause
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return QueueResult(issues=[issue])
+        return QueueResult()
+
+    mock_evaluator = MagicMock()
+    mock_merge = MagicMock()
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
+    mock_wt_info.branch_name = "amp/test-1"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, config, mock_runner, evaluator=mock_evaluator)
+
+    state = StateStore(state_dir).load()
+    assert state.mode == OrchestratorMode.paused
+    # Neither evaluation nor merge should have been called
+    mock_evaluator.evaluate.assert_not_called()
+    mock_merge.assert_not_called()
+    assert state.resume_candidate is not None
+    assert state.resume_candidate["issue_id"] == "test-1"
+    assert len(state.run_history) == 0
+
+
+def test_stop_request_before_amp_stops_before_amp(repo_root: Path, state_dir: Path) -> None:
+    """A stop request enqueued during worktree/claim should stop
+    before starting the amp run."""
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    issue = _make_issue()
+
+    rq = RequestQueue(state_dir)
+    # Enqueue stop before the loop even starts — it will be drained
+    # during _update_checkpoint(claimed) or the before_amp safe point.
+    rq.enqueue("stop")
+
+    mock_runner = MagicMock()
+    mock_runner.run.return_value = AmpResult(result=ResultType.completed, summary="done", merge_ready=True)
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return QueueResult(issues=[issue])
+        return QueueResult()
+
+    mock_merge = MagicMock()
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
+    mock_wt_info.branch_name = "amp/test-1"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, config, mock_runner)
+
+    state = StateStore(state_dir).load()
+    assert state.mode == OrchestratorMode.idle
+    # Amp should NOT have been invoked
+    mock_runner.run.assert_not_called()
+    mock_merge.assert_not_called()
+    # Resume candidate preserved
+    assert state.resume_candidate is not None
+    assert state.resume_candidate["issue_id"] == "test-1"

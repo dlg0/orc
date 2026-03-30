@@ -68,11 +68,6 @@ class StaleBanner(Static):
     DEFAULT_CSS = """
     StaleBanner {
         height: auto;
-        background: #4a3500;
-        color: white;
-        text-align: center;
-        text-style: bold;
-        padding: 0 1;
         display: none;
     }
     StaleBanner.visible {
@@ -107,11 +102,6 @@ class NotConnectedBanner(Static):
     DEFAULT_CSS = """
     NotConnectedBanner {
         height: auto;
-        background: $error-darken-2;
-        color: white;
-        text-align: center;
-        text-style: bold;
-        padding: 0 1;
         display: none;
     }
     NotConnectedBanner.visible {
@@ -123,126 +113,15 @@ class NotConnectedBanner(Static):
         yield Label(NO_PROJECT_MSG, id="no-project-banner-text")
 
 
-EVENT_COLORS: dict[str, str] = {
-    "error": "bold red",
-    "issue_selected": "cyan",
-    "amp_started": "dodger_blue2",
-    "amp_finished": "green",
-    "merge_attempt": "orchid1",
-    "issue_closed": "green bold",
-    "pause_requested": "bright_yellow",
-    "stop_requested": "bright_yellow",
-    "state_changed": "white",
-    "verification_run": "dodger_blue2",
-    "evaluation_started": "dodger_blue2",
-    "evaluation_finished": "green",
-    "issue_needs_rework": "bold bright_yellow",
-    "conflict_detected": "bold red",
-    "conflict_resolution_started": "bright_yellow",
-    "conflict_resolution_finished": "green",
-}
-
-# Severity classification for event types
-EVENT_SEVERITY: dict[str, str] = {
-    "error": "ERR",
-    "conflict_detected": "ERR",
-    "issue_needs_rework": "WARN",
-    "pause_requested": "WARN",
-    "stop_requested": "WARN",
-    "conflict_resolution_started": "WARN",
-}
-# Default severity is "INFO" for any event type not listed above.
-
-
-def _event_severity(event_type: str) -> str:
-    """Return the severity tag for an event type."""
-    return EVENT_SEVERITY.get(event_type, "INFO")
-
-
-_SEVERITY_STYLE: dict[str, str] = {
-    "ERR": "bold red",
-    "WARN": "bold bright_yellow",
-    "INFO": "bright_white",
-}
-
-
-def _human_message(event_type: str, data: dict | None) -> str:
-    """Convert raw event_type + data into a human-readable message."""
-    d = data or {}
-    iid = d.get("issue_id", "")
-    match event_type:
-        case "issue_selected":
-            title = d.get("title", "")
-            return f"Selected issue {iid}" + (f": {title}" if title else "")
-        case "amp_started":
-            return f"Agent started on {iid}" if iid else "Agent started"
-        case "amp_finished":
-            result = d.get("result", "")
-            summary = d.get("summary", "")
-            msg = f"Agent finished {iid}" if iid else "Agent finished"
-            if result:
-                msg += f" ({result})"
-            if summary:
-                msg += f" — {summary}"
-            return msg
-        case "verification_run":
-            cmd = d.get("command", "")
-            result = d.get("result", "")
-            msg = f"Verification on {iid}" if iid else "Verification"
-            if cmd:
-                msg += f": {cmd}"
-            if result:
-                msg += f" [{result}]"
-            return msg
-        case "merge_attempt":
-            return f"Merge attempt for {iid}" if iid else "Merge attempt"
-        case "issue_closed":
-            return f"Issue {iid} closed" if iid else "Issue closed"
-        case "pause_requested":
-            return "Pause requested"
-        case "stop_requested":
-            return "Stop requested"
-        case "state_changed":
-            to = d.get("to", "")
-            frm = d.get("from", "")
-            reason = d.get("reason", "")
-            msg = f"State → {to}" if to else "State changed"
-            if frm:
-                msg = f"State {frm} → {to}"
-            if reason:
-                msg += f" ({reason})"
-            return msg
-        case "error":
-            stage = d.get("stage", "")
-            err = d.get("error", "")
-            msg = f"Error on {iid}" if iid else "Error"
-            if stage:
-                msg += f" [{stage}]"
-            if err:
-                msg += f": {err}"
-            return msg
-        case "evaluation_started":
-            return f"Evaluation started for {iid}" if iid else "Evaluation started"
-        case "evaluation_finished":
-            return f"Evaluation finished for {iid}" if iid else "Evaluation finished"
-        case "issue_needs_rework":
-            return f"Issue {iid} needs rework" if iid else "Issue needs rework"
-        case "conflict_detected":
-            branch = d.get("branch", "")
-            msg = f"Conflict detected on {iid}" if iid else "Conflict detected"
-            if branch:
-                msg += f" (branch: {branch})"
-            return msg
-        case "conflict_resolution_started":
-            return f"Conflict resolution started for {iid}" if iid else "Conflict resolution started"
-        case "conflict_resolution_finished":
-            result = d.get("result", d.get("status", ""))
-            msg = f"Conflict resolution finished for {iid}" if iid else "Conflict resolution finished"
-            if result:
-                msg += f" ({result})"
-            return msg
-        case _:
-            return event_type if not d else f"{event_type}: {d}"
+from orc.tui.event_helpers import (
+    EVENT_COLORS,
+    EVENT_SEVERITY,
+    _CATEGORY_ICONS,
+    _CATEGORY_LABELS,
+    _event_severity,
+    _SEVERITY_STYLE,
+    _human_message,
+)
 
 
 class ErrorAlert(Static):
@@ -252,11 +131,6 @@ class ErrorAlert(Static):
     ErrorAlert {
         height: auto;
         display: none;
-        background: #4a0000;
-        color: white;
-        padding: 0 1;
-        margin: 1 0 0 0;
-        text-style: bold;
     }
     ErrorAlert.visible {
         display: block;
@@ -306,16 +180,16 @@ class StatusPanel(Static):
     StatusPanel {
         height: auto;
         min-height: 10;
-        border: solid grey;
-        padding: 0 1;
     }
     StatusPanel.error-state {
-        border: solid red;
+        border: round red;
     }
     StatusPanel .panel-title {
         text-style: bold;
     }
     """
+
+    can_focus = True
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -503,23 +377,6 @@ _RESULT_ICONS: dict[str, str] = {
     "timeout": "⏱",
 }
 
-# Failure-category icons for richer labelling in the history table.
-_CATEGORY_ICONS: dict[str, str] = {
-    "transient_external": "↻",
-    "stale_or_conflicted": "⚡",
-    "issue_needs_rework": "✎",
-    "blocked_by_dependency": "⛔",
-    "fatal_run_error": "☠",
-}
-
-# Human-readable labels for failure categories (shown in status panel & history).
-_CATEGORY_LABELS: dict[str, str] = {
-    "transient_external": "Transient error",
-    "stale_or_conflicted": "Conflict/stale branch",
-    "issue_needs_rework": "Needs rework",
-    "blocked_by_dependency": "Dependency blocked",
-    "fatal_run_error": "Fatal run error",
-}
 
 
 class HeldIssuesTable(Static):
@@ -529,8 +386,6 @@ class HeldIssuesTable(Static):
     HeldIssuesTable {
         height: auto;
         max-height: 12;
-        border: solid grey;
-        padding: 0 1;
         display: none;
     }
     HeldIssuesTable.visible {
@@ -556,7 +411,7 @@ class HeldIssuesTable(Static):
         self._last_snap: DashboardSnapshot | None = None
 
     def compose(self) -> ComposeResult:
-        yield Label("Held Issues (Enter/i inspect, y retry)", classes="panel-title")
+        yield Label("Held Issues", classes="panel-title")
         yield DataTable(id="held-datatable", cursor_type="row")
 
     def on_mount(self) -> None:
@@ -636,32 +491,18 @@ class HeldIssuesTable(Static):
         if row_idx < 0 or row_idx >= len(self._held_items):
             return
         issue_id, info = self._held_items[row_idx]
-        title = f"Held Issue: {issue_id}"
-        lines = [f"[bold]Issue:[/] {issue_id}"]
-        if isinstance(info, dict):
-            lines.append(f"[bold]Category:[/] {_CATEGORY_LABELS.get(info.get('category', ''), info.get('category', 'unknown'))}")
-            lines.append(f"[bold]Action:[/] {info.get('action', 'unknown')}")
-            lines.append(f"[bold]Stage:[/] {info.get('stage', 'unknown')}")
-            lines.append(f"[bold]Attempts:[/] {info.get('attempts', 1)}")
-            lines.append(f"[bold]Timestamp:[/] {info.get('timestamp', '')}")
-            if info.get("branch"):
-                lines.append(f"[bold]Branch:[/] {info['branch']}")
-            if info.get("worktree_path"):
-                lines.append(f"[bold]Worktree:[/] {info['worktree_path']}")
-            if info.get("summary"):
-                lines.append(f"\n[bold]Summary:[/]\n{info['summary']}")
-        from orc.tui.modals import CopyableField, InspectModal
+        if not isinstance(info, dict):
+            return
 
-        copyable: list[CopyableField] = []
-        if isinstance(info, dict):
-            if info.get("branch"):
-                copyable.append(CopyableField(label="Branch", value=info["branch"], key="b"))
-            if info.get("worktree_path"):
-                copyable.append(CopyableField(label="Worktree", value=info["worktree_path"], key="w"))
+        state_dir = getattr(self.app, "_state_dir", None)
+        snap = self._last_snap
+        if not state_dir or not snap:
+            return
 
-        self.app.push_screen(
-            InspectModal(title=title, body="\n".join(lines), copyable_fields=copyable)
-        )
+        from orc.tui.held_inspect import HeldIssueInspectScreen, build_model
+
+        model = build_model(issue_id, info, snap.state, state_dir)
+        self.app.push_screen(HeldIssueInspectScreen(model))
 
     def action_retry(self) -> None:
         """Clear held status for the selected issue so it gets re-queued."""
@@ -688,8 +529,6 @@ class ActiveIssuePanel(Static):
     ActiveIssuePanel {
         height: auto;
         min-height: 7;
-        border: solid grey;
-        padding: 0 1;
     }
     ActiveIssuePanel .panel-title {
         text-style: bold;
@@ -708,7 +547,7 @@ class ActiveIssuePanel(Static):
         self._last_snap_state: OrchestratorState | None = None
 
     def compose(self) -> ComposeResult:
-        yield Label("Active Issue (Enter/i to inspect)", classes="panel-title")
+        yield Label("Active Issue", classes="panel-title")
         yield Label("[italic]No active issue[/]", id="active-detail")
 
     def show_no_project(self) -> None:
@@ -745,6 +584,38 @@ class ActiveIssuePanel(Static):
         state = self._last_snap_state
         if not state or not state.active_issue_id:
             return
+
+        # If there's an active AMP log file, open the live stream modal
+        amp_log_path = state.active_amp_log_path
+        if amp_log_path and state.active_stage == "amp_running":
+            from pathlib import Path
+
+            if Path(amp_log_path).exists() or state.active_stage == "amp_running":
+                header_lines = []
+                if state.active_issue_title:
+                    header_lines.append(f"Title: {state.active_issue_title}")
+                if state.active_stage:
+                    color, label = _STAGE_STYLES.get(
+                        state.active_stage,
+                        ("yellow", state.active_stage),
+                    )
+                    elapsed = ""
+                    if state.active_started_at:
+                        elapsed = f" ({_format_elapsed(state.active_started_at)})"
+                    header_lines.append(f"Stage: {label}{elapsed}")
+                if state.active_branch:
+                    header_lines.append(f"Branch: {state.active_branch}")
+                from orc.tui.modals import AmpStreamModal
+
+                self.app.push_screen(
+                    AmpStreamModal(
+                        title=f"Live: {state.active_issue_id}",
+                        log_path=amp_log_path,
+                        header_lines=header_lines,
+                    )
+                )
+                return
+
         title = f"Active Issue: {state.active_issue_id}"
         lines = [f"[bold]Issue ID:[/] {state.active_issue_id}"]
         if state.active_issue_title:
@@ -783,8 +654,6 @@ class ConfigPanel(Static):
     DEFAULT_CSS = """
     ConfigPanel {
         height: auto;
-        border: solid grey;
-        padding: 0 1;
         display: none;
     }
     ConfigPanel.visible {
@@ -807,7 +676,7 @@ class ConfigPanel(Static):
         self._last_config: OrchestratorConfig | None = None
 
     def compose(self) -> ComposeResult:
-        yield Label("Config (Enter/i to inspect)", classes="panel-title")
+        yield Label("Config", classes="panel-title")
         yield Label("", id="config-detail")
 
     def show_no_project(self) -> None:
@@ -873,28 +742,21 @@ class ControlsPanel(Static):
     DEFAULT_CSS = """
     ControlsPanel {
         height: auto;
-        border: solid grey;
-        padding: 0 1;
     }
     ControlsPanel .panel-title {
         text-style: bold;
     }
-    #controls-buttons {
-        height: auto;
-    }
-    #controls-buttons Button {
-        margin: 0 1 0 0;
-        min-width: 10;
-    }
     """
+
+    can_focus = True
 
     def compose(self) -> ComposeResult:
         yield Label("Controls", classes="panel-title")
         with Horizontal(id="controls-buttons"):
-            yield Button("Start", id="btn-start", variant="success")
-            yield Button("Pause", id="btn-pause", variant="warning")
-            yield Button("Resume", id="btn-resume", variant="primary")
-            yield Button("Stop", id="btn-stop", variant="error")
+            yield Button("▶ Start", id="btn-start", classes="control-start")
+            yield Button("⏸ Pause", id="btn-pause", classes="control-pause")
+            yield Button("↻ Resume", id="btn-resume", classes="control-resume")
+            yield Button("■ Stop", id="btn-stop", classes="control-stop")
 
     def show_no_project(self) -> None:
         for btn_id in ("#btn-start", "#btn-pause", "#btn-resume", "#btn-stop"):
@@ -925,8 +787,6 @@ class QueueTable(Static):
     DEFAULT_CSS = """
     QueueTable {
         height: 2fr;
-        border: solid grey;
-        padding: 0 1;
     }
     QueueTable .panel-title {
         text-style: bold;
@@ -961,7 +821,7 @@ class QueueTable(Static):
         self._filter_text: str = ""
 
     def compose(self) -> ComposeResult:
-        yield Label("Ready Queue (Enter/i inspect, o sort, / filter)", classes="panel-title")
+        yield Label("Ready Queue", classes="panel-title")
         yield Input(placeholder="Filter by issue ID…", id="queue-filter", classes="filter-bar")
         yield DataTable(id="queue-datatable", cursor_type="row")
 
@@ -1030,7 +890,7 @@ class QueueTable(Static):
         self._sort_mode = self._SORT_MODES[(idx + 1) % len(self._SORT_MODES)]
         sort_labels = {"priority": "Priority", "age_newest": "Newest first", "age_oldest": "Oldest first"}
         self.query_one(".panel-title", Label).update(
-            f"Ready Queue [Sort: {sort_labels[self._sort_mode]}] (o sort, / filter)"
+            f"Ready Queue [Sort: {sort_labels[self._sort_mode]}]"
         )
         self._row_key = []  # force re-render
         self._rebuild_table()
@@ -1081,8 +941,6 @@ class EventsLog(Static):
     DEFAULT_CSS = """
     EventsLog {
         height: 1fr;
-        border: solid grey;
-        padding: 0 1;
     }
     EventsLog .panel-title {
         text-style: bold;
@@ -1126,7 +984,7 @@ class EventsLog(Static):
         return [e for e in events if _event_severity(e.get("event_type", "")) == "ERR"]
 
     def compose(self) -> ComposeResult:
-        yield Label("Events (e errors only)", classes="panel-title")
+        yield Label("Events", classes="panel-title")
         yield RichLog(id="events-richlog", wrap=True, max_lines=200, markup=True)
 
     def show_no_project(self) -> None:
@@ -1185,7 +1043,6 @@ class EventsLog(Static):
         label = "Events"
         if self._errors_only:
             label += " [bold red][ERRORS ONLY][/]"
-        label += " (e errors only)"
         self.query_one(".panel-title", Label).update(label)
         self._rebuild_log()
 
@@ -1201,8 +1058,6 @@ class HistoryTable(Static):
     DEFAULT_CSS = """
     HistoryTable {
         height: 1fr;
-        border: solid grey;
-        padding: 0 1;
     }
     HistoryTable .panel-title {
         text-style: bold;
@@ -1235,7 +1090,7 @@ class HistoryTable(Static):
         self._filter_text: str = ""
 
     def compose(self) -> ComposeResult:
-        yield Label("Run History (Enter/i inspect, f result filter, / filter)", classes="panel-title")
+        yield Label("Run History", classes="panel-title")
         yield Input(placeholder="Filter by issue ID…", id="history-filter", classes="filter-bar")
         yield DataTable(id="history-datatable", cursor_type="row")
 
@@ -1354,7 +1209,6 @@ class HistoryTable(Static):
             "completed": " [bold green][COMPLETED][/]",
         }
         label = "Run History" + filter_labels[self._result_filter]
-        label += " (f result filter, / filter)"
         self.query_one(".panel-title", Label).update(label)
         self._row_key = []  # force re-render
         self._rebuild_table()
@@ -1401,6 +1255,12 @@ class HistoryTable(Static):
             thread_url = f"{_THREAD_URL_PREFIX}{run['thread_id']}"
             lines.append(f"[bold]Thread:[/] {run['thread_id']}")
             lines.append(f"[bold]Thread URL:[/] {thread_url}")
+            from orc.tui.modals import build_thread_continue_cmd
+
+            continue_cmd = build_thread_continue_cmd(
+                run["thread_id"], run.get("worktree_path")
+            )
+            lines.append(f"[bold]Debug cmd:[/] {continue_cmd}")
         if run.get("summary"):
             lines.append(f"\n[bold]Summary:[/]\n{run['summary']}")
         from orc.tui.modals import CopyableField, InspectModal, _THREAD_URL_PREFIX
@@ -1413,6 +1273,15 @@ class HistoryTable(Static):
                     label="Thread URL",
                     value=f"{_THREAD_URL_PREFIX}{run['thread_id']}",
                     key="u",
+                )
+            )
+            copyable.append(
+                CopyableField(
+                    label="Debug cmd",
+                    value=build_thread_continue_cmd(
+                        run["thread_id"], run.get("worktree_path")
+                    ),
+                    key="d",
                 )
             )
         if run.get("branch"):

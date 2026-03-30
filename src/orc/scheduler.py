@@ -29,11 +29,15 @@ from orc.state import (
     OrchestratorMode,
     OrchestratorState,
     RunCheckpoint,
-    RunStage,
     StateStore,
     _MAX_RESUME_ATTEMPTS,
+    apply_requests,
 )
+from orc.workflow import WorkflowPhase
 from orc.worktree import WorktreeInfo, WorktreeManager
+
+# Local alias for conciseness in checkpoint calls.
+RunStage = WorkflowPhase
 
 
 _ISSUE_DIVIDER = "-" * 60
@@ -50,12 +54,72 @@ _QUEUE_RETRY_MAX = 3
 _QUEUE_RETRY_DELAY = 5  # seconds
 
 
+def _save_with_requests(store: StateStore, state: OrchestratorState, state_dir: Path) -> None:
+    """Save state after draining pending external requests.
+
+    This ensures that TUI/CLI mutations (unhold, pause, stop, etc.) are
+    incorporated into the scheduler's in-memory state before it writes
+    to disk, preventing lost-update races.
+    """
+    apply_requests(state, state_dir)
+    store.save(state)
+
+
+def _check_stop_at_safe_point(
+    store: StateStore,
+    state_dir: Path,
+    state: OrchestratorState,
+    events: EventLog,
+    repo_root: Path,
+    reason: str,
+) -> bool:
+    """Check for pending pause/stop requests and wind down if found.
+
+    Re-drains the request queue (catching requests that arrived since the
+    last save), then inspects ``state.mode``.  If the mode is
+    ``pause_requested`` or ``stopping``, the active run is preserved as a
+    ``resume_candidate`` so it can be picked up on the next start, and
+    the scheduler transitions to ``paused`` or ``idle``.
+
+    Returns ``True`` when the caller should ``return`` (scheduler is stopping).
+    """
+    # Re-drain in case requests arrived since the last save.
+    apply_requests(state, state_dir)
+
+    if state.mode not in (OrchestratorMode.pause_requested, OrchestratorMode.stopping):
+        return False
+
+    requested_mode = state.mode
+    click.echo(f"[SCHEDULER] {requested_mode.value} detected at {reason} — winding down")
+
+    # Unclaim the issue in beads before preserving the checkpoint.
+    _unclaim_active(state, events, repo_root)
+
+    # Preserve the active run as a resume candidate so work is not lost.
+    if state.active_run is not None:
+        state.resume_candidate = dict(state.active_run)
+    state.active_run = None
+    store.save(state)
+
+    if requested_mode == OrchestratorMode.pause_requested:
+        store.transition(state, OrchestratorMode.paused)
+        events.record(EventType.state_changed, {"to": "paused", "reason": reason})
+        click.echo("[SCHEDULER] Paused.")
+    else:
+        store.transition(state, OrchestratorMode.idle)
+        events.record(EventType.state_changed, {"to": "idle", "reason": reason})
+        click.echo("[SCHEDULER] Stopped.")
+
+    return True
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def _record_failure(
     store: StateStore,
+    state_dir: Path,
     state: OrchestratorState,
     issue_id: str,
     category: FailureCategory,
@@ -86,7 +150,7 @@ def _record_failure(
         extra=extra,
     )
     state.issue_failures[issue_id] = failure.to_dict()
-    store.save(state)
+    _save_with_requests(store, state, state_dir)
     return failure
 
 
@@ -103,12 +167,14 @@ def _action_for_category(category: FailureCategory) -> FailureAction:
 
 def _update_checkpoint(
     store: StateStore,
+    state_dir: Path,
     state: OrchestratorState,
-    stage: RunStage,
+    stage: WorkflowPhase,
     *,
     bd_claimed: bool | None = None,
     amp_result: dict | None = None,
     eval_result: dict | None = None,
+    events: EventLog | None = None,
 ) -> None:
     """Update the active run checkpoint's stage and save atomically."""
     if state.active_run is None:
@@ -121,7 +187,9 @@ def _update_checkpoint(
         state.active_run["amp_result"] = amp_result
     if eval_result is not None:
         state.active_run["eval_result"] = eval_result
-    store.save(state)
+    _save_with_requests(store, state, state_dir)
+    if events is not None:
+        events.set_phase(stage)
 
 
 def _attempt_resume(
@@ -166,7 +234,7 @@ def _attempt_resume(
     if not branch or not wt_path:
         click.echo(f"[RESUME] {issue_id} no branch/worktree — discarding candidate")
         state.resume_candidate = None
-        store.save(state)
+        _save_with_requests(store, state, state_dir)
         events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "no_branch_or_worktree"})
         return False
 
@@ -176,14 +244,14 @@ def _attempt_resume(
         if candidate.get("bd_claimed"):
             unclaim_issue(issue_id, cwd=repo_root)
         state.resume_candidate = None
-        store.save(state)
+        _save_with_requests(store, state, state_dir)
         events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "worktree_not_recoverable"})
         return False
 
     # Promote resume_candidate to active_run
     state.active_run = candidate
     state.resume_candidate = None
-    store.save(state)
+    _save_with_requests(store, state, state_dir)
 
     wt_info = WorktreeInfo(
         issue_id=issue_id,
@@ -196,7 +264,7 @@ def _attempt_resume(
     if stage in (RunStage.claimed.value, RunStage.amp_running.value):
         # Re-run amp with recovery prompt
         click.echo(f"[RESUME] {issue_id} re-running amp (was at stage={stage})")
-        _update_checkpoint(store, state, RunStage.amp_running)
+        _update_checkpoint(store, state_dir, state, RunStage.amp_running, events=events)
 
         description = candidate.get("issue_title", "")
         ctx = IssueContext(
@@ -215,11 +283,11 @@ def _attempt_resume(
         except Exception as exc:
             click.echo(f"[RESUME] {issue_id} amp failed during recovery: {exc}")
             _record_failure(
-                store, state, issue_id, FailureCategory.issue_needs_rework, "amp",
+                store, state_dir, state, issue_id, FailureCategory.issue_needs_rework, WorkflowPhase.amp_running.value,
                 str(exc), branch, wt_path_str,
             )
             _unclaim_active(state, events, repo_root)
-            _clear_active(store, state)
+            _clear_active(store, state_dir, state)
             events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "amp_exception"})
             return True
 
@@ -232,21 +300,26 @@ def _attempt_resume(
         if not result.merge_ready or result.result != ResultType.completed:
             click.echo(f"[RESUME] {issue_id} not merge-ready after recovery — marking needs_human")
             _record_failure(
-                store, state, issue_id, FailureCategory.issue_needs_rework, "amp",
+                store, state_dir, state, issue_id, FailureCategory.issue_needs_rework, WorkflowPhase.amp_running.value,
                 result.summary, branch, wt_path_str,
             )
             _unclaim_active(state, events, repo_root)
-            _clear_active(store, state)
-            _record_run(store, state, issue_id, result.result.value, result.summary,
+            _clear_active(store, state_dir, state)
+            _record_run(store, state_dir, state, issue_id, result.result.value, result.summary,
                         branch, wt_path_str, amp_mode=config.amp_mode)
             events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "not_merge_ready"})
             return True
 
         _update_checkpoint(
-            store, state, RunStage.amp_finished,
+            store, state_dir, state, RunStage.amp_finished,
             amp_result={"result": result.result.value, "summary": result.summary,
                         "merge_ready": result.merge_ready},
+            events=events,
         )
+
+        # Check for pause/stop after recovery amp
+        if _check_stop_at_safe_point(store, state_dir, state, events, repo_root, "after_resume_amp"):
+            return True
 
     elif stage == RunStage.amp_finished.value:
         # Amp already finished — check stored result
@@ -254,7 +327,7 @@ def _attempt_resume(
         if not amp_result.get("merge_ready"):
             click.echo(f"[RESUME] {issue_id} amp_finished but not merge-ready — discarding")
             _unclaim_active(state, events, repo_root)
-            _clear_active(store, state)
+            _clear_active(store, state_dir, state)
             events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "not_merge_ready"})
             return False
         click.echo(f"[RESUME] {issue_id} skipping amp (already finished with merge-ready)")
@@ -265,13 +338,17 @@ def _attempt_resume(
     else:
         click.echo(f"[RESUME] {issue_id} unknown/non-resumable stage={stage} — discarding")
         _unclaim_active(state, events, repo_root)
-        _clear_active(store, state)
+        _clear_active(store, state_dir, state)
         events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "unknown_stage"})
         return False
 
+    # Check for pause/stop before evaluation (resume flow)
+    if _check_stop_at_safe_point(store, state_dir, state, events, repo_root, "before_resume_eval"):
+        return True
+
     # Run evaluation if needed and stage hasn't passed it
     if evaluator is not None and stage != RunStage.ready_to_merge.value:
-        _update_checkpoint(store, state, RunStage.evaluation_running)
+        _update_checkpoint(store, state_dir, state, RunStage.evaluation_running, events=events)
         events.record(EventType.evaluation_started, {"issue_id": issue_id, "recovery": True})
         click.echo(f"[EVAL] {issue_id} running ...")
 
@@ -300,20 +377,24 @@ def _attempt_resume(
 
         if eval_result.passed:
             click.echo(f"[EVAL] {issue_id} PASSED: {eval_result.summary}")
-            _update_checkpoint(store, state, RunStage.ready_to_merge, eval_result=eval_result.to_dict())
+            _update_checkpoint(store, state_dir, state, RunStage.ready_to_merge, eval_result=eval_result.to_dict(), events=events)
         else:
             click.echo(f"[EVAL] {issue_id} FAILED: {eval_result.summary}")
             _record_failure(
-                store, state, issue_id, FailureCategory.issue_needs_rework, "evaluation",
+                store, state_dir, state, issue_id, FailureCategory.issue_needs_rework, WorkflowPhase.evaluation_running.value,
                 eval_result.summary, branch, wt_path_str,
             )
             _unclaim_active(state, events, repo_root)
-            _clear_active(store, state)
+            _clear_active(store, state_dir, state)
             events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "eval_failed"})
             return True
 
+    # Check for pause/stop before merge (resume flow)
+    if _check_stop_at_safe_point(store, state_dir, state, events, repo_root, "before_resume_merge"):
+        return True
+
     # Merge
-    _update_checkpoint(store, state, RunStage.merge_running)
+    _update_checkpoint(store, state_dir, state, RunStage.merge_running, events=events)
     click.echo(f"[MERGE] {issue_id} starting verify-and-merge ...")
     events.record(EventType.merge_attempt, {"issue_id": issue_id, "recovery": True})
     merge_result = verify_and_merge(
@@ -332,21 +413,21 @@ def _attempt_resume(
         events.record(EventType.resume_succeeded, {"issue_id": issue_id})
         state.last_completed_issue = issue_id
         state.issue_failures.pop(issue_id, None)
-        _clear_active(store, state)
-        _record_run(store, state, issue_id, "completed", "recovered from interrupted run",
+        _clear_active(store, state_dir, state)
+        _record_run(store, state_dir, state, issue_id, "completed", "recovered from interrupted run",
                     branch, wt_path_str, amp_mode=config.amp_mode)
         _try_cleanup(worktree_mgr, wt_info)
-        _check_parent_promotion(issue_id, repo_root, store, state, events)
+        _check_parent_promotion(issue_id, repo_root, store, state_dir, state, events)
     else:
         click.echo(f"[MERGE] {issue_id} FAILED at {merge_result.stage}: {merge_result.error}")
         _record_failure(
-            store, state, issue_id, FailureCategory.stale_or_conflicted,
-            f"merge/{merge_result.stage}",
+            store, state_dir, state, issue_id, FailureCategory.stale_or_conflicted,
+            WorkflowPhase.merge_running.value,
             f"merge failed at {merge_result.stage}", branch, wt_path_str,
         )
         _unclaim_active(state, events, repo_root)
-        _clear_active(store, state)
-        _record_run(store, state, issue_id, "failed",
+        _clear_active(store, state_dir, state)
+        _record_run(store, state_dir, state, issue_id, "failed",
                     f"merge failed at {merge_result.stage} (recovery)",
                     branch, wt_path_str, amp_mode=config.amp_mode)
         events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "merge_failed"})
@@ -429,7 +510,7 @@ def run_loop(
         if state.issue_failures:
             pruned = reconcile_issue_failures(state.issue_failures, cwd=repo_root)
             if pruned:
-                store.save(state)
+                _save_with_requests(store, state, state_dir)
                 for issue_id, reason in pruned:
                     click.echo(f"[SCHEDULER] Pruned held issue {issue_id} ({reason})")
                     events.record(EventType.issue_failure_pruned, {"issue_id": issue_id, "reason": reason})
@@ -461,7 +542,7 @@ def run_loop(
         # Clear promoted_parent after selection attempt (one-shot)
         if state.promoted_parent:
             state.promoted_parent = None
-            store.save(state)
+            _save_with_requests(store, state, state_dir)
 
         if issue is None:
             click.echo("[SCHEDULER] No ready issues -- queue exhausted.")
@@ -477,6 +558,7 @@ def run_loop(
             return
 
         issue_num += 1
+        events.set_phase(WorkflowPhase.preflight)
         events.record(EventType.issue_selected, {"issue_id": issue.id, "title": issue.title})
         click.echo("")
         click.echo(_ISSUE_DIVIDER)
@@ -490,8 +572,8 @@ def run_loop(
             click.echo(f"[WORKTREE] {issue.id} FAILED: {exc}")
             events.record(EventType.error, {"issue_id": issue.id, "stage": "worktree", "error": str(exc)})
             wt_category = FailureCategory.transient_external if isinstance(exc, OSError) else FailureCategory.fatal_run_error
-            _record_failure(store, state, issue.id, wt_category, "worktree", str(exc))
-            _record_run(store, state, issue.id, "failed", str(exc), amp_mode=config.amp_mode)
+            _record_failure(store, state_dir, state, issue.id, wt_category, WorkflowPhase.worktree_created.value, str(exc))
+            _record_run(store, state_dir, state, issue.id, "failed", str(exc), amp_mode=config.amp_mode)
             if fail_fast:
                 click.echo("[SCHEDULER] Fail-fast: stopping after worktree failure")
                 store.transition(state, OrchestratorMode.idle)
@@ -519,7 +601,7 @@ def run_loop(
             updated_at=_now_iso(),
         )
         state.active_run = checkpoint.to_dict()
-        store.save(state)
+        _save_with_requests(store, state, state_dir)
 
         # Claim the issue in bd so it shows as in-progress
         claimed = claim_issue(issue.id, cwd=repo_root)
@@ -527,10 +609,14 @@ def run_loop(
             click.echo(f"[CLAIM] {issue.id} WARNING: bd update --claim failed (continuing)")
             events.record(EventType.error, {"issue_id": issue.id, "stage": "claim", "error": "bd update --claim failed"})
 
-        _update_checkpoint(store, state, RunStage.claimed, bd_claimed=claimed)
+        _update_checkpoint(store, state_dir, state, RunStage.claimed, bd_claimed=claimed, events=events)
+
+        # Check for pause/stop before starting amp (may take minutes)
+        if _check_stop_at_safe_point(store, state_dir, state, events, repo_root, "before_amp"):
+            return
 
         # Invoke Amp
-        _update_checkpoint(store, state, RunStage.amp_running)
+        _update_checkpoint(store, state_dir, state, RunStage.amp_running, events=events)
         ctx = IssueContext(
             issue_id=issue.id,
             title=issue.title,
@@ -549,12 +635,13 @@ def run_loop(
             click.echo(f"[AMP] {issue.id} FAILED: {exc}")
             events.record(EventType.error, {"issue_id": issue.id, "stage": "amp", "error": str(exc)})
             _record_failure(
-                store, state, issue.id, FailureCategory.issue_needs_rework, "amp",
+                store, state_dir, state, issue.id, FailureCategory.issue_needs_rework, WorkflowPhase.amp_running.value,
                 str(exc), wt_info.branch_name, str(wt_info.worktree_path),
+                extra={"amp_log_path": str(amp_log_path)} if amp_log_path.exists() else None,
             )
             _unclaim_active(state, events, repo_root)
-            _clear_active(store, state)
-            _record_run(store, state, issue.id, "failed", str(exc), worktree_path=str(wt_info.worktree_path), amp_mode=config.amp_mode)
+            _clear_active(store, state_dir, state)
+            _record_run(store, state_dir, state, issue.id, "failed", str(exc), worktree_path=str(wt_info.worktree_path), amp_mode=config.amp_mode)
             _try_cleanup(worktree_mgr, wt_info)
             if fail_fast:
                 click.echo("[SCHEDULER] Fail-fast: stopping after amp failure")
@@ -564,10 +651,15 @@ def run_loop(
             continue
 
         _update_checkpoint(
-            store, state, RunStage.amp_finished,
+            store, state_dir, state, RunStage.amp_finished,
             amp_result={"result": result.result.value, "summary": result.summary,
                         "merge_ready": result.merge_ready},
+            events=events,
         )
+
+        # Check for pause/stop requests (first safe point after runner.run()).
+        if _check_stop_at_safe_point(store, state_dir, state, events, repo_root, "after_amp"):
+            return
 
         amp_finished_data: dict = {
             "issue_id": issue.id,
@@ -591,6 +683,7 @@ def run_loop(
         ):
             from orc.amp_runner import RealAmpRunner
 
+            events.set_phase(WorkflowPhase.summary_extraction)
             click.echo(f"[SUMMARY] {issue.id} extracting rush summary ...")
             rush_summary = RealAmpRunner.extract_rush_summary(
                 thread_id=result.thread_id,
@@ -625,12 +718,13 @@ def run_loop(
         if result.result == ResultType.decomposed:
             click.echo(f"[AMP] {issue.id} decomposed -- skipping merge")
             _record_failure(
-                store, state, issue.id, FailureCategory.blocked_by_dependency, "amp",
+                store, state_dir, state, issue.id, FailureCategory.blocked_by_dependency, WorkflowPhase.amp_finished.value,
                 result.summary, wt_info.branch_name, wt_path,
+                extra=ctx_extra or None,
             )
             _unclaim_active(state, events, repo_root)
-            _clear_active(store, state)
-            _record_run(store, state, issue.id, "decomposed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
+            _clear_active(store, state_dir, state)
+            _record_run(store, state_dir, state, issue.id, "decomposed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
             if fail_fast:
                 click.echo("[SCHEDULER] Fail-fast: stopping after decomposed result")
@@ -642,12 +736,13 @@ def run_loop(
         if result.result == ResultType.blocked:
             click.echo(f"[AMP] {issue.id} {result.result.value} -- moving on")
             _record_failure(
-                store, state, issue.id, FailureCategory.blocked_by_dependency, "amp",
+                store, state_dir, state, issue.id, FailureCategory.blocked_by_dependency, WorkflowPhase.amp_finished.value,
                 result.summary, wt_info.branch_name, wt_path,
+                extra=ctx_extra or None,
             )
             _unclaim_active(state, events, repo_root)
-            _clear_active(store, state)
-            _record_run(store, state, issue.id, result.result.value, result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
+            _clear_active(store, state_dir, state)
+            _record_run(store, state_dir, state, issue.id, result.result.value, result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
             if fail_fast:
                 click.echo("[SCHEDULER] Fail-fast: stopping after blocked result")
@@ -659,12 +754,13 @@ def run_loop(
         if result.result in (ResultType.failed, ResultType.needs_human):
             click.echo(f"[AMP] {issue.id} {result.result.value} -- moving on")
             _record_failure(
-                store, state, issue.id, FailureCategory.issue_needs_rework, "amp",
+                store, state_dir, state, issue.id, FailureCategory.issue_needs_rework, WorkflowPhase.amp_finished.value,
                 result.summary, wt_info.branch_name, wt_path,
+                extra=ctx_extra or None,
             )
             _unclaim_active(state, events, repo_root)
-            _clear_active(store, state)
-            _record_run(store, state, issue.id, result.result.value, result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
+            _clear_active(store, state_dir, state)
+            _record_run(store, state_dir, state, issue.id, result.result.value, result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
             if fail_fast:
                 click.echo(f"[SCHEDULER] Fail-fast: stopping after {result.result.value} result")
@@ -676,12 +772,13 @@ def run_loop(
         if not result.merge_ready:
             click.echo(f"[AMP] {issue.id} completed but not merge-ready -- skipping merge")
             _record_failure(
-                store, state, issue.id, FailureCategory.issue_needs_rework, "amp",
+                store, state_dir, state, issue.id, FailureCategory.issue_needs_rework, WorkflowPhase.amp_finished.value,
                 result.summary, wt_info.branch_name, wt_path,
+                extra=ctx_extra or None,
             )
             _unclaim_active(state, events, repo_root)
-            _clear_active(store, state)
-            _record_run(store, state, issue.id, "completed_no_merge", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
+            _clear_active(store, state_dir, state)
+            _record_run(store, state_dir, state, issue.id, "completed_no_merge", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             if fail_fast:
                 click.echo("[SCHEDULER] Fail-fast: stopping after completed_no_merge result")
                 store.transition(state, OrchestratorMode.idle)
@@ -690,6 +787,7 @@ def run_loop(
             continue
 
         # Enforce clean worktree before merge/evaluation
+        events.set_phase(WorkflowPhase.dirty_worktree_check)
         if config.require_clean_worktree:
             dirty = _git_status_porcelain(wt_info.worktree_path)
             if dirty:
@@ -699,12 +797,13 @@ def run_loop(
             if dirty:
                 click.echo(f"[WORKTREE] {issue.id} still dirty after finalize:\n{dirty[:300]}")
                 _record_failure(
-                    store, state, issue.id, FailureCategory.issue_needs_rework, "worktree_dirty",
+                    store, state_dir, state, issue.id, FailureCategory.issue_needs_rework, WorkflowPhase.dirty_worktree_check.value,
                     f"worktree not clean: {dirty[:200]}", wt_info.branch_name, wt_path,
+                    extra=ctx_extra or None,
                 )
                 _unclaim_active(state, events, repo_root)
-                _clear_active(store, state)
-                _record_run(store, state, issue.id, "failed", f"worktree not clean: {dirty[:200]}", wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
+                _clear_active(store, state_dir, state)
+                _record_run(store, state_dir, state, issue.id, "failed", f"worktree not clean: {dirty[:200]}", wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
                 if fail_fast:
                     click.echo("[SCHEDULER] Fail-fast: stopping after dirty worktree")
                     store.transition(state, OrchestratorMode.idle)
@@ -712,9 +811,13 @@ def run_loop(
                     return
                 continue
 
+        # Check for pause/stop before starting evaluation
+        if _check_stop_at_safe_point(store, state_dir, state, events, repo_root, "before_eval"):
+            return
+
         # Independent evaluation
         if evaluator is not None:
-            _update_checkpoint(store, state, RunStage.evaluation_running)
+            _update_checkpoint(store, state_dir, state, RunStage.evaluation_running, events=events)
             events.record(EventType.evaluation_started, {"issue_id": issue.id})
             click.echo(f"[EVAL] {issue.id} running ...")
 
@@ -741,8 +844,9 @@ def run_loop(
             if eval_result.passed:
                 click.echo(f"[EVAL] {issue.id} PASSED: {eval_result.summary}")
                 _update_checkpoint(
-                    store, state, RunStage.ready_to_merge,
+                    store, state_dir, state, RunStage.ready_to_merge,
                     eval_result=eval_result.to_dict(),
+                    events=events,
                 )
             else:
                 click.echo(f"[EVAL] {issue.id} FAILED: {eval_result.summary}")
@@ -750,16 +854,19 @@ def run_loop(
                     "issue_id": issue.id,
                     "summary": eval_result.summary,
                 })
+                eval_failure_extra = {"evaluation": eval_result.to_dict()}
+                eval_failure_extra.update(ctx_extra)
                 _record_failure(
-                    store, state, issue.id, FailureCategory.issue_needs_rework, "evaluation",
+                    store, state_dir, state, issue.id, FailureCategory.issue_needs_rework, WorkflowPhase.evaluation_running.value,
                     eval_result.summary, wt_info.branch_name, wt_path,
+                    extra=eval_failure_extra,
                 )
                 _unclaim_active(state, events, repo_root)
-                _clear_active(store, state)
+                _clear_active(store, state_dir, state)
                 rework_extra = {"evaluation": eval_result.to_dict()}
                 rework_extra.update(ctx_extra)
                 _record_run(
-                    store, state, issue.id, "needs_rework", eval_result.summary,
+                    store, state_dir, state, issue.id, "needs_rework", eval_result.summary,
                     wt_info.branch_name, wt_path, amp_mode=config.amp_mode,
                     extra=rework_extra,
                 )
@@ -770,8 +877,12 @@ def run_loop(
                     return
                 continue
 
+        # Check for pause/stop before starting merge
+        if _check_stop_at_safe_point(store, state_dir, state, events, repo_root, "before_merge"):
+            return
+
         # Verify and merge
-        _update_checkpoint(store, state, RunStage.merge_running)
+        _update_checkpoint(store, state_dir, state, RunStage.merge_running, events=events)
         click.echo(f"[MERGE] {issue.id} starting verify-and-merge ...")
         events.record(EventType.merge_attempt, {"issue_id": issue.id})
         merge_result = verify_and_merge(
@@ -793,10 +904,10 @@ def run_loop(
             state.last_completed_issue = issue.id
             # Clear failure record on success
             state.issue_failures.pop(issue.id, None)
-            _clear_active(store, state)
-            _record_run(store, state, issue.id, "completed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
+            _clear_active(store, state_dir, state)
+            _record_run(store, state_dir, state, issue.id, "completed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             _try_cleanup(worktree_mgr, wt_info)
-            _check_parent_promotion(issue.id, repo_root, store, state, events)
+            _check_parent_promotion(issue.id, repo_root, store, state_dir, state, events)
         else:
             click.echo(f"[MERGE] {issue.id} FAILED at {merge_result.stage}: {merge_result.error}")
             events.record(EventType.error, {
@@ -807,15 +918,22 @@ def run_loop(
             is_conflict = merge_result.stage in ("rebase", "merge") and merge_result.error and "conflict" in merge_result.error.lower()
             merge_category = FailureCategory.stale_or_conflicted if is_conflict else FailureCategory.fatal_run_error
             preserve = is_conflict
+            merge_failure_extra = {
+                "merge_stage": merge_result.stage,
+                "merge_error": merge_result.error,
+                "conflict_resolved": bool(getattr(merge_result, "conflict_resolved", False)),
+            }
+            merge_failure_extra.update(ctx_extra)
             _record_failure(
-                store, state, issue.id, merge_category, f"merge/{merge_result.stage}",
+                store, state_dir, state, issue.id, merge_category, WorkflowPhase.merge_running.value,
                 f"merge failed at {merge_result.stage}", wt_info.branch_name, wt_path,
                 preserve_worktree=preserve,
+                extra=merge_failure_extra,
             )
             state.last_error = f"{issue.id}: merge failed at {merge_result.stage}"
             _unclaim_active(state, events, repo_root)
-            _clear_active(store, state)
-            _record_run(store, state, issue.id, "failed", f"merge failed at {merge_result.stage}", wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
+            _clear_active(store, state_dir, state)
+            _record_run(store, state_dir, state, issue.id, "failed", f"merge failed at {merge_result.stage}", wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
             # Preserve worktree for conflict failures
             if not preserve:
                 _try_cleanup(worktree_mgr, wt_info)
@@ -838,6 +956,7 @@ def _check_parent_promotion(
     issue_id: str,
     repo_root: Path,
     store: StateStore,
+    state_dir: Path,
     state: OrchestratorState,
     events: EventLog,
 ) -> None:
@@ -853,20 +972,21 @@ def _check_parent_promotion(
     all_closed = get_children_all_closed(parent_id, cwd=repo_root)
     if all_closed:
         click.echo(f"[PROMOTE] {parent_id} all children closed — promoting parent")
+        events.set_phase(WorkflowPhase.parent_promotion)
         state.promoted_parent = parent_id
         # Clear any failure record so the parent is not skipped
         state.issue_failures.pop(parent_id, None)
-        store.save(state)
+        _save_with_requests(store, state, state_dir)
         events.record(EventType.parent_promoted, {
             "parent_id": parent_id,
             "triggered_by": issue_id,
         })
 
 
-def _clear_active(store: StateStore, state: OrchestratorState) -> None:
+def _clear_active(store: StateStore, state_dir: Path, state: OrchestratorState) -> None:
     """Clear active run checkpoint and save."""
     state.active_run = None
-    store.save(state)
+    _save_with_requests(store, state, state_dir)
 
 
 def _unclaim_active(
@@ -889,6 +1009,7 @@ def _unclaim_active(
 
 def _record_run(
     store: StateStore,
+    state_dir: Path,
     state: OrchestratorState,
     issue_id: str,
     result: str,
@@ -914,7 +1035,7 @@ def _record_run(
     if extra:
         entry.update(extra)
     state.run_history.append(entry)
-    store.save(state)
+    _save_with_requests(store, state, state_dir)
 
 
 def _try_cleanup(worktree_mgr: WorktreeManager, wt_info) -> None:

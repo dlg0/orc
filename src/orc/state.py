@@ -18,15 +18,10 @@ class OrchestratorMode(Enum):
     error = "error"
 
 
-class RunStage(Enum):
-    worktree_created = "worktree_created"
-    claimed = "claimed"
-    amp_running = "amp_running"
-    amp_finished = "amp_finished"
-    evaluation_running = "evaluation_running"
-    ready_to_merge = "ready_to_merge"
-    merge_running = "merge_running"
-    claim_release_pending = "claim_release_pending"
+from orc.workflow import WorkflowPhase, RESUMABLE_PHASES  # noqa: E402
+
+# Backward-compatible alias — new code should use WorkflowPhase directly.
+RunStage = WorkflowPhase
 
 
 @dataclass
@@ -40,6 +35,7 @@ class RunCheckpoint:
     amp_result: dict | None = None
     eval_result: dict | None = None
     preserve_worktree: bool = False
+    amp_log_path: str | None = None
     resume_attempts: int = 0
     updated_at: str = ""
 
@@ -54,6 +50,7 @@ class RunCheckpoint:
             "amp_result": self.amp_result,
             "eval_result": self.eval_result,
             "preserve_worktree": self.preserve_worktree,
+            "amp_log_path": self.amp_log_path,
             "resume_attempts": self.resume_attempts,
             "updated_at": self.updated_at,
         }
@@ -71,6 +68,7 @@ class RunCheckpoint:
             amp_result=data.get("amp_result"),
             eval_result=data.get("eval_result"),
             preserve_worktree=data.get("preserve_worktree", False),
+            amp_log_path=data.get("amp_log_path"),
             resume_attempts=data.get("resume_attempts", 0),
             updated_at=data.get("updated_at", ""),
         )
@@ -204,12 +202,7 @@ VALID_TRANSITIONS: dict[OrchestratorMode, set[OrchestratorMode]] = {
 }
 
 
-_RESUMABLE_STAGES = {
-    RunStage.claimed.value,
-    RunStage.amp_running.value,
-    RunStage.amp_finished.value,
-    RunStage.ready_to_merge.value,
-}
+_RESUMABLE_STAGES = RESUMABLE_PHASES
 
 _MAX_RESUME_ATTEMPTS = 2
 
@@ -227,17 +220,34 @@ def can_retry_merge(info: object) -> bool:
     )
 
 
-def queue_retry(
+def clear_issue_hold(state: OrchestratorState, issue_id: str) -> str:
+    """Remove a held issue from issue_failures so the scheduler re-picks it.
+
+    Returns a user-facing status message.
+    """
+    if issue_id not in state.issue_failures:
+        raise KeyError(issue_id)
+    del state.issue_failures[issue_id]
+    return f"Removed hold for {issue_id} — eligible for normal scheduling on next run"
+
+
+def queue_merge_resume(
     state: OrchestratorState,
     issue_id: str,
     *,
     issue_title: str = "",
-    merge_only: bool = False,
 ) -> str:
-    """Queue a held issue for retry and return a user-facing status message."""
+    """Queue a held merge-conflict issue for verify-and-merge retry.
+
+    Occupies the single resume_candidate slot.
+    Returns a user-facing status message.
+    """
     failure = state.issue_failures.get(issue_id)
     if failure is None:
         raise KeyError(issue_id)
+
+    if not can_retry_merge(failure):
+        raise ValueError(f"{issue_id} is not eligible for merge-only retry")
 
     if state.active_run and state.active_run.get("issue_id") != issue_id:
         raise ValueError(
@@ -245,30 +255,39 @@ def queue_retry(
         )
     if state.resume_candidate and state.resume_candidate.get("issue_id") != issue_id:
         raise ValueError(
-            "Another retry is already queued — run it or clear it before queueing a new one"
+            "Another resume is already queued — run it or clear it before queueing a new one"
         )
 
-    if merge_only and not can_retry_merge(failure):
-        raise ValueError(f"{issue_id} is not eligible for merge-only retry")
-
-    if merge_only or can_retry_merge(failure):
-        checkpoint = RunCheckpoint(
-            issue_id=issue_id,
-            issue_title=issue_title,
-            branch=failure["branch"],
-            worktree_path=failure["worktree_path"],
-            stage=RunStage.ready_to_merge,
-            preserve_worktree=True,
-            updated_at=failure.get("timestamp", ""),
-        )
-        state.resume_candidate = checkpoint.to_dict()
-        del state.issue_failures[issue_id]
-        return (
-            f"Scheduled merge retry for {issue_id} — will retry verify-and-merge on next run"
-        )
-
+    checkpoint = RunCheckpoint(
+        issue_id=issue_id,
+        issue_title=issue_title,
+        branch=failure["branch"],
+        worktree_path=failure["worktree_path"],
+        stage=RunStage.ready_to_merge,
+        preserve_worktree=True,
+        updated_at=failure.get("timestamp", ""),
+    )
+    state.resume_candidate = checkpoint.to_dict()
     del state.issue_failures[issue_id]
-    return f"Cleared failure status for {issue_id} — will be re-queued on next run"
+    return (
+        f"Queued merge resume for {issue_id} — next run will start at verify-and-merge"
+    )
+
+
+def queue_retry(
+    state: OrchestratorState,
+    issue_id: str,
+    *,
+    issue_title: str = "",
+    merge_only: bool = False,
+) -> str:
+    """Deprecated: use clear_issue_hold() or queue_merge_resume() instead."""
+    if merge_only:
+        return queue_merge_resume(state, issue_id, issue_title=issue_title)
+    failure = state.issue_failures.get(issue_id)
+    if failure is not None and can_retry_merge(failure):
+        return queue_merge_resume(state, issue_id, issue_title=issue_title)
+    return clear_issue_hold(state, issue_id)
 
 
 @dataclass
@@ -304,6 +323,12 @@ class OrchestratorState:
     def active_stage(self) -> str | None:
         if self.active_run:
             return self.active_run.get("stage")
+        return None
+
+    @property
+    def active_amp_log_path(self) -> str | None:
+        if self.active_run:
+            return self.active_run.get("amp_log_path")
         return None
 
     @property
@@ -376,3 +401,102 @@ class StateStore:
         state.mode = new_mode
         self.save(state)
         return state
+
+
+class RequestQueue:
+    """Out-of-band request channel for external actors (TUI, CLI).
+
+    Instead of directly mutating state.json while the scheduler is running,
+    external actors enqueue requests as tiny JSON files in ``state_dir/requests/``.
+    The scheduler drains and applies these before every save, preventing
+    lost-update races where the scheduler's stale in-memory state would
+    overwrite external changes.
+    """
+
+    def __init__(self, state_dir: Path) -> None:
+        self._dir = state_dir / "requests"
+
+    def enqueue(self, request_type: str, **data: object) -> Path:
+        """Write a request file and return its path.
+
+        Uses tempfile + rename for atomicity.
+        """
+        import time
+
+        self._dir.mkdir(parents=True, exist_ok=True)
+        payload = {"type": request_type, **data}
+        # Monotonic-ish filename for ordering; not critical.
+        ts = f"{time.time_ns()}"
+        fd, tmp_path = tempfile.mkstemp(
+            dir=self._dir, suffix=".tmp", prefix=f"req_{ts}_"
+        )
+        try:
+            with open(fd, "w") as f:
+                json.dump(payload, f)
+            dest = self._dir / f"req_{ts}.json"
+            Path(tmp_path).replace(dest)
+            return dest
+        except BaseException:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise
+
+    def drain(self) -> list[dict]:
+        """Read and delete all pending requests, oldest first.
+
+        Returns a list of request dicts.  Each file is deleted after
+        successful read; replay is safe because handlers are idempotent.
+        """
+        if not self._dir.is_dir():
+            return []
+        files = sorted(self._dir.glob("req_*.json"))
+        requests: list[dict] = []
+        for f in files:
+            try:
+                requests.append(json.loads(f.read_text()))
+            except (json.JSONDecodeError, OSError):
+                pass  # skip corrupt files
+            f.unlink(missing_ok=True)
+        return requests
+
+    def is_empty(self) -> bool:
+        if not self._dir.is_dir():
+            return True
+        return not any(self._dir.glob("req_*.json"))
+
+
+def apply_requests(state: OrchestratorState, state_dir: Path) -> bool:
+    """Drain the request queue and apply each request to *state*.
+
+    Returns True if any requests were applied (caller should save).
+    All handlers are idempotent.
+    """
+    rq = RequestQueue(state_dir)
+    requests = rq.drain()
+    if not requests:
+        return False
+
+    for req in requests:
+        rt = req.get("type", "")
+        if rt == "unhold":
+            issue_id = req.get("issue_id", "")
+            state.issue_failures.pop(issue_id, None)  # idempotent
+        elif rt == "queue_merge":
+            issue_id = req.get("issue_id", "")
+            failure = state.issue_failures.get(issue_id)
+            if failure and can_retry_merge(failure):
+                try:
+                    queue_merge_resume(state, issue_id)
+                except (KeyError, ValueError):
+                    pass  # idempotent — already queued or not eligible
+        elif rt == "pause":
+            if state.mode == OrchestratorMode.running:
+                state.mode = OrchestratorMode.pause_requested
+        elif rt == "stop":
+            if state.mode in (
+                OrchestratorMode.running,
+                OrchestratorMode.pause_requested,
+            ):
+                state.mode = OrchestratorMode.stopping
+        # Unknown types are silently ignored (forward compat)
+
+    return True

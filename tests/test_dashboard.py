@@ -17,7 +17,6 @@ from orc.tui.snapshot import DashboardSnapshot
 from orc.tui.widgets import (
     ActiveIssuePanel,
     ConfigPanel,
-    ControlsPanel,
     EventsLog,
     HistoryTable,
     QueueTable,
@@ -43,7 +42,6 @@ async def test_app_has_all_panels() -> None:
         assert app.query_one(StatusPanel)
         assert app.query_one(ActiveIssuePanel)
         assert app.query_one(ConfigPanel)
-        assert app.query_one(ControlsPanel)
         assert app.query_one(QueueTable)
         assert app.query_one(EventsLog)
         assert app.query_one(HistoryTable)
@@ -208,57 +206,6 @@ async def test_quit_binding() -> None:
     app = OrchestratorApp()
     async with app.run_test() as pilot:
         await pilot.press("q")
-
-
-@pytest.mark.asyncio
-async def test_controls_buttons_disabled_in_idle() -> None:
-    """In idle mode, only Start should be enabled."""
-    app = OrchestratorApp()
-    async with app.run_test() as pilot:
-        snap = _make_snap(state=OrchestratorState(mode=OrchestratorMode.idle))
-        app._apply_snapshot(snap)
-        await pilot.pause()
-
-        from textual.widgets import Button
-
-        assert not app.query_one("#btn-start", Button).disabled
-        assert app.query_one("#btn-pause", Button).disabled
-        assert app.query_one("#btn-resume", Button).disabled
-        assert app.query_one("#btn-stop", Button).disabled
-
-
-@pytest.mark.asyncio
-async def test_controls_buttons_in_running() -> None:
-    """In running mode, Pause and Stop should be enabled."""
-    app = OrchestratorApp()
-    async with app.run_test() as pilot:
-        snap = _make_snap(state=OrchestratorState(mode=OrchestratorMode.running))
-        app._apply_snapshot(snap)
-        await pilot.pause()
-
-        from textual.widgets import Button
-
-        assert app.query_one("#btn-start", Button).disabled
-        assert not app.query_one("#btn-pause", Button).disabled
-        assert app.query_one("#btn-resume", Button).disabled
-        assert not app.query_one("#btn-stop", Button).disabled
-
-
-@pytest.mark.asyncio
-async def test_controls_buttons_in_paused() -> None:
-    """In paused mode, Start and Resume should be enabled."""
-    app = OrchestratorApp()
-    async with app.run_test() as pilot:
-        snap = _make_snap(state=OrchestratorState(mode=OrchestratorMode.paused))
-        app._apply_snapshot(snap)
-        await pilot.pause()
-
-        from textual.widgets import Button
-
-        assert not app.query_one("#btn-start", Button).disabled
-        assert app.query_one("#btn-pause", Button).disabled
-        assert not app.query_one("#btn-resume", Button).disabled
-        assert app.query_one("#btn-stop", Button).disabled
 
 
 @pytest.mark.asyncio

@@ -9,11 +9,11 @@ from time import monotonic
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Footer, Header
+from textual.widgets import Footer, Header
 
 from orc.config import OrchestratorConfig
 from orc.queue import get_issue_status
-from orc.state import OrchestratorMode, StateStore, queue_retry
+from orc.state import OrchestratorMode, StateStore, clear_issue_hold, can_retry_merge, queue_merge_resume, RequestQueue
 from orc.tui.snapshot import (
     DashboardSnapshot,
     load_snapshot,
@@ -23,7 +23,6 @@ from orc.tui.widgets import (
     _ACTION_ENABLED,
     ActiveIssuePanel,
     ConfigPanel,
-    ControlsPanel,
     EventsLog,
     HeldIssuesTable,
     HistoryTable,
@@ -43,14 +42,134 @@ class OrchestratorApp(App):
     TITLE = "orc"
 
     CSS = """
+    Screen {
+        background: #0b0f14;
+        color: #d7dde8;
+    }
+
+    Header {
+        background: #111827;
+        color: #d7dde8;
+    }
+
+    Footer {
+        background: #0f172a;
+        color: #93a4b8;
+    }
+
+    #main-area {
+        height: 1fr;
+    }
+
     #left-col {
         width: 1fr;
     }
+
     #right-col {
         width: 2fr;
+        margin-left: 1;
     }
-    #main-area {
-        height: 1fr;
+
+    /* ── shared panel chrome ── */
+    .dashboard-panel {
+        background: #11161f;
+        color: #d7dde8;
+        border: round #263041;
+        padding: 0 1;
+    }
+
+    .dashboard-panel .panel-title {
+        padding: 0 1;
+        background: #161d2a;
+        color: #94a3b8;
+        text-style: bold;
+    }
+
+    .dashboard-panel:focus,
+    .dashboard-panel:focus-within {
+        border: round #5ea1ff;
+        background: #141b26;
+    }
+
+    .dashboard-panel:focus .panel-title,
+    .dashboard-panel:focus-within .panel-title {
+        background: #1d2a3d;
+        color: #ffffff;
+    }
+
+    /* ── per-panel accents ── */
+    .panel-status { border: round #294236; }
+    .panel-status .panel-title { color: #7ee787; }
+
+    .panel-active { border: round #263b5a; }
+    .panel-active .panel-title { color: #8fb2ff; }
+
+    .panel-config { border: round #3a3150; }
+    .panel-config .panel-title { color: #c4a7e7; }
+
+    .panel-queue { border: round #24404a; }
+    .panel-queue .panel-title { color: #7dcfff; }
+
+    .panel-held { border: round #4b3526; }
+    .panel-held .panel-title { color: #ffb86c; }
+
+    .panel-events { border: round #30384a; }
+    .panel-events .panel-title { color: #9fb0c8; }
+
+    .panel-history { border: round #29423b; }
+    .panel-history .panel-title { color: #73daca; }
+
+    /* error state override */
+    StatusPanel.error-state {
+        border: round #f7768e;
+    }
+
+    /* ── filter inputs ── */
+    Input.filter-bar {
+        background: #0d131c;
+        color: #d7dde8;
+        border: round #22304a;
+    }
+
+    Input.filter-bar:focus {
+        border: round #5ea1ff;
+    }
+
+    /* ── tables / logs ── */
+    DataTable {
+        background: #0d131c;
+    }
+
+    RichLog {
+        background: #0d131c;
+    }
+
+    DataTable > .datatable--header {
+        background: #182235;
+        color: #8fb2ff;
+        text-style: bold;
+    }
+
+    DataTable > .datatable--cursor {
+        background: #22304a;
+        color: #ffffff;
+    }
+
+    /* ── banners ── */
+    StaleBanner {
+        background: #3b2d12;
+        color: #ffe5a3;
+    }
+
+    NotConnectedBanner {
+        background: #3a151a;
+        color: #ffd6db;
+    }
+
+    ErrorAlert {
+        background: #2b1318;
+        color: #ffd7d7;
+        border: round #6b1f2b;
     }
     """
 
@@ -100,15 +219,14 @@ class OrchestratorApp(App):
         yield StaleBanner()
         with Horizontal(id="main-area"):
             with Vertical(id="left-col"):
-                yield StatusPanel()
-                yield ActiveIssuePanel()
-                yield ConfigPanel()
-                yield ControlsPanel()
+                yield StatusPanel(classes="dashboard-panel panel-status")
+                yield ActiveIssuePanel(classes="dashboard-panel panel-active")
+                yield ConfigPanel(classes="dashboard-panel panel-config")
             with Vertical(id="right-col"):
-                yield QueueTable()
-                yield HeldIssuesTable()
-                yield EventsLog()
-                yield HistoryTable()
+                yield QueueTable(classes="dashboard-panel panel-queue")
+                yield HeldIssuesTable(classes="dashboard-panel panel-held")
+                yield EventsLog(classes="dashboard-panel panel-events")
+                yield HistoryTable(classes="dashboard-panel panel-history")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -127,7 +245,6 @@ class OrchestratorApp(App):
         self.query_one(StatusPanel).show_no_project()
         self.query_one(ActiveIssuePanel).show_no_project()
         self.query_one(ConfigPanel).show_no_project()
-        self.query_one(ControlsPanel).show_no_project()
         self.query_one(QueueTable).show_no_project()
         self.query_one(HeldIssuesTable).show_no_project()
         self.query_one(EventsLog).show_no_project()
@@ -281,7 +398,6 @@ class OrchestratorApp(App):
         suppress = self._check_pending_action(snap)
         if not suppress:
             self.query_one(StatusPanel).update_snapshot(snap)
-            self.query_one(ControlsPanel).update_snapshot(snap)
         self.query_one(ActiveIssuePanel).update_snapshot(snap)
         self.query_one(HeldIssuesTable).update_snapshot(snap)
         self.query_one(EventsLog).update_snapshot(snap)
@@ -293,7 +409,6 @@ class OrchestratorApp(App):
         suppress = self._check_pending_action(snap)
         if not suppress:
             self.query_one(StatusPanel).update_snapshot(snap)
-            self.query_one(ControlsPanel).update_snapshot(snap)
         if snap.config_error:
             self.query_one(StatusPanel).show_refresh_error(
                 f"Config: {snap.config_error}"
@@ -322,18 +437,6 @@ class OrchestratorApp(App):
             severity="warning",
         )
         return False
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handle control panel button clicks."""
-        actions = {
-            "btn-start": self.action_start,
-            "btn-pause": self.action_pause,
-            "btn-resume": self.action_resume,
-            "btn-stop": self.action_stop,
-        }
-        handler = actions.get(event.button.id or "")
-        if handler:
-            handler()
 
     def action_start(self) -> None:
         if not self._repo_root or not self._state_dir:
@@ -383,6 +486,7 @@ class OrchestratorApp(App):
     @work(thread=True)
     def _do_retry_held_issue(self, issue_id: str) -> None:
         try:
+            rq = RequestQueue(self._state_dir)  # type: ignore[arg-type]
             store = StateStore(self._state_dir)  # type: ignore[arg-type]
             state = store.load()
             if issue_id not in state.issue_failures:
@@ -392,11 +496,16 @@ class OrchestratorApp(App):
                 return
             issue_status = get_issue_status(issue_id, cwd=self._repo_root or self._state_dir.parent)
             if issue_status == "closed":
-                del state.issue_failures[issue_id]
-                message = f"{issue_id} is already closed in beads — removed from held list"
+                rq.enqueue("unhold", issue_id=issue_id)
+                message = f"{issue_id} is already closed in beads — queued removal from held list"
             else:
-                message = queue_retry(state, issue_id)
-            store.save(state)
+                failure = state.issue_failures.get(issue_id)
+                if failure and can_retry_merge(failure):
+                    rq.enqueue("queue_merge", issue_id=issue_id)
+                    message = f"Queued merge resume for {issue_id}"
+                else:
+                    rq.enqueue("unhold", issue_id=issue_id)
+                    message = f"Queued retry for {issue_id} — will be cleared on next scheduler save"
             self.call_from_thread(
                 self.notify, message
             )
@@ -422,7 +531,6 @@ class OrchestratorApp(App):
         self._pending_action = action
         label = self._ACTION_LABELS.get(action, (f"{action.capitalize()}\u2026",))[0]
         self.query_one(StatusPanel).show_transitional(label)
-        self.query_one(ControlsPanel).disable_all()
 
     @work(thread=True)
     def _run_control_action(self, action: str) -> None:

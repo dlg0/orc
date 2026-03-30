@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
+from orc.workflow import WorkflowPhase, infer_event_phase
+
 
 class EventType(Enum):
     issue_selected = "issue_selected"
@@ -36,12 +38,33 @@ class EventLog:
     def __init__(self, state_dir: Path) -> None:
         self._state_dir = state_dir
         self._log_file = state_dir / "events.jsonl"
+        self._current_phase: str | None = None
 
-    def record(self, event_type: EventType, data: dict | None = None) -> None:
+    def set_phase(self, phase: WorkflowPhase | str | None) -> None:
+        """Set the current workflow phase for subsequent events."""
+        if isinstance(phase, WorkflowPhase):
+            self._current_phase = phase.value
+        else:
+            self._current_phase = phase
+
+    def record(
+        self,
+        event_type: EventType,
+        data: dict | None = None,
+        *,
+        phase: WorkflowPhase | str | None = None,
+    ) -> None:
         self._state_dir.mkdir(parents=True, exist_ok=True)
+        if isinstance(phase, WorkflowPhase):
+            phase_value = phase.value
+        elif phase:
+            phase_value = phase
+        else:
+            phase_value = self._current_phase or ""
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "event_type": event_type.value,
+            "phase": phase_value,
             "data": data,
         }
         with open(self._log_file, "a") as f:
@@ -56,5 +79,12 @@ class EventLog:
         entries: list[dict] = []
         for line in self._log_file.read_text().splitlines():
             if line.strip():
-                entries.append(json.loads(line))
+                entry = json.loads(line)
+                # Backfill phase for legacy events
+                if not entry.get("phase"):
+                    entry["phase"] = infer_event_phase(
+                        entry.get("event_type", ""),
+                        entry.get("data"),
+                    )
+                entries.append(entry)
         return entries

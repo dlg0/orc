@@ -9,7 +9,7 @@ import pytest
 
 from orc.config import OrchestratorConfig
 from orc.queue import BdIssue
-from orc.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
+from orc.state import OrchestratorMode, OrchestratorState, RequestQueue, RunCheckpoint, RunStage, StateStore
 from orc.tui.app import OrchestratorApp
 from orc.tui.snapshot import DashboardSnapshot
 from orc.tui.widgets import (
@@ -24,7 +24,6 @@ from orc.tui.widgets import (
     _human_message,
     ActiveIssuePanel,
     ConfigPanel,
-    ControlsPanel,
     ErrorAlert,
     EventsLog,
     HeldIssuesTable,
@@ -289,9 +288,14 @@ def test_retry_held_issue_notifies_when_issue_is_closed(tmp_path: Path) -> None:
     ):
         OrchestratorApp._do_retry_held_issue.__wrapped__(app, "orc-qyy")
 
-    assert "orc-qyy" not in store.load().issue_failures
+    # Request is enqueued (not applied directly to state.json)
+    rq = RequestQueue(state_dir)
+    requests = rq.drain()
+    assert len(requests) == 1
+    assert requests[0]["type"] == "unhold"
+    assert requests[0]["issue_id"] == "orc-qyy"
     notify_mock.assert_called_once_with(
-        "orc-qyy is already closed in beads — removed from held list"
+        "orc-qyy is already closed in beads — queued removal from held list"
     )
     refresh_mock.assert_called_once_with()
 
@@ -324,9 +328,14 @@ def test_retry_held_issue_keeps_requeue_message_for_open_issue(tmp_path: Path) -
     ):
         OrchestratorApp._do_retry_held_issue.__wrapped__(app, "orc-qyy")
 
-    assert "orc-qyy" not in store.load().issue_failures
+    # Request is enqueued (not applied directly to state.json)
+    rq = RequestQueue(state_dir)
+    requests = rq.drain()
+    assert len(requests) == 1
+    assert requests[0]["type"] == "unhold"
+    assert requests[0]["issue_id"] == "orc-qyy"
     notify_mock.assert_called_once_with(
-        "Cleared failure status for orc-qyy — will be re-queued on next run"
+        "Queued retry for orc-qyy — will be cleared on next scheduler save"
     )
     refresh_mock.assert_called_once_with()
 
@@ -362,13 +371,14 @@ def test_retry_held_issue_schedules_merge_retry_for_conflict_failure(tmp_path: P
     ):
         OrchestratorApp._do_retry_held_issue.__wrapped__(app, "orc-qzz")
 
-    state = store.load()
-    assert "orc-qzz" not in state.issue_failures
-    assert state.resume_candidate is not None
-    assert state.resume_candidate["issue_id"] == "orc-qzz"
-    assert state.resume_candidate["stage"] == "ready_to_merge"
+    # Request is enqueued (not applied directly to state.json)
+    rq = RequestQueue(state_dir)
+    requests = rq.drain()
+    assert len(requests) == 1
+    assert requests[0]["type"] == "queue_merge"
+    assert requests[0]["issue_id"] == "orc-qzz"
     notify_mock.assert_called_once_with(
-        "Scheduled merge retry for orc-qzz — will retry verify-and-merge on next run"
+        "Queued merge resume for orc-qzz"
     )
     refresh_mock.assert_called_once_with()
 

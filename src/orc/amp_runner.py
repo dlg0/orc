@@ -49,7 +49,7 @@ class IssueContext:
 
 
 class AmpRunner(Protocol):
-    def run(self, context: IssueContext) -> AmpResult: ...
+    def run(self, context: IssueContext, *, log_path: Path | None = None) -> AmpResult: ...
 
 
 class StubAmpRunner:
@@ -62,7 +62,7 @@ class StubAmpRunner:
             merge_ready=True,
         )
 
-    def run(self, context: IssueContext) -> AmpResult:
+    def run(self, context: IssueContext, *, log_path: Path | None = None) -> AmpResult:
         return self._result
 
     @classmethod
@@ -107,7 +107,7 @@ class RealAmpRunner:
     # Public interface (satisfies AmpRunner protocol)
     # ------------------------------------------------------------------
 
-    def run(self, context: IssueContext) -> AmpResult:
+    def run(self, context: IssueContext, *, log_path: Path | None = None) -> AmpResult:
         amp_path = shutil.which("amp")
         if amp_path is None:
             raise RuntimeError(
@@ -131,14 +131,32 @@ class RealAmpRunner:
         logger.debug("Command: %s", cmd)
 
         try:
-            proc = subprocess.run(
-                cmd,
-                cwd=str(context.worktree_path),
-                capture_output=True,
-                text=True,
-                timeout=self._timeout,
-                env=build_worktree_env(context.worktree_path),
-            )
+            if log_path:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                with log_path.open("w", encoding="utf-8") as log_fh:
+                    proc = subprocess.run(
+                        cmd,
+                        cwd=str(context.worktree_path),
+                        stdout=log_fh,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=self._timeout,
+                        env=build_worktree_env(context.worktree_path),
+                    )
+                # Read back stdout from the log file for parsing
+                stdout = log_path.read_text(encoding="utf-8")
+                proc = subprocess.CompletedProcess(
+                    proc.args, proc.returncode, stdout=stdout, stderr=proc.stderr,
+                )
+            else:
+                proc = subprocess.run(
+                    cmd,
+                    cwd=str(context.worktree_path),
+                    capture_output=True,
+                    text=True,
+                    timeout=self._timeout,
+                    env=build_worktree_env(context.worktree_path),
+                )
         except subprocess.TimeoutExpired:
             logger.error("Amp timed out after %d seconds", self._timeout)
             return AmpResult(

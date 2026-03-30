@@ -241,6 +241,37 @@ def check_state_consistency(ctx: DoctorContext) -> list[Finding]:
                 issue_id=issue_id,
             ))
 
+    # 4. Same issue in both issue_failures and resume_candidate
+    if state.resume_candidate:
+        rc_id = state.resume_candidate.get("issue_id")
+        if rc_id and rc_id in state.issue_failures:
+            def fix_dup_resume_failure(c: DoctorContext, _iid: str = rc_id) -> str:
+                c.state.issue_failures.pop(_iid, None)
+                c.store.save(c.state)
+                return f"Removed {_iid} from issue_failures (already in resume_candidate)"
+
+            findings.append(Finding(
+                code="state.issue_in_failures_and_resume",
+                severity="error",
+                summary=f"Issue {rc_id} appears in both issue_failures and resume_candidate.",
+                recommendation="Run 'orc doctor --fix' to remove the duplicate failure entry.",
+                issue_id=rc_id,
+                auto_fixable=True,
+                fix=fix_dup_resume_failure,
+            ))
+
+    # 5. Same issue in both active_run and issue_failures
+    if state.active_run:
+        ar_id = state.active_run.get("issue_id")
+        if ar_id and ar_id in state.issue_failures:
+            findings.append(Finding(
+                code="state.issue_in_failures_and_active",
+                severity="warn",
+                summary=f"Issue {ar_id} appears in both issue_failures and active_run.",
+                recommendation="This may resolve when the active run completes. If the orchestrator is not running, use 'orc doctor --fix'.",
+                issue_id=ar_id,
+            ))
+
     return findings
 
 
@@ -281,7 +312,7 @@ def check_held_issues(ctx: DoctorContext) -> list[Finding]:
                 code="held.ready_but_locally_held",
                 severity="warn",
                 summary=f"Held issue {issue_id} [{category}] is now in the bd ready queue.",
-                recommendation=f"Run 'orc retry {issue_id}' to re-queue it.",
+                recommendation=f"Run 'orc unhold {issue_id}' to re-queue it.",
                 issue_id=issue_id,
             ))
 
@@ -293,7 +324,7 @@ def check_held_issues(ctx: DoctorContext) -> list[Finding]:
                 code="held.retry_merge_ready",
                 severity="info",
                 summary=f"Held issue {issue_id} has a preserved worktree and is eligible for merge retry.",
-                recommendation=f"Run 'orc retry-merge {issue_id}' to retry the merge step only.",
+                recommendation=f"Run 'orc queue-merge {issue_id}' to retry the merge step only.",
                 issue_id=issue_id,
                 path=wt_path,
             ))
@@ -308,7 +339,7 @@ def check_held_issues(ctx: DoctorContext) -> list[Finding]:
                         code="held.stale",
                         severity="warn",
                         summary=f"Issue {issue_id} has been held for {age_days} days [{category}]: {summary}",
-                        recommendation=f"Run 'orc inspect {issue_id}' to review, then 'orc retry {issue_id}' or close it.",
+                        recommendation=f"Run 'orc inspect {issue_id}' to review, then 'orc unhold {issue_id}' or close it.",
                         issue_id=issue_id,
                     ))
             except (ValueError, TypeError):
@@ -411,7 +442,7 @@ def check_worktrees(ctx: DoctorContext) -> list[Finding]:
                         code="worktree.held_missing_recoverable",
                         severity="warn",
                         summary=f"Held issue {issue_id} references missing worktree {wt_path}, but branch {branch} still exists.",
-                        recommendation=f"Worktree can be recreated. Run 'orc retry {issue_id}' or 'orc retry-merge {issue_id}'.",
+                        recommendation=f"Run 'orc unhold {issue_id}' or 'orc queue-merge {issue_id}'.",
                         issue_id=issue_id,
                         path=wt_path,
                     ))
@@ -420,7 +451,7 @@ def check_worktrees(ctx: DoctorContext) -> list[Finding]:
                         code="worktree.held_missing_unrecoverable",
                         severity="warn",
                         summary=f"Held issue {issue_id} references missing worktree {wt_path} and branch {branch} is also gone.",
-                        recommendation=f"Previous work is lost. Run 'orc retry {issue_id}' to start fresh.",
+                        recommendation=f"Run 'orc unhold {issue_id}' to start fresh.",
                         issue_id=issue_id,
                         path=wt_path,
                     ))

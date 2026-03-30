@@ -42,10 +42,9 @@ def load_snapshot(repo_root: Path, state_dir: Path) -> DashboardSnapshot:
 
     # Reconcile held issues against beads so closed/missing issues
     # disappear from the TUI even when the scheduler isn't running.
+    # Reconcile in-memory only for display — the scheduler owns state.json writes.
     if state.issue_failures:
-        pruned = reconcile_issue_failures(state.issue_failures, cwd=repo_root)
-        if pruned:
-            store.save(state)
+        reconcile_issue_failures(state.issue_failures, cwd=repo_root)
 
     config_error: str | None = None
     try:

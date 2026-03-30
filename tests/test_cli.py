@@ -25,7 +25,7 @@ def test_help_shows_all_commands() -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["--help"])
     assert result.exit_code == 0
-    for cmd in ["status", "start", "pause", "resume", "stop", "inspect", "logs", "init-config", "tui", "retry", "retry-merge"]:
+    for cmd in ["status", "start", "pause", "resume", "stop", "inspect", "logs", "init-config", "tui", "unhold", "queue-merge"]:
         assert cmd in result.output
 
 
@@ -185,7 +185,7 @@ def test_logs_empty(tmp_path: Path) -> None:
         assert "No events" in result.output
 
 
-def test_retry_clears_failure(tmp_path: Path) -> None:
+def test_unhold_clears_failure(tmp_path: Path) -> None:
     state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
@@ -207,15 +207,15 @@ def test_retry_clears_failure(tmp_path: Path) -> None:
         patch("orc.cli.get_issue_status", return_value="open"),
     ):
         runner = CliRunner()
-        result = runner.invoke(main, ["retry", "bz5"])
+        result = runner.invoke(main, ["unhold", "bz5"])
         assert result.exit_code == 0
-        assert "Cleared failure status for bz5" in result.output
+        assert "Removed hold for bz5" in result.output
 
     reloaded = store.load()
     assert "bz5" not in reloaded.issue_failures
 
 
-def test_retry_not_in_failures(tmp_path: Path) -> None:
+def test_unhold_not_in_failures(tmp_path: Path) -> None:
     state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
@@ -223,12 +223,12 @@ def test_retry_not_in_failures(tmp_path: Path) -> None:
 
     with patch("orc.cli._get_state_dir", return_value=state_dir):
         runner = CliRunner()
-        result = runner.invoke(main, ["retry", "bz99"])
+        result = runner.invoke(main, ["unhold", "bz99"])
         assert result.exit_code != 0
         assert "not in held/failed state" in result.output
 
 
-def test_retry_schedules_merge_retry_for_conflict_failure(tmp_path: Path) -> None:
+def test_unhold_clears_hold_for_conflict_failure(tmp_path: Path) -> None:
     state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
@@ -253,18 +253,16 @@ def test_retry_schedules_merge_retry_for_conflict_failure(tmp_path: Path) -> Non
         patch("orc.cli.get_issue_status", return_value="open"),
     ):
         runner = CliRunner()
-        result = runner.invoke(main, ["retry", "bz6"])
+        result = runner.invoke(main, ["unhold", "bz6"])
         assert result.exit_code == 0
-        assert "Scheduled merge retry for bz6" in result.output
+        assert "Removed hold for bz6" in result.output
 
     reloaded = store.load()
     assert "bz6" not in reloaded.issue_failures
-    assert reloaded.resume_candidate is not None
-    assert reloaded.resume_candidate["issue_id"] == "bz6"
-    assert reloaded.resume_candidate["stage"] == "ready_to_merge"
+    assert reloaded.resume_candidate is None
 
 
-def test_retry_merge_requires_merge_retryable_failure(tmp_path: Path) -> None:
+def test_queue_merge_requires_merge_retryable_failure(tmp_path: Path) -> None:
     _make_project(tmp_path)
     state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -290,12 +288,12 @@ def test_retry_merge_requires_merge_retryable_failure(tmp_path: Path) -> None:
         patch("orc.cli.get_issue_status", return_value="open"),
     ):
         runner = CliRunner()
-        result = runner.invoke(main, ["retry-merge", "bz7"])
+        result = runner.invoke(main, ["queue-merge", "bz7"])
         assert result.exit_code != 0
         assert "not eligible for merge-only retry" in result.output
 
 
-def test_retry_merge_queues_ready_to_merge_resume(tmp_path: Path) -> None:
+def test_queue_merge_queues_ready_to_merge_resume(tmp_path: Path) -> None:
     _make_project(tmp_path)
     state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -324,9 +322,9 @@ def test_retry_merge_queues_ready_to_merge_resume(tmp_path: Path) -> None:
         patch("orc.cli.get_issue_status", return_value="open"),
     ):
         runner = CliRunner()
-        result = runner.invoke(main, ["retry-merge", "bz8"])
+        result = runner.invoke(main, ["queue-merge", "bz8"])
         assert result.exit_code == 0
-        assert "Scheduled merge retry for bz8" in result.output
+        assert "Queued merge resume for bz8" in result.output
 
     reloaded = store.load()
     assert reloaded.resume_candidate is not None

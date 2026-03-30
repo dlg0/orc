@@ -5,12 +5,16 @@ from __future__ import annotations
 import pytest
 
 from orc.state import (
+    RequestQueue,
+    apply_requests,
     can_retry_merge,
     FailureAction,
     FailureCategory,
     IssueFailure,
     OrchestratorMode,
     OrchestratorState,
+    clear_issue_hold,
+    queue_merge_resume,
     queue_retry,
     RunCheckpoint,
     RunStage,
@@ -227,7 +231,7 @@ def test_can_retry_merge_requires_preserved_branch_and_worktree() -> None:
     }) is False
 
 
-def test_queue_retry_uses_resume_candidate_for_merge_retryable_failures() -> None:
+def test_queue_merge_resume_sets_resume_candidate() -> None:
     state = OrchestratorState(
         issue_failures={
             "X-1": {
@@ -243,16 +247,16 @@ def test_queue_retry_uses_resume_candidate_for_merge_retryable_failures() -> Non
         }
     )
 
-    message = queue_retry(state, "X-1")
+    message = queue_merge_resume(state, "X-1")
 
-    assert message == "Scheduled merge retry for X-1 — will retry verify-and-merge on next run"
+    assert message == "Queued merge resume for X-1 — next run will start at verify-and-merge"
     assert "X-1" not in state.issue_failures
     assert state.resume_candidate is not None
     assert state.resume_candidate["issue_id"] == "X-1"
     assert state.resume_candidate["stage"] == "ready_to_merge"
 
 
-def test_queue_retry_merge_only_rejects_non_merge_failure() -> None:
+def test_queue_merge_resume_rejects_non_merge_failure() -> None:
     state = OrchestratorState(
         issue_failures={
             "X-2": {
@@ -266,7 +270,27 @@ def test_queue_retry_merge_only_rejects_non_merge_failure() -> None:
     )
 
     with pytest.raises(ValueError, match="not eligible for merge-only retry"):
-        queue_retry(state, "X-2", merge_only=True)
+        queue_merge_resume(state, "X-2")
+
+
+def test_clear_issue_hold_removes_failure_entry() -> None:
+    state = OrchestratorState(
+        issue_failures={
+            "X-3": {
+                "category": "issue_needs_rework",
+                "action": "hold_for_retry",
+                "stage": "evaluation",
+                "summary": "tests failing",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+            }
+        }
+    )
+
+    message = clear_issue_hold(state, "X-3")
+
+    assert message == "Removed hold for X-3 — eligible for normal scheduling on next run"
+    assert "X-3" not in state.issue_failures
+    assert state.resume_candidate is None
 
 
 def test_active_issue_title_round_trip(tmp_path) -> None:
@@ -381,12 +405,16 @@ def test_run_checkpoint_from_dict_defaults() -> None:
 
 
 def test_run_stage_values() -> None:
-    expected = {
+    # RunStage is now an alias for WorkflowPhase, which includes additional
+    # transient phases.  Verify that the original checkpoint phases are still
+    # present plus the new workflow phases.
+    original_stages = {
         "worktree_created", "claimed", "amp_running", "amp_finished",
         "evaluation_running", "ready_to_merge", "merge_running",
         "claim_release_pending",
     }
-    assert {s.value for s in RunStage} == expected
+    all_values = {s.value for s in RunStage}
+    assert original_stages.issubset(all_values)
 
 
 def test_active_run_round_trip(tmp_path) -> None:
@@ -476,3 +504,144 @@ def test_failure_category_values() -> None:
         "fatal_run_error",
     }
     assert {c.value for c in FailureCategory} == expected
+
+
+# -- RequestQueue / apply_requests tests --
+
+
+def test_request_queue_enqueue_drain(tmp_path) -> None:
+    rq = RequestQueue(tmp_path)
+    rq.enqueue("unhold", issue_id="X-1")
+    rq.enqueue("pause")
+
+    assert not rq.is_empty()
+    requests = rq.drain()
+    assert len(requests) == 2
+    assert requests[0]["type"] == "unhold"
+    assert requests[0]["issue_id"] == "X-1"
+    assert requests[1]["type"] == "pause"
+    # After drain the queue is empty
+    assert rq.is_empty()
+    assert rq.drain() == []
+
+
+def test_request_queue_empty_when_no_dir(tmp_path) -> None:
+    rq = RequestQueue(tmp_path / "nonexistent")
+    assert rq.is_empty()
+    assert rq.drain() == []
+
+
+def test_apply_requests_unhold(tmp_path) -> None:
+    state = OrchestratorState(
+        issue_failures={"X-1": {"summary": "fail"}, "X-2": {"summary": "other"}},
+    )
+    rq = RequestQueue(tmp_path)
+    rq.enqueue("unhold", issue_id="X-1")
+
+    changed = apply_requests(state, tmp_path)
+    assert changed is True
+    assert "X-1" not in state.issue_failures
+    assert "X-2" in state.issue_failures
+
+
+def test_apply_requests_unhold_idempotent(tmp_path) -> None:
+    state = OrchestratorState(issue_failures={})
+    rq = RequestQueue(tmp_path)
+    rq.enqueue("unhold", issue_id="X-99")
+
+    changed = apply_requests(state, tmp_path)
+    assert changed is True  # request was processed
+    assert "X-99" not in state.issue_failures
+
+
+def test_apply_requests_pause(tmp_path) -> None:
+    state = OrchestratorState(mode=OrchestratorMode.running)
+    rq = RequestQueue(tmp_path)
+    rq.enqueue("pause")
+
+    apply_requests(state, tmp_path)
+    assert state.mode == OrchestratorMode.pause_requested
+
+
+def test_apply_requests_pause_idempotent_when_paused(tmp_path) -> None:
+    state = OrchestratorState(mode=OrchestratorMode.paused)
+    rq = RequestQueue(tmp_path)
+    rq.enqueue("pause")
+
+    apply_requests(state, tmp_path)
+    assert state.mode == OrchestratorMode.paused  # no change
+
+
+def test_apply_requests_stop(tmp_path) -> None:
+    state = OrchestratorState(mode=OrchestratorMode.running)
+    rq = RequestQueue(tmp_path)
+    rq.enqueue("stop")
+
+    apply_requests(state, tmp_path)
+    assert state.mode == OrchestratorMode.stopping
+
+
+def test_apply_requests_stop_idempotent_when_idle(tmp_path) -> None:
+    state = OrchestratorState(mode=OrchestratorMode.idle)
+    rq = RequestQueue(tmp_path)
+    rq.enqueue("stop")
+
+    apply_requests(state, tmp_path)
+    assert state.mode == OrchestratorMode.idle  # no change
+
+
+def test_apply_requests_empty_returns_false(tmp_path) -> None:
+    state = OrchestratorState()
+    assert apply_requests(state, tmp_path) is False
+
+
+def test_apply_requests_queue_merge(tmp_path) -> None:
+    state = OrchestratorState(
+        issue_failures={
+            "X-1": {
+                "category": "stale_or_conflicted",
+                "action": "hold_for_retry",
+                "stage": "merge/rebase",
+                "summary": "conflict",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "branch": "amp/X-1",
+                "worktree_path": "/tmp/wt",
+                "preserve_worktree": True,
+            }
+        }
+    )
+    rq = RequestQueue(tmp_path)
+    rq.enqueue("queue_merge", issue_id="X-1")
+
+    apply_requests(state, tmp_path)
+    assert "X-1" not in state.issue_failures
+    assert state.resume_candidate is not None
+    assert state.resume_candidate["issue_id"] == "X-1"
+
+
+def test_scheduler_save_drains_requests(tmp_path) -> None:
+    """Simulate the lost-update scenario: scheduler has stale state,
+    TUI enqueues unhold, scheduler save incorporates the request."""
+    from orc.scheduler import _save_with_requests
+
+    state_dir = tmp_path / ".orc"
+    state_dir.mkdir()
+    store = StateStore(state_dir)
+
+    # Scheduler's in-memory state still has the held issue
+    state = OrchestratorState(
+        mode=OrchestratorMode.running,
+        issue_failures={"X-1": {"summary": "held"}},
+    )
+    store.save(state)
+
+    # TUI enqueues unhold
+    rq = RequestQueue(state_dir)
+    rq.enqueue("unhold", issue_id="X-1")
+
+    # Scheduler does a save (which drains requests first)
+    _save_with_requests(store, state, state_dir)
+
+    # The saved state should NOT have the held issue
+    loaded = store.load()
+    assert "X-1" not in loaded.issue_failures

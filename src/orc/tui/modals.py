@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import shlex
 from dataclasses import dataclass
+from pathlib import Path
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Label, Static
+from textual.widgets import Button, Label, RichLog, Static
 
 
 @dataclass
@@ -281,3 +284,194 @@ class HelpModal(ModalScreen[None]):
             yield Label("Key Bindings", id="help-title")
             for key, desc in _build_help_bindings():
                 yield Static(f"  [bold]{key:<16}[/] {desc}")
+
+
+def build_thread_continue_cmd(thread_id: str, worktree_path: str | None = None) -> str:
+    """Build a shell command to continue an AMP thread for debugging."""
+    cmd = f"amp threads continue {thread_id}"
+    if worktree_path:
+        return f"cd {shlex.quote(worktree_path)} && {cmd}"
+    return cmd
+
+
+class AmpStreamModal(ModalScreen[None]):
+    """Modal that live-tails a per-run AMP stream-json log file."""
+
+    DEFAULT_CSS = """
+    AmpStreamModal {
+        align: center middle;
+    }
+    #stream-dialog {
+        width: 90%;
+        max-width: 140;
+        height: 90%;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #stream-header {
+        height: auto;
+        margin-bottom: 1;
+    }
+    #stream-title {
+        text-style: bold;
+    }
+    #stream-thread-info {
+        color: $text-muted;
+    }
+    #stream-log {
+        height: 1fr;
+        border: solid $primary-background;
+    }
+    #stream-copy-hint {
+        height: auto;
+        margin-top: 1;
+        color: $text-muted;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "dismiss", "Close"),
+        ("q", "dismiss", "Close"),
+    ]
+
+    def __init__(
+        self,
+        title: str,
+        log_path: str,
+        header_lines: list[str] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._title = title
+        self._log_path = Path(log_path)
+        self._header_lines = header_lines or []
+        self._lines_read = 0
+        self._thread_id: str | None = None
+        self._copy_key_map: dict[str, CopyableField] = {}
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="stream-dialog"):
+            with Vertical(id="stream-header"):
+                yield Label(self._title, id="stream-title")
+                if self._header_lines:
+                    yield Static("\n".join(self._header_lines))
+                yield Static("Thread: pending…", id="stream-thread-info")
+            yield RichLog(id="stream-log", wrap=True, highlight=True, markup=False)
+            yield Static("", id="stream-copy-hint")
+
+    def on_mount(self) -> None:
+        self._tail_timer = self.set_interval(0.5, self._tail_log)
+
+    def _tail_log(self) -> None:
+        """Read new lines from the log file and append to the RichLog."""
+        if not self._log_path.exists():
+            return
+        try:
+            all_lines = self._log_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return
+        new_lines = all_lines[self._lines_read:]
+        if not new_lines:
+            return
+        self._lines_read = len(all_lines)
+
+        log_widget = self.query_one("#stream-log", RichLog)
+        for line in new_lines:
+            # Try to extract thread_id from stream JSON
+            if self._thread_id is None:
+                try:
+                    msg = json.loads(line)
+                    tid = msg.get("thread_id") or msg.get("threadId")
+                    if tid and isinstance(tid, str):
+                        self._thread_id = tid
+                        self._update_thread_info()
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+            display_line = self._format_stream_line(line)
+            if display_line:
+                log_widget.write(display_line)
+
+    @staticmethod
+    def _format_stream_line(line: str) -> str:
+        """Format a stream-json line for display."""
+        try:
+            msg = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            return line
+        msg_type = msg.get("type", "")
+        if msg_type == "assistant":
+            content = msg.get("message", {}).get("content", [])
+            parts: list[str] = []
+            for block in content:
+                btype = block.get("type")
+                if btype == "text":
+                    parts.append(block.get("text", ""))
+                elif btype == "tool_use":
+                    parts.append(f"→ {block.get('name', '?')}")
+            if parts:
+                return f"[assistant] {' '.join(parts)}"
+            return "[assistant] (no content)"
+        if msg_type == "user":
+            content = msg.get("message", {}).get("content", [])
+            parts = []
+            for block in content:
+                btype = block.get("type")
+                if btype == "text":
+                    text = block.get("text", "").strip()
+                    if text:
+                        parts.append(text[:120])
+                elif btype == "tool_result":
+                    tool_id = block.get("tool_use_id", "")
+                    # Shorten the tool ID to last 8 chars
+                    short_id = tool_id[-8:] if tool_id else "?"
+                    parts.append(f"← result({short_id})")
+            if parts:
+                return f"[user] {' | '.join(parts)}"
+            return "[user]"
+        if msg_type == "tool_result":
+            return f"[tool_result] {str(msg.get('content', ''))[:150]}"
+        if msg_type == "result":
+            is_err = msg.get("is_error", False)
+            usage = msg.get("usage", {})
+            pct = ""
+            if usage:
+                inp = usage.get("input_tokens", 0)
+                mx = usage.get("max_tokens", 0)
+                if mx:
+                    pct = f" ctx={round(inp / mx * 100)}%"
+            return f"[result] error={is_err}{pct}"
+        if msg_type == "session_start":
+            return f"[session] started"
+        return ""
+
+    def _update_thread_info(self) -> None:
+        """Update thread info label and copy hints once thread_id is known."""
+        if not self._thread_id:
+            return
+        thread_url = f"{_THREAD_URL_PREFIX}{self._thread_id}"
+        continue_cmd = build_thread_continue_cmd(self._thread_id)
+        info = self.query_one("#stream-thread-info", Static)
+        info.update(
+            f"Thread: {self._thread_id}\n"
+            f"URL: {thread_url}\n"
+            f"Debug: {continue_cmd}"
+        )
+        self._copy_key_map = {
+            "t": CopyableField(label="Thread ID", value=self._thread_id, key="t"),
+            "u": CopyableField(label="Thread URL", value=thread_url, key="u"),
+            "d": CopyableField(label="Debug cmd", value=continue_cmd, key="d"),
+        }
+        hints = "  ".join(
+            f"[bold]{f.key}[/] copy {f.label.lower()}"
+            for f in self._copy_key_map.values()
+        )
+        self.query_one("#stream-copy-hint", Static).update(hints)
+
+    async def on_key(self, event) -> None:
+        """Handle copy key presses."""
+        cf = self._copy_key_map.get(event.key)
+        if cf is not None:
+            event.stop()
+            self.app.copy_to_clipboard(cf.value)
+            self.app.notify(f"Copied {cf.label}: {cf.value}", timeout=2)

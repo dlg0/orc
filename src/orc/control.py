@@ -16,7 +16,7 @@ from orc.events import EventLog, EventType
 from orc.lock import OrchestratorLock
 from orc.queue import unclaim_issue
 from orc.scheduler import run_loop
-from orc.state import OrchestratorMode, StateStore, _MAX_RESUME_ATTEMPTS, _RESUMABLE_STAGES
+from orc.state import OrchestratorMode, RequestQueue, StateStore, _MAX_RESUME_ATTEMPTS, _RESUMABLE_STAGES
 from orc.worktree import WorktreeManager
 
 
@@ -168,10 +168,18 @@ def pause_orchestrator(state_dir: Path) -> None:
             f"Cannot pause from {state.mode.value} state (must be running)"
         )
 
-    store.transition(state, OrchestratorMode.pause_requested)
-    events = EventLog(state_dir)
-    events.record(EventType.pause_requested)
-    click.echo("[SCHEDULER] Pause requested -- will pause after current issue completes")
+    if OrchestratorLock(state_dir).is_locked():
+        # Scheduler is running — enqueue instead of direct transition to
+        # avoid a lost-update race where the scheduler overwrites our write.
+        RequestQueue(state_dir).enqueue("pause")
+        events = EventLog(state_dir)
+        events.record(EventType.pause_requested)
+        click.echo("[SCHEDULER] Pause requested -- will pause after current issue completes")
+    else:
+        store.transition(state, OrchestratorMode.pause_requested)
+        events = EventLog(state_dir)
+        events.record(EventType.pause_requested)
+        click.echo("[SCHEDULER] Pause requested -- will pause after current issue completes")
 
 
 def resume_orchestrator(repo_root: Path, state_dir: Path, *, fail_fast: bool = False) -> None:
@@ -236,7 +244,13 @@ def stop_orchestrator(state_dir: Path) -> None:
             f"Cannot stop from {state.mode.value} state (must be running or pause_requested)"
         )
 
-    store.transition(state, OrchestratorMode.stopping)
-    events = EventLog(state_dir)
-    events.record(EventType.stop_requested)
-    click.echo("[SCHEDULER] Stop requested -- will stop after current issue reaches a safe checkpoint")
+    if OrchestratorLock(state_dir).is_locked():
+        RequestQueue(state_dir).enqueue("stop")
+        events = EventLog(state_dir)
+        events.record(EventType.stop_requested)
+        click.echo("[SCHEDULER] Stop requested -- will stop after current issue reaches a safe checkpoint")
+    else:
+        store.transition(state, OrchestratorMode.stopping)
+        events = EventLog(state_dir)
+        events.record(EventType.stop_requested)
+        click.echo("[SCHEDULER] Stop requested -- will stop after current issue reaches a safe checkpoint")

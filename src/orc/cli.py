@@ -15,10 +15,13 @@ from orc.control import (
 )
 from orc.events import EventLog
 from orc.queue import get_issue_status, get_ready_issues, reconcile_issue_failures
+from orc.lock import OrchestratorLock
 from orc.state import (
     OrchestratorMode,
     StateStore,
-    queue_retry,
+    clear_issue_hold,
+    queue_merge_resume,
+    RequestQueue,
 )
 
 
@@ -57,8 +60,11 @@ def status() -> None:
     if state.issue_failures:
         pruned = reconcile_issue_failures(state.issue_failures, cwd=state_dir.parent)
         if pruned:
-            store.save(state)
+            # Enqueue unhold requests — the scheduler will apply them on next save.
+            from orc.state import RequestQueue
+            rq = RequestQueue(state_dir)
             for issue_id, reason in pruned:
+                rq.enqueue("unhold", issue_id=issue_id)
                 click.echo(f"Pruned held issue {issue_id} ({reason})")
 
     queue_result = get_ready_issues(state_dir.parent)
@@ -77,6 +83,17 @@ def status() -> None:
             click.echo(f"  [{cat}] ({len(items)})")
             for rid, info in items:
                 click.echo(f"    {rid}: {info.get('summary', '(no summary)')}")
+
+    if state.resume_candidate:
+        rc = state.resume_candidate
+        rc_label = rc.get("issue_id", "unknown")
+        if rc.get("issue_title"):
+            rc_label += f" — {rc['issue_title']}"
+        click.echo(f"Queued resume: {rc_label}")
+        if rc.get("stage"):
+            click.echo(f"  Stage: {rc['stage']}")
+        if rc.get("branch"):
+            click.echo(f"  Branch: {rc['branch']}")
 
     if state.mode == OrchestratorMode.running and state.active_issue_id:
         if state.active_stage:
@@ -126,34 +143,51 @@ def stop() -> None:
 
 @main.command()
 @click.argument("issue_id")
-def retry(issue_id: str) -> None:
-    """Clear held/failed status for ISSUE_ID and re-queue it."""
+def unhold(issue_id: str) -> None:
+    """Remove hold on ISSUE_ID so it is eligible for normal scheduling."""
     state_dir = _get_state_dir()
     store = StateStore(state_dir)
     state = store.load()
     if issue_id not in state.issue_failures:
-        # Already queued as resume_candidate (e.g. previous retry-merge crashed before running)
         if state.resume_candidate and state.resume_candidate.get("issue_id") == issue_id:
             click.echo(f"{issue_id} is already queued as a resume candidate — use 'orc start --only {issue_id}' to run it")
             return
         raise click.ClickException(f"{issue_id} is not in held/failed state")
     if get_issue_status(issue_id, cwd=state_dir.parent) == "closed":
-        del state.issue_failures[issue_id]
-        store.save(state)
-        click.echo(f"{issue_id} is already closed in beads — removed from held list")
+        # Always safe to enqueue — scheduler or direct write will handle it
+        if OrchestratorLock(state_dir).is_locked():
+            RequestQueue(state_dir).enqueue("unhold", issue_id=issue_id)
+            click.echo(f"{issue_id} is already closed — queued removal (scheduler will apply)")
+        else:
+            del state.issue_failures[issue_id]
+            store.save(state)
+            click.echo(f"{issue_id} is already closed in beads — removed from held list")
         return
-    try:
-        message = queue_retry(state, issue_id)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
-    store.save(state)
-    click.echo(message)
+    if OrchestratorLock(state_dir).is_locked():
+        RequestQueue(state_dir).enqueue("unhold", issue_id=issue_id)
+        click.echo(f"Queued unhold for {issue_id} — scheduler will apply on next save")
+    else:
+        try:
+            message = clear_issue_hold(state, issue_id)
+        except KeyError:
+            raise click.ClickException(f"{issue_id} is not in held/failed state")
+        store.save(state)
+        click.echo(message)
 
 
-@main.command("retry-merge")
+@main.command(hidden=True)
+@click.argument("issue_id")
+def retry(issue_id: str) -> None:
+    """Deprecated: use 'orc unhold' instead."""
+    click.echo("Warning: 'orc retry' is deprecated, use 'orc unhold' instead.", err=True)
+    ctx = click.Context(unhold)
+    ctx.invoke(unhold, issue_id=issue_id)
+
+
+@main.command("queue-merge")
 @click.argument("issue_id")
 @click.option("--run-now", is_flag=True, default=False, help="Immediately start the orchestrator to process this retry.")
-def retry_merge(issue_id: str, run_now: bool) -> None:
+def queue_merge(issue_id: str, run_now: bool) -> None:
     """Queue ISSUE_ID to retry only the verify-and-merge step on next run."""
     project = detect_project()
     repo_root = project.repo_root
@@ -161,7 +195,6 @@ def retry_merge(issue_id: str, run_now: bool) -> None:
     store = StateStore(state_dir)
     state = store.load()
     if issue_id not in state.issue_failures:
-        # Already queued as resume_candidate (e.g. previous retry-merge crashed before running)
         if state.resume_candidate and state.resume_candidate.get("issue_id") == issue_id:
             click.echo(f"{issue_id} is already queued as a resume candidate")
             if run_now:
@@ -171,18 +204,36 @@ def retry_merge(issue_id: str, run_now: bool) -> None:
             return
         raise click.ClickException(f"{issue_id} is not in held/failed state")
     if get_issue_status(issue_id, cwd=state_dir.parent) == "closed":
-        del state.issue_failures[issue_id]
-        store.save(state)
-        click.echo(f"{issue_id} is already closed in beads — removed from held list")
+        if OrchestratorLock(state_dir).is_locked():
+            RequestQueue(state_dir).enqueue("unhold", issue_id=issue_id)
+            click.echo(f"{issue_id} is already closed — queued removal (scheduler will apply)")
+        else:
+            del state.issue_failures[issue_id]
+            store.save(state)
+            click.echo(f"{issue_id} is already closed in beads — removed from held list")
         return
-    try:
-        message = queue_retry(state, issue_id, merge_only=True)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
-    store.save(state)
-    click.echo(message)
+    if OrchestratorLock(state_dir).is_locked():
+        RequestQueue(state_dir).enqueue("queue_merge", issue_id=issue_id)
+        click.echo(f"Queued merge resume for {issue_id} — scheduler will apply on next save")
+    else:
+        try:
+            message = queue_merge_resume(state, issue_id)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        store.save(state)
+        click.echo(message)
     if run_now:
         start_orchestrator(repo_root, state_dir, only_issue=issue_id)
+
+
+@main.command("retry-merge", hidden=True)
+@click.argument("issue_id")
+@click.option("--run-now", is_flag=True, default=False, help="Immediately start the orchestrator to process this retry.")
+def retry_merge(issue_id: str, run_now: bool) -> None:
+    """Deprecated: use 'orc queue-merge' instead."""
+    click.echo("Warning: 'orc retry-merge' is deprecated, use 'orc queue-merge' instead.", err=True)
+    ctx = click.Context(queue_merge)
+    ctx.invoke(queue_merge, issue_id=issue_id, run_now=run_now)
 
 
 @main.command()
@@ -193,7 +244,36 @@ def inspect(issue_id: str) -> None:
     store = StateStore(state_dir)
     state = store.load()
 
-    # Check issue_failures first for richer detail
+    # Check active_run
+    if state.active_run and state.active_run.get("issue_id") == issue_id:
+        click.echo(f"Issue: {issue_id}")
+        click.echo(f"Status: active")
+        run = state.active_run
+        if run.get("stage"):
+            click.echo(f"Stage: {run['stage']}")
+        if run.get("branch"):
+            click.echo(f"Branch: {run['branch']}")
+        if run.get("worktree_path"):
+            click.echo(f"Worktree: {run['worktree_path']}")
+        if run.get("updated_at"):
+            click.echo(f"Started at: {run['updated_at']}")
+        return
+
+    # Check resume_candidate
+    if state.resume_candidate and state.resume_candidate.get("issue_id") == issue_id:
+        click.echo(f"Issue: {issue_id}")
+        click.echo(f"Status: queued for resume")
+        rc = state.resume_candidate
+        if rc.get("stage"):
+            click.echo(f"Stage: {rc['stage']}")
+        if rc.get("branch"):
+            click.echo(f"Branch: {rc['branch']}")
+        if rc.get("worktree_path"):
+            click.echo(f"Worktree: {rc['worktree_path']}")
+        click.echo(f"Suggested: orc start --only {issue_id}")
+        return
+
+    # Check issue_failures for richer detail
     failure_info = state.issue_failures.get(issue_id)
     if failure_info is not None:
         click.echo(f"Issue: {issue_id}")
@@ -207,6 +287,11 @@ def inspect(issue_id: str) -> None:
             click.echo(f"Worktree: {failure_info['worktree_path']}")
         if failure_info.get("summary"):
             click.echo(f"Summary: {failure_info['summary']}")
+        from orc.state import can_retry_merge
+        if can_retry_merge(failure_info):
+            click.echo(f"Suggested: orc queue-merge {issue_id}")
+        else:
+            click.echo(f"Suggested: orc unhold {issue_id}")
         return
 
     # Fall back to run_history
