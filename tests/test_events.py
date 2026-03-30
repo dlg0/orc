@@ -1,10 +1,10 @@
-"""Tests for amp_orchestrator.events."""
+"""Tests for orc.events."""
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from amp_orchestrator.events import EventLog, EventType
+from orc.events import EventLog, EventType
 
 
 def test_record_and_read_back(tmp_path) -> None:

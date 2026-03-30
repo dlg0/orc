@@ -6,13 +6,13 @@ import subprocess
 from pathlib import Path
 from unittest.mock import call, patch
 
-from amp_orchestrator.merge import (
+from orc.merge import (
     MergeResult,
     _is_conflict,
     _build_conflict_prompt,
     verify_and_merge,
 )
-from amp_orchestrator.worktree import WorktreeInfo, build_worktree_env
+from orc.worktree import WorktreeInfo, build_worktree_env
 
 
 WORKTREE_INFO = WorktreeInfo(
@@ -50,7 +50,7 @@ class TestMergeResult:
 
 
 class TestVerifyAndMergeSuccess:
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.subprocess.run")
     def test_full_success_path(self, mock_run: object) -> None:
         def side_effect(*args, **kwargs):
             cmd = args[0]
@@ -144,7 +144,7 @@ def _preflight_side_effect(*args, **kwargs):
 
 
 class TestRebaseFailure:
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.subprocess.run")
     def test_rebase_failure_aborts_and_returns(self, mock_run: object) -> None:
         def side_effect(*args, **kwargs):
             cmd = args[0]
@@ -174,7 +174,7 @@ class TestRebaseFailure:
 
 
 class TestVerifyFailure:
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.subprocess.run")
     def test_verify_failure_returns_early(self, mock_run: object) -> None:
         def side_effect(*args, **kwargs):
             if kwargs.get("shell"):
@@ -198,7 +198,7 @@ class TestVerifyFailure:
 
 
 class TestBdCloseNotCalledOnMergeFailure:
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.subprocess.run")
     def test_bd_close_not_called_when_merge_fails(self, mock_run: object) -> None:
         def side_effect(*args, **kwargs):
             cmd = args[0]
@@ -228,10 +228,10 @@ class TestBdCloseNotCalledOnMergeFailure:
 
 
 class TestVerificationRunEvents:
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.subprocess.run")
     def test_verification_run_events_emitted(self, mock_run: object, tmp_path: Path) -> None:
         mock_run.side_effect = _preflight_side_effect
-        state_dir = tmp_path / ".amp-orchestrator"
+        state_dir = tmp_path / ".orc"
         state_dir.mkdir()
 
         result = verify_and_merge(
@@ -246,7 +246,7 @@ class TestVerificationRunEvents:
 
         assert result.success is True
 
-        from amp_orchestrator.events import EventLog
+        from orc.events import EventLog
         events = EventLog(state_dir).all()
         vr_events = [e for e in events if e["event_type"] == "verification_run"]
         # 2 commands → 2 "before" events + 2 "pass" events = 4 total
@@ -256,9 +256,9 @@ class TestVerificationRunEvents:
         assert vr_events[1]["data"]["command"] == "make test"
         assert vr_events[1]["data"]["result"] == "pass"
 
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.subprocess.run")
     def test_verification_run_fail_event(self, mock_run: object, tmp_path: Path) -> None:
-        state_dir = tmp_path / ".amp-orchestrator"
+        state_dir = tmp_path / ".orc"
         state_dir.mkdir()
 
         def side_effect(*args, **kwargs):
@@ -281,13 +281,13 @@ class TestVerificationRunEvents:
         assert result.success is False
         assert result.stage == "verify"
 
-        from amp_orchestrator.events import EventLog
+        from orc.events import EventLog
         events = EventLog(state_dir).all()
         vr_events = [e for e in events if e["event_type"] == "verification_run"]
         assert len(vr_events) == 2  # before + fail
         assert vr_events[1]["data"]["result"] == "fail"
 
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.subprocess.run")
     def test_no_events_without_state_dir(self, mock_run: object) -> None:
         """When state_dir is None, no events are emitted and merge still works."""
         mock_run.side_effect = _preflight_side_effect
@@ -303,7 +303,7 @@ class TestVerificationRunEvents:
 
 
 class TestPreflightChecks:
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.subprocess.run")
     def test_no_commits_ahead_rejects(self, mock_run: object) -> None:
         def side_effect(*args, **kwargs):
             cmd = args[0]
@@ -326,7 +326,7 @@ class TestPreflightChecks:
         assert result.stage == "preflight"
         assert "no commits" in result.error
 
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.subprocess.run")
     def test_no_diff_rejects(self, mock_run: object) -> None:
         def side_effect(*args, **kwargs):
             cmd = args[0]
@@ -353,7 +353,7 @@ class TestPreflightChecks:
 
 
 class TestAutoPushFalse:
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.subprocess.run")
     def test_push_and_close_skipped_when_auto_push_false(self, mock_run: object) -> None:
         mock_run.side_effect = _preflight_side_effect
         result = verify_and_merge(
@@ -422,8 +422,8 @@ class TestBuildConflictPrompt:
 
 
 class TestRebaseConflictResolution:
-    @patch("amp_orchestrator.merge.shutil.which", return_value="/usr/bin/amp")
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.shutil.which", return_value="/usr/bin/amp")
+    @patch("orc.merge.subprocess.run")
     def test_rebase_conflict_resolved_by_amp(self, mock_run, mock_which) -> None:
         """When rebase conflicts occur and amp resolves them, merge succeeds."""
         conflict_attempt = [False]
@@ -468,8 +468,8 @@ class TestRebaseConflictResolution:
         ]
         assert len(git_add_calls) == 1
 
-    @patch("amp_orchestrator.merge.shutil.which", return_value="/usr/bin/amp")
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.shutil.which", return_value="/usr/bin/amp")
+    @patch("orc.merge.subprocess.run")
     def test_rebase_conflict_empty_resolution_skips_commit(self, mock_run, mock_which) -> None:
         """When conflict resolution makes the rebased commit empty, rebase uses --skip."""
         conflict_attempt = [False]
@@ -517,8 +517,8 @@ class TestRebaseConflictResolution:
         ]
         assert len(rebase_skip_calls) == 1
 
-    @patch("amp_orchestrator.merge.shutil.which", return_value="/usr/bin/amp")
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.shutil.which", return_value="/usr/bin/amp")
+    @patch("orc.merge.subprocess.run")
     def test_rebase_conflict_unresolved_aborts(self, mock_run, mock_which) -> None:
         """When amp fails to resolve conflicts, rebase is aborted."""
         def side_effect(*args, **kwargs):
@@ -552,8 +552,8 @@ class TestRebaseConflictResolution:
         abort_calls = [c for c in calls if isinstance(c[0][0], list) and c[0][0] == ["git", "rebase", "--abort"]]
         assert len(abort_calls) >= 1
 
-    @patch("amp_orchestrator.merge.shutil.which", return_value=None)
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.shutil.which", return_value=None)
+    @patch("orc.merge.subprocess.run")
     def test_no_amp_cli_skips_resolution(self, mock_run, mock_which) -> None:
         """When amp CLI is not found, conflict resolution is skipped."""
         def side_effect(*args, **kwargs):
@@ -580,8 +580,8 @@ class TestRebaseConflictResolution:
 
 
 class TestConflictResolutionEvents:
-    @patch("amp_orchestrator.merge.shutil.which", return_value="/usr/bin/amp")
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.shutil.which", return_value="/usr/bin/amp")
+    @patch("orc.merge.subprocess.run")
     def test_conflict_events_emitted(self, mock_run, mock_which, tmp_path: Path) -> None:
         """Conflict detection and resolution events are recorded."""
         conflict_attempt = [False]
@@ -604,7 +604,7 @@ class TestConflictResolutionEvents:
             return _preflight_side_effect(*args, **kwargs)
 
         mock_run.side_effect = side_effect
-        state_dir = tmp_path / ".amp-orchestrator"
+        state_dir = tmp_path / ".orc"
         state_dir.mkdir()
 
         result = verify_and_merge(
@@ -619,7 +619,7 @@ class TestConflictResolutionEvents:
 
         assert result.success is True
 
-        from amp_orchestrator.events import EventLog
+        from orc.events import EventLog
         all_events = EventLog(state_dir).all()
         event_types = [e["event_type"] for e in all_events]
         assert "conflict_detected" in event_types
@@ -631,8 +631,8 @@ class TestConflictResolutionEvents:
         assert len(finished) == 1
         assert finished[0]["data"]["success"] is True
 
-    @patch("amp_orchestrator.merge.shutil.which", return_value="/usr/bin/amp")
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.shutil.which", return_value="/usr/bin/amp")
+    @patch("orc.merge.subprocess.run")
     def test_rebase_continue_failure_records_stderr(self, mock_run, mock_which, tmp_path: Path, caplog) -> None:
         """Rebase --continue failures surface stderr in logs, events, and MergeResult."""
         rebase_continue_stderr = "error: cannot rebase: You have unstaged changes."
@@ -654,9 +654,9 @@ class TestConflictResolutionEvents:
             return _preflight_side_effect(*args, **kwargs)
 
         mock_run.side_effect = side_effect
-        state_dir = tmp_path / ".amp-orchestrator"
+        state_dir = tmp_path / ".orc"
         state_dir.mkdir()
-        caplog.set_level("WARNING", logger="amp_orchestrator.merge")
+        caplog.set_level("WARNING", logger="orc.merge")
 
         result = verify_and_merge(
             worktree_info=WORKTREE_INFO,
@@ -674,7 +674,7 @@ class TestConflictResolutionEvents:
         assert "git rebase --continue failed after conflict resolution" in caplog.text
         assert rebase_continue_stderr in caplog.text
 
-        from amp_orchestrator.events import EventLog
+        from orc.events import EventLog
         finished = [
             e for e in EventLog(state_dir).all()
             if e["event_type"] == "conflict_resolution_finished"
@@ -691,8 +691,8 @@ class TestConflictResolutionEvents:
 
 
 class TestMergeConflictResolution:
-    @patch("amp_orchestrator.merge.shutil.which", return_value="/usr/bin/amp")
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.shutil.which", return_value="/usr/bin/amp")
+    @patch("orc.merge.subprocess.run")
     def test_merge_conflict_resolved_by_amp(self, mock_run, mock_which) -> None:
         """When merge (not rebase) conflicts occur and amp resolves them, merge succeeds."""
         merge_attempt = [False]
@@ -733,8 +733,8 @@ class TestMergeConflictResolution:
         assert result.conflict_resolved is True
 
 
-    @patch("amp_orchestrator.merge.shutil.which", return_value="/usr/bin/amp")
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.shutil.which", return_value="/usr/bin/amp")
+    @patch("orc.merge.subprocess.run")
     def test_merge_conflict_amp_already_committed(self, mock_run, mock_which) -> None:
         """When amp consumes MERGE_HEAD during conflict resolution, merge still succeeds."""
         merge_attempt = [False]
@@ -788,8 +788,8 @@ class TestMergeConflictResolution:
 
 
 class TestWorktreeEnvPassed:
-    @patch("amp_orchestrator.merge.build_worktree_env")
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.build_worktree_env")
+    @patch("orc.merge.subprocess.run")
     def test_verification_commands_pass_worktree_env(self, mock_run, mock_env) -> None:
         """Verification subprocess calls pass env=build_worktree_env()."""
         fake_env = {"PYTHONPATH": "/repo/.worktrees/ISSUE-1/src", "PATH": "/usr/bin"}
@@ -810,9 +810,9 @@ class TestWorktreeEnvPassed:
         assert len(shell_calls) == 1
         assert shell_calls[0][1]["env"] is fake_env
 
-    @patch("amp_orchestrator.merge.build_worktree_env")
-    @patch("amp_orchestrator.merge.shutil.which", return_value="/usr/bin/amp")
-    @patch("amp_orchestrator.merge.subprocess.run")
+    @patch("orc.merge.build_worktree_env")
+    @patch("orc.merge.shutil.which", return_value="/usr/bin/amp")
+    @patch("orc.merge.subprocess.run")
     def test_conflict_resolution_passes_worktree_env(self, mock_run, mock_which, mock_env) -> None:
         """Conflict resolution amp subprocess passes env=build_worktree_env()."""
         fake_env = {"PYTHONPATH": "/repo/.worktrees/ISSUE-1/src", "PATH": "/usr/bin"}

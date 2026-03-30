@@ -1,6 +1,6 @@
-# amp-orchestrator
+# orc
 
-`amp-orchestrator` is a single-project backlog runner for Amp and `bd`.
+`orc` is a single-project backlog runner for Amp and `bd`.
 
 It launches inside one project repository, reads that project's Beads issues
 and dependencies, and executes ready work conservatively with one isolated git
@@ -13,28 +13,28 @@ worktree per issue.
 uv sync
 
 # Initialize config (optional)
-amp-orchestrator init-config
+orc init-config
 
 # Check status
-amp-orchestrator status
+orc status
 
 # Start processing issues
-amp-orchestrator start
+orc start
 
 # Pause after the current issue finishes
-amp-orchestrator pause
+orc pause
 
 # Resume from paused state
-amp-orchestrator resume
+orc resume
 
 # Stop gracefully
-amp-orchestrator stop
+orc stop
 
 # Inspect a specific issue run
-amp-orchestrator inspect <issue-id>
+orc inspect <issue-id>
 
 # View recent event log
-amp-orchestrator logs
+orc logs
 ```
 
 ## Architecture
@@ -43,12 +43,12 @@ amp-orchestrator logs
 - **Worktree Manager** — creates isolated git worktrees from `origin/main`
 - **Amp Runner** — invokes Amp per-issue (stub adapter for MVP)
 - **Merge Manager** — rebase, verify, merge, push, and `bd close`
-- **State Store** — durable JSON state in `.amp-orchestrator/`
+- **State Store** — durable JSON state in `.orc/`
 - **Event Log** — append-only JSONL event log
 
 ## Documents
 
-- [Product requirements document](docs/prds/0001-amp-orchestrator-mvp.md)
+- [Product requirements document](docs/prds/0001-orc-mvp.md)
 
 ## Design Principles
 

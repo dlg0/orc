@@ -9,12 +9,12 @@ import pytest
 
 from textual.widgets import DataTable
 
-from amp_orchestrator.config import OrchestratorConfig
-from amp_orchestrator.queue import BdIssue
-from amp_orchestrator.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
-from amp_orchestrator.tui.app import OrchestratorApp
-from amp_orchestrator.tui.snapshot import DashboardSnapshot
-from amp_orchestrator.tui.widgets import (
+from orc.config import OrchestratorConfig
+from orc.queue import BdIssue
+from orc.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
+from orc.tui.app import OrchestratorApp
+from orc.tui.snapshot import DashboardSnapshot
+from orc.tui.widgets import (
     ActiveIssuePanel,
     ConfigPanel,
     ControlsPanel,
@@ -159,7 +159,7 @@ async def test_inspect_queue_item() -> None:
         await pilot.press("i")
         await pilot.pause()
 
-        from amp_orchestrator.tui.modals import InspectModal
+        from orc.tui.modals import InspectModal
 
         assert isinstance(app.screen, InspectModal)
 
@@ -194,7 +194,7 @@ async def test_inspect_history_item() -> None:
         await pilot.press("enter")
         await pilot.pause()
 
-        from amp_orchestrator.tui.modals import InspectModal
+        from orc.tui.modals import InspectModal
 
         assert isinstance(app.screen, InspectModal)
 
@@ -270,7 +270,7 @@ async def test_stop_shows_confirmation_modal() -> None:
         await pilot.press("x")
         await pilot.pause()
 
-        from amp_orchestrator.tui.modals import ConfirmStopModal
+        from orc.tui.modals import ConfirmStopModal
 
         assert isinstance(app.screen, ConfirmStopModal)
 
@@ -287,7 +287,7 @@ async def test_help_overlay_opens_and_closes() -> None:
         await pilot.press("question_mark")
         await pilot.pause()
 
-        from amp_orchestrator.tui.modals import HelpModal
+        from orc.tui.modals import HelpModal
 
         assert isinstance(app.screen, HelpModal)
 
@@ -304,7 +304,7 @@ async def test_help_overlay_closes_with_question_mark() -> None:
         await pilot.press("question_mark")
         await pilot.pause()
 
-        from amp_orchestrator.tui.modals import HelpModal
+        from orc.tui.modals import HelpModal
 
         assert isinstance(app.screen, HelpModal)
 
@@ -319,7 +319,7 @@ async def test_start_launches_subprocess() -> None:
     app = OrchestratorApp(repo_root=Path("/tmp/repo"), state_dir=Path("/tmp/state"))
     async with app.run_test(notifications=True) as pilot:
         with patch(
-            "amp_orchestrator.subprocess_launcher.launch_orchestrator"
+            "orc.subprocess_launcher.launch_orchestrator"
         ) as mock_launch:
             from unittest.mock import MagicMock
 

@@ -1,4 +1,4 @@
-"""File-based locking for amp-orchestrator."""
+"""File-based locking for orc."""
 
 from __future__ import annotations
 

@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from amp_orchestrator.worktree import WorktreeManager, build_worktree_env, slugify
+from orc.worktree import WorktreeManager, build_worktree_env, slugify
 
 
 class TestSlugify:

@@ -1,4 +1,4 @@
-"""Textual TUI application for amp-orchestrator."""
+"""Textual TUI application for orc."""
 
 from __future__ import annotations
 
@@ -11,15 +11,15 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Footer, Header
 
-from amp_orchestrator.config import OrchestratorConfig
-from amp_orchestrator.queue import get_issue_status
-from amp_orchestrator.state import OrchestratorMode, StateStore, queue_retry
-from amp_orchestrator.tui.snapshot import (
+from orc.config import OrchestratorConfig
+from orc.queue import get_issue_status
+from orc.state import OrchestratorMode, StateStore, queue_retry
+from orc.tui.snapshot import (
     DashboardSnapshot,
     load_snapshot,
     load_snapshot_fast,
 )
-from amp_orchestrator.tui.widgets import (
+from orc.tui.widgets import (
     _ACTION_ENABLED,
     ActiveIssuePanel,
     ConfigPanel,
@@ -38,9 +38,9 @@ _STALE_THRESHOLD_SECS = 10
 
 
 class OrchestratorApp(App):
-    """TUI dashboard for amp-orchestrator."""
+    """TUI dashboard for orc."""
 
-    TITLE = "amp-orchestrator"
+    TITLE = "orc"
 
     CSS = """
     #left-col {
@@ -138,7 +138,7 @@ class OrchestratorApp(App):
         if not self._repo_root:
             return
         try:
-            from amp_orchestrator.config import load_config
+            from orc.config import load_config
 
             self._config = load_config(self._repo_root)
         except Exception as exc:
@@ -247,7 +247,7 @@ class OrchestratorApp(App):
 
     def action_help(self) -> None:
         """Show help modal with key bindings."""
-        from amp_orchestrator.tui.modals import HelpModal
+        from orc.tui.modals import HelpModal
 
         self.push_screen(HelpModal())
 
@@ -365,7 +365,7 @@ class OrchestratorApp(App):
             return
         if not self._is_action_allowed("stop"):
             return
-        from amp_orchestrator.tui.modals import ConfirmStopModal
+        from orc.tui.modals import ConfirmStopModal
 
         self.push_screen(ConfirmStopModal(), self._on_stop_confirmed)
 
@@ -434,7 +434,7 @@ class OrchestratorApp(App):
 
         try:
             if action in ("start", "resume"):
-                from amp_orchestrator.subprocess_launcher import (
+                from orc.subprocess_launcher import (
                     launch_orchestrator,
                 )
 
@@ -448,7 +448,7 @@ class OrchestratorApp(App):
                     f"{success_msg} (pid {proc.pid})",
                 )
             else:
-                from amp_orchestrator.control import (
+                from orc.control import (
                     pause_orchestrator,
                     stop_orchestrator,
                 )

@@ -2,7 +2,7 @@
 
 import os
 
-from amp_orchestrator.lock import OrchestratorLock
+from orc.lock import OrchestratorLock
 
 
 def test_acquire_fresh(tmp_path):

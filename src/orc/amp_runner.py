@@ -12,7 +12,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Protocol
 
-from amp_orchestrator.worktree import build_worktree_env
+from orc.worktree import build_worktree_env
 
 logger = logging.getLogger(__name__)
 

@@ -3,13 +3,13 @@ from __future__ import annotations
 
 from click.testing import CliRunner
 
-from amp_orchestrator.cli import main
-from amp_orchestrator.tui.app import OrchestratorApp
+from orc.cli import main
+from orc.tui.app import OrchestratorApp
 
 
 def test_orchestrator_app_instantiates() -> None:
     app = OrchestratorApp()
-    assert app.TITLE == "amp-orchestrator"
+    assert app.TITLE == "orc"
 
 
 def test_tui_command_registered() -> None:

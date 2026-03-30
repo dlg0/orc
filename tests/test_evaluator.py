@@ -6,10 +6,10 @@ import json
 import subprocess
 from pathlib import Path
 
-from amp_orchestrator.amp_runner import IssueContext
+from orc.amp_runner import IssueContext
 from unittest.mock import patch
 
-from amp_orchestrator.evaluator import (
+from orc.evaluator import (
     AmpEvaluatorRunner,
     EvaluationResult,
     EvaluationVerdict,
@@ -363,9 +363,9 @@ def test_parse_output_context_usage_from_stream() -> None:
 # --- AmpEvaluatorRunner passes worktree env ---
 
 
-@patch("amp_orchestrator.evaluator.build_worktree_env")
-@patch("amp_orchestrator.evaluator.subprocess.run")
-@patch("amp_orchestrator.evaluator.shutil.which", return_value="/usr/bin/amp")
+@patch("orc.evaluator.build_worktree_env")
+@patch("orc.evaluator.subprocess.run")
+@patch("orc.evaluator.shutil.which", return_value="/usr/bin/amp")
 def test_evaluator_passes_worktree_env(mock_which, mock_run, mock_env) -> None:
     """AmpEvaluatorRunner.evaluate() passes env=build_worktree_env() to subprocess."""
     fake_env = {"PYTHONPATH": "/tmp/worktree/src", "PATH": "/usr/bin"}

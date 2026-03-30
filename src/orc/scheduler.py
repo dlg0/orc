@@ -1,4 +1,4 @@
-"""Core scheduler loop for amp-orchestrator."""
+"""Core scheduler loop for orc."""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ from pathlib import Path
 
 import click
 
-from amp_orchestrator.amp_runner import AmpRunner, IssueContext, ResultType
-from amp_orchestrator.config import OrchestratorConfig
-from amp_orchestrator.evaluator import IssueEvaluator
-from amp_orchestrator.events import EventLog, EventType
-from amp_orchestrator.merge import verify_and_merge
-from amp_orchestrator.queue import (
+from orc.amp_runner import AmpRunner, IssueContext, ResultType
+from orc.config import OrchestratorConfig
+from orc.evaluator import IssueEvaluator
+from orc.events import EventLog, EventType
+from orc.merge import verify_and_merge
+from orc.queue import (
     claim_issue,
     get_children_all_closed,
     get_issue_parent,
@@ -22,7 +22,7 @@ from amp_orchestrator.queue import (
     select_next_issue,
     unclaim_issue,
 )
-from amp_orchestrator.state import (
+from orc.state import (
     FailureAction,
     FailureCategory,
     IssueFailure,
@@ -33,7 +33,7 @@ from amp_orchestrator.state import (
     StateStore,
     _MAX_RESUME_ATTEMPTS,
 )
-from amp_orchestrator.worktree import WorktreeInfo, WorktreeManager
+from orc.worktree import WorktreeInfo, WorktreeManager
 
 
 _ISSUE_DIVIDER = "-" * 60
@@ -290,7 +290,7 @@ def _attempt_resume(
                 verification_commands=config.verification_commands,
             )
         except Exception as exc:
-            from amp_orchestrator.evaluator import EvaluationResult
+            from orc.evaluator import EvaluationResult
             eval_result = EvaluationResult.fail(f"Evaluator crashed: {exc}")
 
         events.record(EventType.evaluation_finished, {
@@ -551,7 +551,7 @@ def run_loop(
             and result.thread_id
             and result.result == ResultType.completed
         ):
-            from amp_orchestrator.amp_runner import RealAmpRunner
+            from orc.amp_runner import RealAmpRunner
 
             click.echo(f"[SUMMARY] {issue.id} extracting rush summary ...")
             rush_summary = RealAmpRunner.extract_rush_summary(
@@ -662,7 +662,7 @@ def run_loop(
                     verification_commands=config.verification_commands,
                 )
             except Exception as exc:
-                from amp_orchestrator.evaluator import EvaluationResult
+                from orc.evaluator import EvaluationResult
                 eval_result = EvaluationResult.fail(f"Evaluator crashed: {exc}")
 
             eval_finished_data: dict = {

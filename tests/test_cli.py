@@ -8,10 +8,10 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from amp_orchestrator.cli import main
-from amp_orchestrator.control import start_orchestrator
-from amp_orchestrator.queue import QueueResult
-from amp_orchestrator.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
+from orc.cli import main
+from orc.control import start_orchestrator
+from orc.queue import QueueResult
+from orc.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
 
 
 def _make_project(tmp_path: Path) -> Path:
@@ -38,8 +38,8 @@ def test_version() -> None:
 
 def test_status_shows_mode(tmp_path: Path) -> None:
     _make_project(tmp_path)
-    with patch("amp_orchestrator.cli._get_state_dir", return_value=tmp_path / ".amp-orchestrator"):
-        with patch("amp_orchestrator.cli.get_ready_issues", return_value=QueueResult()):
+    with patch("orc.cli._get_state_dir", return_value=tmp_path / ".orc"):
+        with patch("orc.cli.get_ready_issues", return_value=QueueResult()):
             runner = CliRunner()
             result = runner.invoke(main, ["status"])
             assert result.exit_code == 0
@@ -48,7 +48,7 @@ def test_status_shows_mode(tmp_path: Path) -> None:
 
 def test_status_shows_active_issue(tmp_path: Path) -> None:
     _make_project(tmp_path)
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir()
     store = StateStore(state_dir)
     checkpoint = RunCheckpoint(
@@ -64,8 +64,8 @@ def test_status_shows_active_issue(tmp_path: Path) -> None:
     )
     store.save(state)
 
-    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
-        with patch("amp_orchestrator.cli.get_ready_issues", return_value=QueueResult()):
+    with patch("orc.cli._get_state_dir", return_value=state_dir):
+        with patch("orc.cli.get_ready_issues", return_value=QueueResult()):
             runner = CliRunner()
             result = runner.invoke(main, ["status"])
             assert result.exit_code == 0
@@ -75,8 +75,8 @@ def test_status_shows_active_issue(tmp_path: Path) -> None:
 
 def test_init_config_creates_file(tmp_path: Path) -> None:
     _make_project(tmp_path)
-    with patch("amp_orchestrator.cli.detect_project") as mock_detect:
-        from amp_orchestrator.config import ProjectContext
+    with patch("orc.cli.detect_project") as mock_detect:
+        from orc.config import ProjectContext
         mock_detect.return_value = ProjectContext(
             repo_root=tmp_path, has_git=True, has_beads=True
         )
@@ -84,16 +84,16 @@ def test_init_config_creates_file(tmp_path: Path) -> None:
         result = runner.invoke(main, ["init-config"])
         assert result.exit_code == 0
         assert "Config created" in result.output
-        assert (tmp_path / ".amp-orchestrator" / "config.yaml").exists()
+        assert (tmp_path / ".orc" / "config.yaml").exists()
 
 
 def test_pause_from_idle_fails(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     store.save(OrchestratorState(mode=OrchestratorMode.idle))
 
-    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+    with patch("orc.cli._get_state_dir", return_value=state_dir):
         runner = CliRunner()
         result = runner.invoke(main, ["pause"])
         assert result.exit_code != 0
@@ -102,16 +102,16 @@ def test_pause_from_idle_fails(tmp_path: Path) -> None:
 
 def test_start_runs_and_goes_idle(tmp_path: Path) -> None:
     _make_project(tmp_path)
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     store.save(OrchestratorState(mode=OrchestratorMode.idle))
 
-    from amp_orchestrator.config import ProjectContext
+    from orc.config import ProjectContext
 
     with (
-        patch("amp_orchestrator.cli.detect_project", return_value=ProjectContext(repo_root=tmp_path, has_git=True, has_beads=True)),
-        patch("amp_orchestrator.cli.start_orchestrator"),
+        patch("orc.cli.detect_project", return_value=ProjectContext(repo_root=tmp_path, has_git=True, has_beads=True)),
+        patch("orc.cli.start_orchestrator"),
     ):
         runner = CliRunner()
         result = runner.invoke(main, ["start"])
@@ -120,18 +120,18 @@ def test_start_runs_and_goes_idle(tmp_path: Path) -> None:
 
 def test_start_refuses_when_locked(tmp_path: Path) -> None:
     _make_project(tmp_path)
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     store.save(OrchestratorState(mode=OrchestratorMode.idle))
 
-    from amp_orchestrator.config import ProjectContext
-    from amp_orchestrator.lock import OrchestratorLock
+    from orc.config import ProjectContext
+    from orc.lock import OrchestratorLock
     lock = OrchestratorLock(state_dir)
     lock.acquire()
 
     try:
-        with patch("amp_orchestrator.cli.detect_project", return_value=ProjectContext(repo_root=tmp_path, has_git=True, has_beads=True)):
+        with patch("orc.cli.detect_project", return_value=ProjectContext(repo_root=tmp_path, has_git=True, has_beads=True)):
             runner = CliRunner()
             result = runner.invoke(main, ["start"])
             assert result.exit_code != 0
@@ -141,12 +141,12 @@ def test_start_refuses_when_locked(tmp_path: Path) -> None:
 
 
 def test_stop_from_running(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     store.save(OrchestratorState(mode=OrchestratorMode.running))
 
-    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+    with patch("orc.cli._get_state_dir", return_value=state_dir):
         runner = CliRunner()
         result = runner.invoke(main, ["stop"])
         assert result.exit_code == 0
@@ -158,16 +158,16 @@ def test_stop_from_running(tmp_path: Path) -> None:
 
 def test_resume_from_paused(tmp_path: Path) -> None:
     _make_project(tmp_path)
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     store.save(OrchestratorState(mode=OrchestratorMode.paused))
 
-    from amp_orchestrator.config import ProjectContext
+    from orc.config import ProjectContext
 
     with (
-        patch("amp_orchestrator.cli.detect_project", return_value=ProjectContext(repo_root=tmp_path, has_git=True, has_beads=True)),
-        patch("amp_orchestrator.cli.resume_orchestrator"),
+        patch("orc.cli.detect_project", return_value=ProjectContext(repo_root=tmp_path, has_git=True, has_beads=True)),
+        patch("orc.cli.resume_orchestrator"),
     ):
         runner = CliRunner()
         result = runner.invoke(main, ["resume"])
@@ -175,10 +175,10 @@ def test_resume_from_paused(tmp_path: Path) -> None:
 
 
 def test_logs_empty(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
 
-    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+    with patch("orc.cli._get_state_dir", return_value=state_dir):
         runner = CliRunner()
         result = runner.invoke(main, ["logs"])
         assert result.exit_code == 0
@@ -186,7 +186,7 @@ def test_logs_empty(tmp_path: Path) -> None:
 
 
 def test_retry_clears_failure(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     state = OrchestratorState(
@@ -203,8 +203,8 @@ def test_retry_clears_failure(tmp_path: Path) -> None:
     store.save(state)
 
     with (
-        patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir),
-        patch("amp_orchestrator.cli.get_issue_status", return_value="open"),
+        patch("orc.cli._get_state_dir", return_value=state_dir),
+        patch("orc.cli.get_issue_status", return_value="open"),
     ):
         runner = CliRunner()
         result = runner.invoke(main, ["retry", "bz5"])
@@ -216,12 +216,12 @@ def test_retry_clears_failure(tmp_path: Path) -> None:
 
 
 def test_retry_not_in_failures(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     store.save(OrchestratorState(mode=OrchestratorMode.idle))
 
-    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+    with patch("orc.cli._get_state_dir", return_value=state_dir):
         runner = CliRunner()
         result = runner.invoke(main, ["retry", "bz99"])
         assert result.exit_code != 0
@@ -229,7 +229,7 @@ def test_retry_not_in_failures(tmp_path: Path) -> None:
 
 
 def test_retry_schedules_merge_retry_for_conflict_failure(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     state = OrchestratorState(
@@ -249,8 +249,8 @@ def test_retry_schedules_merge_retry_for_conflict_failure(tmp_path: Path) -> Non
     store.save(state)
 
     with (
-        patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir),
-        patch("amp_orchestrator.cli.get_issue_status", return_value="open"),
+        patch("orc.cli._get_state_dir", return_value=state_dir),
+        patch("orc.cli.get_issue_status", return_value="open"),
     ):
         runner = CliRunner()
         result = runner.invoke(main, ["retry", "bz6"])
@@ -265,7 +265,7 @@ def test_retry_schedules_merge_retry_for_conflict_failure(tmp_path: Path) -> Non
 
 
 def test_retry_merge_requires_merge_retryable_failure(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     store.save(
@@ -283,8 +283,8 @@ def test_retry_merge_requires_merge_retryable_failure(tmp_path: Path) -> None:
     )
 
     with (
-        patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir),
-        patch("amp_orchestrator.cli.get_issue_status", return_value="open"),
+        patch("orc.cli._get_state_dir", return_value=state_dir),
+        patch("orc.cli.get_issue_status", return_value="open"),
     ):
         runner = CliRunner()
         result = runner.invoke(main, ["retry-merge", "bz7"])
@@ -293,7 +293,7 @@ def test_retry_merge_requires_merge_retryable_failure(tmp_path: Path) -> None:
 
 
 def test_retry_merge_queues_ready_to_merge_resume(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     store.save(
@@ -314,8 +314,8 @@ def test_retry_merge_queues_ready_to_merge_resume(tmp_path: Path) -> None:
     )
 
     with (
-        patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir),
-        patch("amp_orchestrator.cli.get_issue_status", return_value="open"),
+        patch("orc.cli._get_state_dir", return_value=state_dir),
+        patch("orc.cli.get_issue_status", return_value="open"),
     ):
         runner = CliRunner()
         result = runner.invoke(main, ["retry-merge", "bz8"])
@@ -329,7 +329,7 @@ def test_retry_merge_queues_ready_to_merge_resume(tmp_path: Path) -> None:
 
 
 def test_status_shows_held_issues(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     state = OrchestratorState(
@@ -347,8 +347,8 @@ def test_status_shows_held_issues(tmp_path: Path) -> None:
     )
     store.save(state)
 
-    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
-        with patch("amp_orchestrator.cli.get_ready_issues", return_value=QueueResult()):
+    with patch("orc.cli._get_state_dir", return_value=state_dir):
+        with patch("orc.cli.get_ready_issues", return_value=QueueResult()):
             runner = CliRunner()
             result = runner.invoke(main, ["status"])
             assert result.exit_code == 0
@@ -358,7 +358,7 @@ def test_status_shows_held_issues(tmp_path: Path) -> None:
 
 
 def test_status_normalizes_legacy_held_issues(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     (state_dir / "state.json").write_text(json.dumps({
         "mode": "idle",
@@ -370,8 +370,8 @@ def test_status_normalizes_legacy_held_issues(tmp_path: Path) -> None:
         },
     }))
 
-    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
-        with patch("amp_orchestrator.cli.get_ready_issues", return_value=QueueResult()):
+    with patch("orc.cli._get_state_dir", return_value=state_dir):
+        with patch("orc.cli.get_ready_issues", return_value=QueueResult()):
             runner = CliRunner()
             result = runner.invoke(main, ["status"])
             assert result.exit_code == 0
@@ -380,7 +380,7 @@ def test_status_normalizes_legacy_held_issues(tmp_path: Path) -> None:
 
 
 def test_inspect_shows_failure_details(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     state = OrchestratorState(
@@ -400,7 +400,7 @@ def test_inspect_shows_failure_details(tmp_path: Path) -> None:
     )
     store.save(state)
 
-    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+    with patch("orc.cli._get_state_dir", return_value=state_dir):
         runner = CliRunner()
         result = runner.invoke(main, ["inspect", "bz10"])
         assert result.exit_code == 0
@@ -413,12 +413,12 @@ def test_inspect_shows_failure_details(tmp_path: Path) -> None:
 
 
 def test_inspect_not_found(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     store.save(OrchestratorState(mode=OrchestratorMode.idle))
 
-    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+    with patch("orc.cli._get_state_dir", return_value=state_dir):
         runner = CliRunner()
         result = runner.invoke(main, ["inspect", "bz99"])
         assert result.exit_code != 0
@@ -426,7 +426,7 @@ def test_inspect_not_found(tmp_path: Path) -> None:
 
 
 def test_inspect_shows_entry(tmp_path: Path) -> None:
-    state_dir = tmp_path / ".amp-orchestrator"
+    state_dir = tmp_path / ".orc"
     state_dir.mkdir(parents=True)
     store = StateStore(state_dir)
     state = OrchestratorState(
@@ -437,7 +437,7 @@ def test_inspect_shows_entry(tmp_path: Path) -> None:
     )
     store.save(state)
 
-    with patch("amp_orchestrator.cli._get_state_dir", return_value=state_dir):
+    with patch("orc.cli._get_state_dir", return_value=state_dir):
         runner = CliRunner()
         result = runner.invoke(main, ["inspect", "bz1"])
         assert result.exit_code == 0

@@ -1,4 +1,4 @@
-"""Project detection and configuration for amp-orchestrator."""
+"""Project detection and configuration for orc."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ class OrchestratorConfig:
     fail_fast: bool = False
 
 
-CONFIG_DIR = ".amp-orchestrator"
+CONFIG_DIR = ".orc"
 CONFIG_FILE = "config.yaml"
 
 
@@ -72,7 +72,7 @@ def detect_project(path: Path | None = None) -> ProjectContext:
 
 
 def load_config(repo_root: Path) -> OrchestratorConfig:
-    """Load configuration from ``.amp-orchestrator/config.yaml``.
+    """Load configuration from ``.orc/config.yaml``.
 
     Returns defaults when the file does not exist.
     Raises ``click.ClickException`` if ``max_workers`` is not 1.
@@ -97,7 +97,7 @@ def load_config(repo_root: Path) -> OrchestratorConfig:
 
 
 def create_default_config(repo_root: Path) -> Path:
-    """Write the default configuration to ``.amp-orchestrator/config.yaml``.
+    """Write the default configuration to ``.orc/config.yaml``.
 
     Creates the directory if it does not exist. Returns the path to the file.
     """

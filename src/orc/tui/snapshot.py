@@ -4,10 +4,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from amp_orchestrator.config import OrchestratorConfig, load_config
-from amp_orchestrator.events import EventLog
-from amp_orchestrator.queue import BdIssue, get_ready_issues, reconcile_issue_failures
-from amp_orchestrator.state import OrchestratorState, StateStore
+from orc.config import OrchestratorConfig, load_config
+from orc.events import EventLog
+from orc.queue import BdIssue, get_ready_issues, reconcile_issue_failures
+from orc.state import OrchestratorState, StateStore
 
 
 @dataclass

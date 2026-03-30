@@ -1,4 +1,4 @@
-"""Git worktree management for amp-orchestrator."""
+"""Git worktree management for orc."""
 
 from __future__ import annotations
 
@@ -130,7 +130,7 @@ class WorktreeManager:
         )
 
     def list_worktrees(self) -> list[WorktreeInfo]:
-        """List worktrees managed by amp-orchestrator."""
+        """List worktrees managed by orc."""
         result = subprocess.run(
             ["git", "worktree", "list", "--porcelain"],
             cwd=self.repo_root,

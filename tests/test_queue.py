@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from amp_orchestrator.queue import (
+from orc.queue import (
     BdIssue,
     IssueState,
     QueueResult,
@@ -85,7 +85,7 @@ class TestSelectNextIssue:
 
 class TestClaimIssue:
     def test_claim_success(self, tmp_path) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             assert claim_issue("test-1", cwd=tmp_path) is True
             mock_run.assert_called_once_with(
@@ -97,12 +97,12 @@ class TestClaimIssue:
             )
 
     def test_claim_failure(self, tmp_path) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
             assert claim_issue("test-1", cwd=tmp_path) is False
 
     def test_claim_oserror(self, tmp_path) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run", side_effect=OSError("no bd")):
+        with patch("orc.queue.subprocess.run", side_effect=OSError("no bd")):
             assert claim_issue("test-1", cwd=tmp_path) is False
 
 
@@ -116,7 +116,7 @@ class TestGetReadyIssues:
             {"id": "i1", "title": "First", "priority": 2, "created_at": "2026-01-01T00:00:00Z"},
             {"id": "i2", "title": "Second", "priority": 3, "created_at": "2026-02-01T00:00:00Z"},
         ]
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = json.dumps(data)
             result = get_ready_issues(tmp_path)
@@ -129,7 +129,7 @@ class TestGetReadyIssues:
         assert result.issues[1].id == "i2"
 
     def test_success_empty_queue(self, tmp_path) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "[]"
             result = get_ready_issues(tmp_path)
@@ -139,7 +139,7 @@ class TestGetReadyIssues:
         assert result.issues == []
 
     def test_failure_nonzero_returncode(self, tmp_path) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
             mock_run.return_value.stderr = "bd: not initialized"
             result = get_ready_issues(tmp_path)
@@ -149,7 +149,7 @@ class TestGetReadyIssues:
         assert result.issues == []
 
     def test_failure_nonzero_returncode_empty_stderr(self, tmp_path) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
             mock_run.return_value.stderr = ""
             result = get_ready_issues(tmp_path)
@@ -159,7 +159,7 @@ class TestGetReadyIssues:
         assert result.issues == []
 
     def test_failure_oserror(self, tmp_path) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run", side_effect=OSError("no bd")):
+        with patch("orc.queue.subprocess.run", side_effect=OSError("no bd")):
             result = get_ready_issues(tmp_path)
 
         assert result.success is False
@@ -167,7 +167,7 @@ class TestGetReadyIssues:
         assert result.issues == []
 
     def test_failure_json_decode_error(self, tmp_path) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "not json"
             result = get_ready_issues(tmp_path)
@@ -177,7 +177,7 @@ class TestGetReadyIssues:
         assert result.issues == []
 
     def test_failure_non_list_json(self, tmp_path) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = '{"key": "value"}'
             result = get_ready_issues(tmp_path)
@@ -189,7 +189,7 @@ class TestGetReadyIssues:
 
 class TestUnclaimIssue:
     def test_success(self) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             assert unclaim_issue("X-1") is True
             mock_run.assert_called_once()
@@ -197,16 +197,16 @@ class TestUnclaimIssue:
             assert args == ["bd", "update", "X-1", "--status", "open", "--assignee", ""]
 
     def test_failure_returns_false(self) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
             assert unclaim_issue("X-1") is False
 
     def test_os_error_returns_false(self) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run", side_effect=OSError("no bd")):
+        with patch("orc.queue.subprocess.run", side_effect=OSError("no bd")):
             assert unclaim_issue("X-1") is False
 
     def test_passes_cwd(self, tmp_path) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             unclaim_issue("X-1", cwd=tmp_path)
             assert mock_run.call_args[1]["cwd"] == tmp_path
@@ -238,7 +238,7 @@ class TestGetIssueParent:
     def test_returns_parent_id(self) -> None:
         import json
         data = [{"id": "child-1", "title": "Child", "parent": "parent-1"}]
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = json.dumps(data)
             assert get_issue_parent("child-1") == "parent-1"
@@ -246,24 +246,24 @@ class TestGetIssueParent:
     def test_returns_none_when_no_parent(self) -> None:
         import json
         data = [{"id": "top-1", "title": "Top level"}]
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = json.dumps(data)
             assert get_issue_parent("top-1") is None
 
     def test_returns_none_on_failure(self) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
             assert get_issue_parent("x") is None
 
     def test_returns_none_on_oserror(self) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run", side_effect=OSError("no bd")):
+        with patch("orc.queue.subprocess.run", side_effect=OSError("no bd")):
             assert get_issue_parent("x") is None
 
     def test_passes_cwd(self, tmp_path) -> None:
         import json
         data = [{"id": "c", "parent": "p"}]
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = json.dumps(data)
             get_issue_parent("c", cwd=tmp_path)
@@ -275,13 +275,13 @@ class TestGetIssueStatus:
         import json
 
         data = [{"id": "issue-1", "status": "closed"}]
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = json.dumps(data)
             assert get_issue_status("issue-1") == "closed"
 
     def test_returns_none_on_failure(self) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
             assert get_issue_status("issue-1") is None
 
@@ -289,7 +289,7 @@ class TestGetIssueStatus:
         import json
 
         data = [{"id": "issue-1", "status": "open"}]
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = json.dumps(data)
             get_issue_status("issue-1", cwd=tmp_path)
@@ -303,7 +303,7 @@ class TestGetChildrenAllClosed:
             {"id": "c1", "status": "closed"},
             {"id": "c2", "status": "closed"},
         ]
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = json.dumps(data)
             assert get_children_all_closed("parent-1") is True
@@ -314,25 +314,25 @@ class TestGetChildrenAllClosed:
             {"id": "c1", "status": "closed"},
             {"id": "c2", "status": "open"},
         ]
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = json.dumps(data)
             assert get_children_all_closed("parent-1") is False
 
     def test_no_children_returns_none(self) -> None:
         import json
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "[]"
             assert get_children_all_closed("parent-1") is None
 
     def test_failure_returns_none(self) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
             assert get_children_all_closed("parent-1") is None
 
     def test_oserror_returns_none(self) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run", side_effect=OSError("no bd")):
+        with patch("orc.queue.subprocess.run", side_effect=OSError("no bd")):
             assert get_children_all_closed("parent-1") is None
 
 
@@ -341,7 +341,7 @@ class TestGetIssueState:
         import json
 
         data = [{"id": "i1", "status": "open"}]
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = json.dumps(data)
             assert get_issue_state("i1") is IssueState.open
@@ -350,7 +350,7 @@ class TestGetIssueState:
         import json
 
         data = [{"id": "i1", "status": "closed"}]
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = json.dumps(data)
             assert get_issue_state("i1") is IssueState.closed
@@ -359,35 +359,35 @@ class TestGetIssueState:
         import json
 
         data = [{"id": "i1", "status": "in_progress"}]
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = json.dumps(data)
             assert get_issue_state("i1") is IssueState.open
 
     def test_returns_missing_when_not_found(self) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
             mock_run.return_value.stderr = 'Error: no issue found matching "xyz"'
             assert get_issue_state("xyz") is IssueState.missing
 
     def test_returns_missing_for_not_found_variant(self) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
             mock_run.return_value.stderr = "not found"
             assert get_issue_state("xyz") is IssueState.missing
 
     def test_returns_unknown_on_generic_failure(self) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
             mock_run.return_value.stderr = "database connection error"
             assert get_issue_state("i1") is IssueState.unknown
 
     def test_returns_unknown_on_oserror(self) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run", side_effect=OSError("no bd")):
+        with patch("orc.queue.subprocess.run", side_effect=OSError("no bd")):
             assert get_issue_state("i1") is IssueState.unknown
 
     def test_returns_missing_for_empty_list(self) -> None:
-        with patch("amp_orchestrator.queue.subprocess.run") as mock_run:
+        with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "[]"
             assert get_issue_state("i1") is IssueState.missing
@@ -399,7 +399,7 @@ class TestReconcileIssueFailures:
 
     def test_prunes_closed_issues(self) -> None:
         failures = {"i1": self._failure_entry(), "i2": self._failure_entry()}
-        with patch("amp_orchestrator.queue.get_issue_state") as mock_state:
+        with patch("orc.queue.get_issue_state") as mock_state:
             mock_state.side_effect = lambda id, cwd=None: (
                 IssueState.closed if id == "i1" else IssueState.open
             )
@@ -410,21 +410,21 @@ class TestReconcileIssueFailures:
 
     def test_prunes_missing_issues(self) -> None:
         failures = {"gone": self._failure_entry()}
-        with patch("amp_orchestrator.queue.get_issue_state", return_value=IssueState.missing):
+        with patch("orc.queue.get_issue_state", return_value=IssueState.missing):
             pruned = reconcile_issue_failures(failures)
         assert failures == {}
         assert pruned == [("gone", "missing")]
 
     def test_keeps_open_issues(self) -> None:
         failures = {"i1": self._failure_entry()}
-        with patch("amp_orchestrator.queue.get_issue_state", return_value=IssueState.open):
+        with patch("orc.queue.get_issue_state", return_value=IssueState.open):
             pruned = reconcile_issue_failures(failures)
         assert "i1" in failures
         assert pruned == []
 
     def test_keeps_unknown_issues(self) -> None:
         failures = {"i1": self._failure_entry()}
-        with patch("amp_orchestrator.queue.get_issue_state", return_value=IssueState.unknown):
+        with patch("orc.queue.get_issue_state", return_value=IssueState.unknown):
             pruned = reconcile_issue_failures(failures)
         assert "i1" in failures
         assert pruned == []
@@ -447,7 +447,7 @@ class TestReconcileIssueFailures:
             "missing1": IssueState.missing,
             "unknown1": IssueState.unknown,
         }
-        with patch("amp_orchestrator.queue.get_issue_state") as mock_state:
+        with patch("orc.queue.get_issue_state") as mock_state:
             mock_state.side_effect = lambda id, cwd=None: state_map[id]
             pruned = reconcile_issue_failures(failures)
         assert set(failures.keys()) == {"open1", "unknown1"}

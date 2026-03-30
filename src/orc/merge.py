@@ -1,4 +1,4 @@
-"""Verification and merge management for amp-orchestrator."""
+"""Verification and merge management for orc."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from amp_orchestrator.events import EventLog, EventType
-from amp_orchestrator.worktree import WorktreeInfo, build_worktree_env
+from orc.events import EventLog, EventType
+from orc.worktree import WorktreeInfo, build_worktree_env
 
 logger = logging.getLogger(__name__)
 
