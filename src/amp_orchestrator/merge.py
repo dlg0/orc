@@ -52,7 +52,7 @@ def _get_conflict_files(cwd: Path) -> list[str]:
     return []
 
 
-def _resolve_conflicts_with_amp(
+def _spawn_amp_for_conflicts(
     worktree_path: Path,
     conflict_files: list[str],
     stage: str,
@@ -61,7 +61,7 @@ def _resolve_conflicts_with_amp(
     events: EventLog | None,
     conflict_resolution_timeout: int = 600,
 ) -> bool:
-    """Spawn amp to resolve merge/rebase conflicts. Returns True if resolved."""
+    """Spawn amp to resolve conflict markers and stage files. Returns True if all conflicts resolved."""
     amp_path = shutil.which("amp")
     if amp_path is None:
         logger.warning("amp CLI not found — cannot attempt conflict resolution")
@@ -126,26 +126,76 @@ def _resolve_conflicts_with_amp(
             })
         return False
 
-    # If rebase, continue the rebase
+    return True
+
+
+def _resolve_conflicts_with_amp(
+    worktree_path: Path,
+    conflict_files: list[str],
+    stage: str,
+    base_branch: str,
+    issue_id: str,
+    events: EventLog | None,
+    conflict_resolution_timeout: int = 600,
+) -> bool:
+    """Resolve merge/rebase conflicts using amp. Handles multi-commit rebases. Returns True if resolved."""
+    resolved = _spawn_amp_for_conflicts(
+        worktree_path=worktree_path,
+        conflict_files=conflict_files,
+        stage=stage,
+        base_branch=base_branch,
+        issue_id=issue_id,
+        events=events,
+        conflict_resolution_timeout=conflict_resolution_timeout,
+    )
+    if not resolved:
+        return False
+
+    # If rebase, continue — may need multiple rounds for multi-commit rebases
     if stage == "rebase":
-        try:
-            subprocess.run(
-                ["git", "rebase", "--continue"],
-                cwd=worktree_path,
-                check=True,
-                capture_output=True,
-                env={"GIT_EDITOR": "true", "PATH": subprocess.os.environ.get("PATH", "")},
-            )
-        except subprocess.CalledProcessError:
-            logger.warning("git rebase --continue failed after conflict resolution")
-            if events:
-                events.record(EventType.conflict_resolution_finished, {
-                    "issue_id": issue_id,
-                    "stage": stage,
-                    "success": False,
-                    "reason": "rebase_continue_failed",
-                })
-            return False
+        rebase_env = {**subprocess.os.environ, "GIT_EDITOR": "true"}
+        max_rebase_rounds = 20  # safety cap
+        for _round in range(max_rebase_rounds):
+            try:
+                subprocess.run(
+                    ["git", "rebase", "--continue"],
+                    cwd=worktree_path,
+                    check=True,
+                    capture_output=True,
+                    env=rebase_env,
+                )
+                break  # rebase finished successfully
+            except subprocess.CalledProcessError as rebase_err:
+                next_conflicts = _get_conflict_files(worktree_path)
+                if next_conflicts and _is_conflict(rebase_err):
+                    logger.info(
+                        "Rebase --continue hit new conflicts (round %d): %s",
+                        _round + 1,
+                        next_conflicts,
+                    )
+                    re_resolved = _spawn_amp_for_conflicts(
+                        worktree_path=worktree_path,
+                        conflict_files=next_conflicts,
+                        stage=stage,
+                        base_branch=base_branch,
+                        issue_id=issue_id,
+                        events=events,
+                        conflict_resolution_timeout=conflict_resolution_timeout,
+                    )
+                    if not re_resolved:
+                        logger.warning("Failed to resolve conflicts on round %d", _round + 1)
+                        return False
+                    # Loop back to try --continue again
+                else:
+                    logger.warning("git rebase --continue failed after conflict resolution")
+                    if events:
+                        events.record(EventType.conflict_resolution_finished, {
+                            "issue_id": issue_id,
+                            "stage": stage,
+                            "success": False,
+                            "reason": "rebase_continue_failed",
+                        })
+                    return False
 
     logger.info("Conflict resolution succeeded for %s stage", stage)
     if events:
