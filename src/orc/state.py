@@ -18,7 +18,7 @@ class OrchestratorMode(Enum):
     error = "error"
 
 
-from orc.workflow import WorkflowPhase, RESUMABLE_PHASES, normalize_failure_phase  # noqa: E402
+from orc.workflow import WorkflowPhase, RESUMABLE_PHASES  # noqa: E402
 
 # Backward-compatible alias — new code should use WorkflowPhase directly.
 RunStage = WorkflowPhase
@@ -28,6 +28,8 @@ RunStage = WorkflowPhase
 class RunCheckpoint:
     issue_id: str
     issue_title: str
+    issue_description: str = ""
+    issue_acceptance_criteria: str = ""
     branch: str | None = None
     worktree_path: str | None = None
     stage: RunStage = RunStage.worktree_created
@@ -43,6 +45,8 @@ class RunCheckpoint:
         d: dict = {
             "issue_id": self.issue_id,
             "issue_title": self.issue_title,
+            "issue_description": self.issue_description,
+            "issue_acceptance_criteria": self.issue_acceptance_criteria,
             "branch": self.branch,
             "worktree_path": self.worktree_path,
             "stage": self.stage.value,
@@ -61,6 +65,8 @@ class RunCheckpoint:
         return cls(
             issue_id=data["issue_id"],
             issue_title=data["issue_title"],
+            issue_description=data.get("issue_description", ""),
+            issue_acceptance_criteria=data.get("issue_acceptance_criteria", ""),
             branch=data.get("branch"),
             worktree_path=data.get("worktree_path"),
             stage=RunStage(data["stage"]),
@@ -207,26 +213,6 @@ _RESUMABLE_STAGES = RESUMABLE_PHASES
 _MAX_RESUME_ATTEMPTS = 2
 
 
-_MERGE_RETRYABLE_FAILURE_STAGES = {
-    WorkflowPhase.ready_to_merge.value,
-    WorkflowPhase.merge_running.value,
-    WorkflowPhase.conflict_resolution.value,
-}
-
-
-def can_retry_merge(info: object) -> bool:
-    """Return True when a held failure has preserved merge-stage retry context."""
-    failure = _normalize_issue_failure(info)
-    stage = failure.get("stage", "")
-    return (
-        failure["preserve_worktree"] is True
-        and isinstance(failure["branch"], str)
-        and bool(failure["branch"])
-        and isinstance(failure["worktree_path"], str)
-        and bool(failure["worktree_path"])
-        and normalize_failure_phase(stage) in _MERGE_RETRYABLE_FAILURE_STAGES
-    )
-
 
 def clear_issue_hold(state: OrchestratorState, issue_id: str) -> str:
     """Remove a held issue from issue_failures so the scheduler re-picks it.
@@ -238,64 +224,6 @@ def clear_issue_hold(state: OrchestratorState, issue_id: str) -> str:
     del state.issue_failures[issue_id]
     return f"Removed hold for {issue_id} — eligible for normal scheduling on next run"
 
-
-def queue_merge_resume(
-    state: OrchestratorState,
-    issue_id: str,
-    *,
-    issue_title: str = "",
-) -> str:
-    """Queue a held merge-conflict issue for verify-and-merge retry.
-
-    Occupies the single resume_candidate slot.
-    Returns a user-facing status message.
-    """
-    failure = state.issue_failures.get(issue_id)
-    if failure is None:
-        raise KeyError(issue_id)
-
-    if not can_retry_merge(failure):
-        raise ValueError(f"{issue_id} is not eligible for merge-only retry")
-
-    if state.active_run and state.active_run.get("issue_id") != issue_id:
-        raise ValueError(
-            f"Cannot queue {issue_id} while {state.active_run['issue_id']} is active"
-        )
-    if state.resume_candidate and state.resume_candidate.get("issue_id") != issue_id:
-        raise ValueError(
-            "Another resume is already queued — run it or clear it before queueing a new one"
-        )
-
-    checkpoint = RunCheckpoint(
-        issue_id=issue_id,
-        issue_title=issue_title,
-        branch=failure["branch"],
-        worktree_path=failure["worktree_path"],
-        stage=RunStage.ready_to_merge,
-        preserve_worktree=True,
-        updated_at=failure.get("timestamp", ""),
-    )
-    state.resume_candidate = checkpoint.to_dict()
-    del state.issue_failures[issue_id]
-    return (
-        f"Queued merge resume for {issue_id} — next run will start at verify-and-merge"
-    )
-
-
-def queue_retry(
-    state: OrchestratorState,
-    issue_id: str,
-    *,
-    issue_title: str = "",
-    merge_only: bool = False,
-) -> str:
-    """Deprecated: use clear_issue_hold() or queue_merge_resume() instead."""
-    if merge_only:
-        return queue_merge_resume(state, issue_id, issue_title=issue_title)
-    failure = state.issue_failures.get(issue_id)
-    if failure is not None and can_retry_merge(failure):
-        return queue_merge_resume(state, issue_id, issue_title=issue_title)
-    return clear_issue_hold(state, issue_id)
 
 
 @dataclass
@@ -488,14 +416,9 @@ def apply_requests(state: OrchestratorState, state_dir: Path) -> bool:
         if rt == "unhold":
             issue_id = req.get("issue_id", "")
             state.issue_failures.pop(issue_id, None)  # idempotent
-        elif rt == "queue_merge":
+        elif rt == "retry":
             issue_id = req.get("issue_id", "")
-            failure = state.issue_failures.get(issue_id)
-            if failure and can_retry_merge(failure):
-                try:
-                    queue_merge_resume(state, issue_id)
-                except (KeyError, ValueError):
-                    pass  # idempotent — already queued or not eligible
+            state.issue_failures.pop(issue_id, None)  # idempotent
         elif rt == "pause":
             if state.mode == OrchestratorMode.running:
                 state.mode = OrchestratorMode.pause_requested

@@ -25,7 +25,7 @@ def test_help_shows_all_commands() -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["--help"])
     assert result.exit_code == 0
-    for cmd in ["status", "start", "pause", "resume", "stop", "inspect", "logs", "init-config", "tui", "unhold", "queue-merge"]:
+    for cmd in ["status", "start", "pause", "resume", "stop", "inspect", "logs", "init-config", "tui", "unhold"]:
         assert cmd in result.output
 
 
@@ -261,75 +261,6 @@ def test_unhold_clears_hold_for_conflict_failure(tmp_path: Path) -> None:
     assert "bz6" not in reloaded.issue_failures
     assert reloaded.resume_candidate is None
 
-
-def test_queue_merge_requires_merge_retryable_failure(tmp_path: Path) -> None:
-    _make_project(tmp_path)
-    state_dir = tmp_path / ".orc"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    store = StateStore(state_dir)
-    store.save(
-        OrchestratorState(
-            mode=OrchestratorMode.idle,
-            issue_failures={"bz7": {
-                "category": "issue_needs_rework",
-                "action": "hold_for_retry",
-                "stage": "evaluation",
-                "summary": "Tests failing",
-                "timestamp": "2026-01-01T00:00:00+00:00",
-                "attempts": 1,
-            }},
-        )
-    )
-
-    from orc.config import ProjectContext
-    with (
-        patch("orc.cli.detect_project", return_value=ProjectContext(
-            repo_root=tmp_path, has_git=True, has_beads=True)),
-        patch("orc.cli.get_issue_status", return_value="open"),
-    ):
-        runner = CliRunner()
-        result = runner.invoke(main, ["queue-merge", "bz7"])
-        assert result.exit_code != 0
-        assert "not eligible for merge-only retry" in result.output
-
-
-def test_queue_merge_queues_ready_to_merge_resume(tmp_path: Path) -> None:
-    _make_project(tmp_path)
-    state_dir = tmp_path / ".orc"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    store = StateStore(state_dir)
-    store.save(
-        OrchestratorState(
-            mode=OrchestratorMode.idle,
-            issue_failures={"bz8": {
-                "category": "stale_or_conflicted",
-                "action": "hold_for_retry",
-                "stage": "merge/rebase",
-                "summary": "Rebase conflict",
-                "timestamp": "2026-01-01T00:00:00+00:00",
-                "attempts": 1,
-                "branch": "amp/bz8-conflict",
-                "worktree_path": "/tmp/wt-bz8",
-                "preserve_worktree": True,
-            }},
-        )
-    )
-
-    from orc.config import ProjectContext
-    with (
-        patch("orc.cli.detect_project", return_value=ProjectContext(
-            repo_root=tmp_path, has_git=True, has_beads=True)),
-        patch("orc.cli.get_issue_status", return_value="open"),
-    ):
-        runner = CliRunner()
-        result = runner.invoke(main, ["queue-merge", "bz8"])
-        assert result.exit_code == 0
-        assert "Queued merge resume for bz8" in result.output
-
-    reloaded = store.load()
-    assert reloaded.resume_candidate is not None
-    assert reloaded.resume_candidate["issue_id"] == "bz8"
-    assert reloaded.resume_candidate["stage"] == "ready_to_merge"
 
 
 def test_status_shows_held_issues(tmp_path: Path) -> None:

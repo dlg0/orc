@@ -19,7 +19,6 @@ from orc.state import (
     StateStore,
     _MAX_RESUME_ATTEMPTS,
     _RESUMABLE_STAGES,
-    can_retry_merge,
 )
 from orc.worktree import WorktreeInfo, WorktreeManager
 
@@ -316,19 +315,6 @@ def check_held_issues(ctx: DoctorContext) -> list[Finding]:
                 issue_id=issue_id,
             ))
 
-        # Check if merge-retryable
-        if can_retry_merge(info):
-            branch = info.get("branch", "")
-            wt_path = info.get("worktree_path", "")
-            findings.append(Finding(
-                code="held.retry_merge_ready",
-                severity="info",
-                summary=f"Held issue {issue_id} has a preserved worktree and is eligible for merge retry.",
-                recommendation=f"Run 'orc queue-merge {issue_id}' to retry the merge step only.",
-                issue_id=issue_id,
-                path=wt_path,
-            ))
-
         # Check for stale holds
         if timestamp:
             try:
@@ -350,9 +336,7 @@ def check_held_issues(ctx: DoctorContext) -> list[Finding]:
         if merge_diag:
             merge_stage = info.get("extra", {}).get("merge_stage", "unknown")
             reason = merge_diag.get("reason", "unknown")
-            rec = f"Run 'orc inspect {issue_id}' for full diagnostics."
-            if can_retry_merge(info):
-                rec += f" Run 'orc queue-merge {issue_id}' to retry merge."
+            rec = f"Run 'orc inspect {issue_id}' for full diagnostics. Run 'orc unhold {issue_id}' to retry."
             findings.append(Finding(
                 code="held.merge_diagnostics_available",
                 severity="info",

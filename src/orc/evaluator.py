@@ -1,4 +1,4 @@
-"""Independent completion evaluator: verifies worker Amp output before merge."""
+"""Post-merge completion evaluator: verifies landed changes on the base branch."""
 
 from __future__ import annotations
 
@@ -126,17 +126,17 @@ class AmpEvaluatorRunner:
             self._mode,
         ]
 
-        logger.info("Running evaluator in %s", context.worktree_path)
+        logger.info("Running evaluator in %s", context.repo_root)
         logger.debug("Command: %s", cmd)
 
         try:
             proc = subprocess.run(
                 cmd,
-                cwd=str(context.worktree_path),
+                cwd=str(context.repo_root),
                 capture_output=True,
                 text=True,
                 timeout=self._timeout,
-                env=build_worktree_env(context.worktree_path),
+                env=build_worktree_env(context.repo_root),
             )
         except subprocess.TimeoutExpired:
             logger.error("Evaluator timed out after %d seconds", self._timeout)
@@ -171,7 +171,7 @@ class AmpEvaluatorRunner:
             f"You are an independent completion evaluator for bd issue {context.issue_id}.",
             "",
             "Your job is ONLY to decide:",
-            "1. Was this issue actually completed in the current worktree?",
+            "1. Was this issue actually completed and landed on the base branch?",
             "2. What concrete evidence supports that decision?",
             "",
             "This is NOT a full code review.",
@@ -188,8 +188,11 @@ class AmpEvaluatorRunner:
             "Acceptance criteria:",
             context.acceptance_criteria or "(none specified)",
             "",
-            "Evaluate only the repository state in this worktree:",
-            str(context.worktree_path),
+            f"Evaluate the current repository state on `{base_branch}` in:",
+            str(context.repo_root),
+            "",
+            "The issue has already been landed (merged and pushed). Judge whether the",
+            "current repository state satisfies the original issue requirements.",
             "",
             "Rules:",
             "- Do NOT read or rely on any previous Amp thread, transcript, or worker self-report.",
@@ -199,14 +202,13 @@ class AmpEvaluatorRunner:
             "- If verification commands are provided, run them yourself.",
             "- If you cannot find evidence that a requirement was met, return fail.",
             "- If the issue seems too large/broad for confident single-pass evaluation, set task_too_large_signal to true.",
-            "- Leave the worktree clean when finished.",
             "",
             "Suggested procedure:",
-            f"1. Inspect git status and git diff against origin/{base_branch}.",
-            "2. Read the most relevant changed files.",
+            f"1. Check you are on `{base_branch}` and inspect recent commits.",
+            "2. Read the most relevant files for the issue requirements.",
             "3. Run these verification commands:",
             formatted_cmds,
-            "4. Decide pass/fail based only on issue requirements and evidence in the worktree.",
+            "4. Decide pass/fail based only on issue requirements and evidence in the repository.",
             "",
             "When you are finished, output EXACTLY one JSON block (fenced with ```json) containing your result.",
             "Include ALL of these fields:",

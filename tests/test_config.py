@@ -55,15 +55,14 @@ def test_load_config_reads_existing_config(tmp_path: Path) -> None:
     cfg_dir = tmp_path / ".orc"
     cfg_dir.mkdir()
     (cfg_dir / "config.yaml").write_text(
-        yaml.dump({"base_branch": "develop", "auto_push": False})
+        yaml.dump({"base_branch": "develop", "amp_mode": "rush"})
     )
 
     config = load_config(tmp_path)
     assert config.base_branch == "develop"
-    assert config.auto_push is False
+    assert config.amp_mode == "rush"
     # Defaults for unset fields
     assert config.max_workers == 1
-    assert config.require_clean_worktree is True
 
 
 def test_create_default_config_writes_file(tmp_path: Path) -> None:

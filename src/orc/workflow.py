@@ -20,6 +20,7 @@ class WorkflowPhase(str, Enum):
     amp_running = "amp_running"
     amp_finished = "amp_finished"
     summary_extraction = "summary_extraction"
+    post_merge_eval = "post_merge_eval"
     dirty_worktree_check = "dirty_worktree_check"
     evaluation_running = "evaluation_running"
     ready_to_merge = "ready_to_merge"
@@ -42,6 +43,7 @@ PHASE_INFO: dict[WorkflowPhase, PhaseInfo] = {
     WorkflowPhase.amp_running: PhaseInfo("Agent running", True),
     WorkflowPhase.amp_finished: PhaseInfo("Agent finished", True),
     WorkflowPhase.summary_extraction: PhaseInfo("Summary extraction", False),
+    WorkflowPhase.post_merge_eval: PhaseInfo("Post-merge evaluation", False),
     WorkflowPhase.dirty_worktree_check: PhaseInfo("Dirty worktree check", False),
     WorkflowPhase.evaluation_running: PhaseInfo("Evaluation", False),
     WorkflowPhase.ready_to_merge: PhaseInfo("Ready to merge", True),
@@ -120,6 +122,7 @@ _EVENT_TYPE_PHASE_MAP: dict[str, str] = {
     "conflict_detected": WorkflowPhase.conflict_resolution.value,
     "conflict_resolution_started": WorkflowPhase.conflict_resolution.value,
     "conflict_resolution_finished": WorkflowPhase.conflict_resolution.value,
+    "followup_created": WorkflowPhase.post_merge_eval.value,
     "parent_promoted": WorkflowPhase.parent_promotion.value,
     "issue_needs_rework": WorkflowPhase.evaluation_running.value,
     "issue_failure_pruned": WorkflowPhase.preflight.value,

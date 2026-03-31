@@ -131,7 +131,7 @@ def test_build_prompt_contains_issue_fields() -> None:
 
 def test_build_prompt_contains_base_branch() -> None:
     prompt = AmpEvaluatorRunner._build_prompt(_make_context(), "develop", [])
-    assert "origin/develop" in prompt
+    assert "develop" in prompt
 
 
 def test_build_prompt_formats_verification_commands() -> None:
@@ -366,9 +366,9 @@ def test_parse_output_context_usage_from_stream() -> None:
 @patch("orc.evaluator.build_worktree_env")
 @patch("orc.evaluator.subprocess.run")
 @patch("orc.evaluator.shutil.which", return_value="/usr/bin/amp")
-def test_evaluator_passes_worktree_env(mock_which, mock_run, mock_env) -> None:
-    """AmpEvaluatorRunner.evaluate() passes env=build_worktree_env() to subprocess."""
-    fake_env = {"PYTHONPATH": "/tmp/worktree/src", "PATH": "/usr/bin"}
+def test_evaluator_passes_repo_root_env(mock_which, mock_run, mock_env) -> None:
+    """AmpEvaluatorRunner.evaluate() passes env=build_worktree_env(repo_root) to subprocess."""
+    fake_env = {"PYTHONPATH": "/tmp/repo/src", "PATH": "/usr/bin"}
     mock_env.return_value = fake_env
     mock_run.return_value = subprocess.CompletedProcess(
         args=["amp"], returncode=0, stdout="", stderr="",
@@ -378,6 +378,7 @@ def test_evaluator_passes_worktree_env(mock_which, mock_run, mock_env) -> None:
     ctx = _make_context()
     runner.evaluate(ctx, "main", [])
 
-    mock_env.assert_called_once_with(ctx.worktree_path)
+    mock_env.assert_called_once_with(ctx.repo_root)
     _, kwargs = mock_run.call_args
     assert kwargs["env"] is fake_env
+    assert kwargs["cwd"] == str(ctx.repo_root)

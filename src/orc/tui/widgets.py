@@ -699,7 +699,6 @@ class ConfigPanel(Static):
         cfg = snap.config
         lines = [
             f"Base branch: {cfg.base_branch}",
-            f"Auto push: {cfg.auto_push}",
             f"Amp mode: {cfg.amp_mode}",
             f"Summary: {cfg.summary_mode}",
         ]
@@ -718,8 +717,6 @@ class ConfigPanel(Static):
         lines = [
             f"[bold]Base branch:[/] {cfg.base_branch}",
             f"[bold]Max workers:[/] {cfg.max_workers}",
-            f"[bold]Auto push:[/] {cfg.auto_push}",
-            f"[bold]Require clean worktree:[/] {cfg.require_clean_worktree}",
             f"[bold]Amp mode:[/] {cfg.amp_mode}",
             f"[bold]Summary mode:[/] {cfg.summary_mode}",
             f"[bold]Summary amp mode:[/] {cfg.summary_amp_mode}",

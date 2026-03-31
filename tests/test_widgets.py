@@ -139,10 +139,9 @@ def test_config_panel_has_inspect_bindings() -> None:
 def test_config_panel_stores_config() -> None:
     panel = ConfigPanel()
     assert panel._last_config is None
-    cfg = OrchestratorConfig(base_branch="develop", auto_push=False)
+    cfg = OrchestratorConfig(base_branch="develop")
     panel._last_config = cfg
     assert panel._last_config.base_branch == "develop"
-    assert panel._last_config.auto_push is False
 
 
 def test_action_enabled_covers_all_actions() -> None:
@@ -340,7 +339,7 @@ def test_retry_held_issue_keeps_requeue_message_for_open_issue(tmp_path: Path) -
     refresh_mock.assert_called_once_with()
 
 
-def test_retry_held_issue_schedules_merge_retry_for_conflict_failure(tmp_path: Path) -> None:
+def test_retry_held_issue_unholds_conflict_failure(tmp_path: Path) -> None:
     state_dir = tmp_path / ".orc"
     state_dir.mkdir()
     store = StateStore(state_dir)
@@ -375,10 +374,10 @@ def test_retry_held_issue_schedules_merge_retry_for_conflict_failure(tmp_path: P
     rq = RequestQueue(state_dir)
     requests = rq.drain()
     assert len(requests) == 1
-    assert requests[0]["type"] == "queue_merge"
+    assert requests[0]["type"] == "unhold"
     assert requests[0]["issue_id"] == "orc-qzz"
     notify_mock.assert_called_once_with(
-        "Queued merge resume for orc-qzz"
+        "Queued retry for orc-qzz — will be cleared on next scheduler save"
     )
     refresh_mock.assert_called_once_with()
 

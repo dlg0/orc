@@ -479,11 +479,6 @@ class HeldIssueInspectScreen(Screen[None]):
                 if wt_dirty:
                     lines.append(f"  Dirty worktree paths: {', '.join(wt_dirty[:10])}")
 
-            from orc.state import can_retry_merge
-            if can_retry_merge(self._model.failure):
-                lines.append("")
-                lines.append("[bold bright_yellow]Retryable:[/] run 'orc queue-merge " + self._model.issue_id + "' to retry merge")
-
         return "\n".join(lines) if lines else "[dim]No merge data available[/]"
 
     def _render_hints(self) -> str:

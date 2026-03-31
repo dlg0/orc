@@ -24,8 +24,6 @@ class OrchestratorConfig:
 
     base_branch: str = "main"
     max_workers: int = 1
-    require_clean_worktree: bool = True
-    auto_push: bool = True
     verification_commands: list[str] = field(default_factory=list)
     amp_mode: str = "smart"
     use_decomposition_preflight: bool = True
@@ -108,8 +106,6 @@ def create_default_config(repo_root: Path) -> Path:
     data = {
         "base_branch": config.base_branch,
         "max_workers": config.max_workers,
-        "require_clean_worktree": config.require_clean_worktree,
-        "auto_push": config.auto_push,
         "verification_commands": config.verification_commands,
         "amp_mode": config.amp_mode,
         "use_decomposition_preflight": config.use_decomposition_preflight,

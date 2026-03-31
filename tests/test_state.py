@@ -7,15 +7,12 @@ import pytest
 from orc.state import (
     RequestQueue,
     apply_requests,
-    can_retry_merge,
     FailureAction,
     FailureCategory,
     IssueFailure,
     OrchestratorMode,
     OrchestratorState,
     clear_issue_hold,
-    queue_merge_resume,
-    queue_retry,
     RunCheckpoint,
     RunStage,
     StateStore,
@@ -211,90 +208,6 @@ def test_load_backward_compat_missing_issue_failures(tmp_path) -> None:
     state = store.load()
     assert state.issue_failures == {}
 
-
-def test_can_retry_merge_requires_preserved_branch_and_worktree() -> None:
-    # Valid merge-stage failure with preserved worktree
-    assert can_retry_merge({
-        "category": "stale_or_conflicted",
-        "stage": "merge_running",
-        "summary": "conflict",
-        "timestamp": "2026-01-01T00:00:00+00:00",
-        "branch": "amp/X-1",
-        "worktree_path": "/tmp/wt",
-        "preserve_worktree": True,
-    }) is True
-    # Missing worktree_path → not retryable
-    assert can_retry_merge({
-        "category": "stale_or_conflicted",
-        "stage": "merge_running",
-        "summary": "conflict",
-        "timestamp": "2026-01-01T00:00:00+00:00",
-        "branch": "amp/X-1",
-        "worktree_path": None,
-        "preserve_worktree": True,
-    }) is False
-    # Non-merge stage → not retryable even with preserved worktree
-    assert can_retry_merge({
-        "category": "stale_or_conflicted",
-        "stage": "amp_running",
-        "summary": "conflict",
-        "timestamp": "2026-01-01T00:00:00+00:00",
-        "branch": "amp/X-1",
-        "worktree_path": "/tmp/wt",
-        "preserve_worktree": True,
-    }) is False
-    # Legacy merge/ prefix normalizes to merge_running → retryable
-    assert can_retry_merge({
-        "category": "stale_or_conflicted",
-        "stage": "merge/rebase",
-        "summary": "conflict",
-        "timestamp": "2026-01-01T00:00:00+00:00",
-        "branch": "amp/X-1",
-        "worktree_path": "/tmp/wt",
-        "preserve_worktree": True,
-    }) is True
-
-
-def test_queue_merge_resume_sets_resume_candidate() -> None:
-    state = OrchestratorState(
-        issue_failures={
-            "X-1": {
-                "category": "stale_or_conflicted",
-                "action": "hold_for_retry",
-                "stage": "merge/rebase",
-                "summary": "conflict",
-                "timestamp": "2026-01-01T00:00:00+00:00",
-                "branch": "amp/X-1",
-                "worktree_path": "/tmp/wt",
-                "preserve_worktree": True,
-            }
-        }
-    )
-
-    message = queue_merge_resume(state, "X-1")
-
-    assert message == "Queued merge resume for X-1 — next run will start at verify-and-merge"
-    assert "X-1" not in state.issue_failures
-    assert state.resume_candidate is not None
-    assert state.resume_candidate["issue_id"] == "X-1"
-    assert state.resume_candidate["stage"] == "ready_to_merge"
-
-
-def test_queue_merge_resume_rejects_non_merge_failure() -> None:
-    state = OrchestratorState(
-        issue_failures={
-            "X-2": {
-                "category": "issue_needs_rework",
-                "action": "hold_for_retry",
-                "stage": "evaluation",
-                "summary": "tests",
-                "timestamp": "2026-01-01T00:00:00+00:00",
-            }
-        }
-    )
-
-    with pytest.raises(ValueError, match="not eligible for merge-only retry"):
-        queue_merge_resume(state, "X-2")
 
 
 def test_clear_issue_hold_removes_failure_entry() -> None:
@@ -619,7 +532,7 @@ def test_apply_requests_empty_returns_false(tmp_path) -> None:
     assert apply_requests(state, tmp_path) is False
 
 
-def test_apply_requests_queue_merge(tmp_path) -> None:
+def test_apply_requests_retry(tmp_path) -> None:
     state = OrchestratorState(
         issue_failures={
             "X-1": {
@@ -635,12 +548,10 @@ def test_apply_requests_queue_merge(tmp_path) -> None:
         }
     )
     rq = RequestQueue(tmp_path)
-    rq.enqueue("queue_merge", issue_id="X-1")
+    rq.enqueue("retry", issue_id="X-1")
 
     apply_requests(state, tmp_path)
     assert "X-1" not in state.issue_failures
-    assert state.resume_candidate is not None
-    assert state.resume_candidate["issue_id"] == "X-1"
 
 
 def test_scheduler_save_drains_requests(tmp_path) -> None:

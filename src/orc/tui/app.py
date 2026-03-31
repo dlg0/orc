@@ -13,7 +13,7 @@ from textual.widgets import Footer, Header
 
 from orc.config import OrchestratorConfig
 from orc.queue import get_issue_status
-from orc.state import OrchestratorMode, StateStore, clear_issue_hold, can_retry_merge, queue_merge_resume, RequestQueue
+from orc.state import OrchestratorMode, StateStore, clear_issue_hold, RequestQueue
 from orc.tui.snapshot import (
     DashboardSnapshot,
     load_snapshot,
@@ -499,13 +499,8 @@ class OrchestratorApp(App):
                 rq.enqueue("unhold", issue_id=issue_id)
                 message = f"{issue_id} is already closed in beads — queued removal from held list"
             else:
-                failure = state.issue_failures.get(issue_id)
-                if failure and can_retry_merge(failure):
-                    rq.enqueue("queue_merge", issue_id=issue_id)
-                    message = f"Queued merge resume for {issue_id}"
-                else:
-                    rq.enqueue("unhold", issue_id=issue_id)
-                    message = f"Queued retry for {issue_id} — will be cleared on next scheduler save"
+                rq.enqueue("unhold", issue_id=issue_id)
+                message = f"Queued retry for {issue_id} — will be cleared on next scheduler save"
             self.call_from_thread(
                 self.notify, message
             )
