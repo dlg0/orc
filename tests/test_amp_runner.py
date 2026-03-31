@@ -333,3 +333,40 @@ def test_extract_rush_summary_no_amp(mock_which) -> None:
 def test_extract_rush_summary_timeout(mock_run, mock_which) -> None:
     result = RealAmpRunner.extract_rush_summary("aaa-bbb", Path("/tmp"))
     assert result is None
+
+
+# --- Decomposition prompt regression ---
+
+
+class TestDecompositionPromptParentSemantics:
+    """Regression: the decomposition prompt must instruct agents to use
+    ``bd create --parent``, not ``--deps 'parent:<id>'``.
+
+    A real-world decomposition once used the wrong flag, creating dependency
+    relationships instead of true parent-child hierarchies.  This silently
+    broke ``bd children`` and parent promotion.
+    """
+
+    def _build(self) -> str:
+        return RealAmpRunner._build_prompt(_make_context())
+
+    def test_prompt_contains_parent_flag(self) -> None:
+        prompt = self._build()
+        assert "--parent" in prompt
+
+    def test_prompt_warns_against_deps_parent(self) -> None:
+        prompt = self._build()
+        assert '--deps "parent:' in prompt or "--deps" in prompt, (
+            "Prompt should explicitly warn against using --deps for parent relationships"
+        )
+
+    def test_prompt_creates_children_with_parent_flag(self) -> None:
+        """The bd create example in the prompt must use --parent <issue_id>."""
+        prompt = self._build()
+        assert f"--parent {_make_context().issue_id}" in prompt
+
+    def test_prompt_discourages_deps_for_parent(self) -> None:
+        """The prompt should contain an explicit warning not to use --deps 'parent:<id>'."""
+        prompt = self._build()
+        lower = prompt.lower()
+        assert "do not use --deps" in lower or "not a true parent-child" in lower

@@ -10,6 +10,7 @@ from orc.queue import (
     QueueResult,
     claim_issue,
     compute_queue_breakdown,
+    create_issue,
     get_children_all_closed,
     get_issue_parent,
     get_issue_state,
@@ -464,6 +465,103 @@ class TestReconcileIssueFailures:
         assert len(pruned) == 2
         pruned_ids = {p[0] for p in pruned}
         assert pruned_ids == {"closed1", "missing1"}
+
+
+class TestCreateIssueParentSemantics:
+    """Regression: create_issue must use --parent, not --deps 'parent:<id>'.
+
+    A real-world decomposition produced pseudo-parent dependencies instead of
+    true parent-child relationships, silently breaking bd children and parent
+    promotion.  These tests assert the canonical CLI invocation.
+    """
+
+    def test_uses_parent_flag(self) -> None:
+        import json
+
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "child-1\n"
+            create_issue("Child task", "desc", parent="parent-1")
+            cmd = mock_run.call_args[0][0]
+            assert "--parent" in cmd
+            parent_idx = cmd.index("--parent")
+            assert cmd[parent_idx + 1] == "parent-1"
+
+    def test_does_not_use_deps_flag(self) -> None:
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "child-1\n"
+            create_issue("Child task", "desc", parent="parent-1")
+            cmd = mock_run.call_args[0][0]
+            assert "--deps" not in cmd
+            # Also check no 'parent:' substring in any argument
+            assert not any("parent:" in arg for arg in cmd if isinstance(arg, str) and arg != "parent-1")
+
+    def test_no_parent_flag_when_parent_is_none(self) -> None:
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "top-1\n"
+            create_issue("Top-level task", "desc")
+            cmd = mock_run.call_args[0][0]
+            assert "--parent" not in cmd
+
+
+class TestParentFieldNotDeps:
+    """Regression: get_issue_parent reads 'parent' field, not 'deps'.
+
+    If bd show returns a dependency-only relationship (no 'parent' field),
+    get_issue_parent must return None — not infer a parent from deps.
+    """
+
+    def test_ignores_deps_with_parent_prefix(self) -> None:
+        """Issue has deps containing 'parent:X' but no actual parent field."""
+        import json
+
+        data = [{"id": "child-1", "title": "Child", "deps": ["parent:pseudo-parent"]}]
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json.dumps(data)
+            assert get_issue_parent("child-1") is None
+
+    def test_returns_parent_only_from_parent_field(self) -> None:
+        """Issue has both parent field and deps — parent field wins."""
+        import json
+
+        data = [{"id": "child-1", "parent": "real-parent", "deps": ["parent:fake-parent"]}]
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json.dumps(data)
+            assert get_issue_parent("child-1") == "real-parent"
+
+    def test_empty_parent_field_returns_none(self) -> None:
+        """An empty-string parent field should be treated as no parent."""
+        import json
+
+        data = [{"id": "child-1", "parent": ""}]
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json.dumps(data)
+            assert get_issue_parent("child-1") is None
+
+
+class TestGetChildrenPseudoParentRegression:
+    """Regression: get_children_all_closed returns None for pseudo-parents.
+
+    When a pseudo-parent (dependency-only, not true --parent) has no real
+    children, bd children returns an empty list.  The function must return
+    None (no children) rather than True (vacuously all closed).
+    """
+
+    def test_empty_children_returns_none_not_true(self) -> None:
+        """A pseudo-parent with no bd children must not report all_closed=True."""
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "[]"
+            result = get_children_all_closed("pseudo-parent-1")
+            assert result is None, (
+                "Empty children list should return None, not True. "
+                "A pseudo-parent dependency must not trigger parent promotion."
+            )
 
 
 class TestPaginatedHeldOverlap:

@@ -27,9 +27,9 @@ from orc.state import (
 
 
 @pytest.fixture(autouse=True)
-def _patch_git_status(monkeypatch):
-    """Worktree paths in tests don't exist on disk; stub out the clean-check."""
-    monkeypatch.setattr("orc.scheduler._git_status_porcelain", lambda cwd: "")
+def _patch_sync_repo_root(monkeypatch):
+    """Stub out _sync_repo_root so tests don't need real git."""
+    monkeypatch.setattr("orc.scheduler._sync_repo_root", lambda repo_root, base_branch: (True, None))
 
 
 @pytest.fixture()
@@ -106,9 +106,6 @@ def test_processes_issue_with_stub(repo_root: Path, state_dir: Path) -> None:
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -117,7 +114,6 @@ def test_processes_issue_with_stub(repo_root: Path, state_dir: Path) -> None:
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
@@ -152,12 +148,10 @@ def test_decomposed_issue_skips_merge(repo_root: Path, state_dir: Path) -> None:
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge") as mock_merge,
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
-    mock_merge.assert_not_called()
     state = StateStore(state_dir).load()
     assert state.run_history[0]["result"] == "decomposed"
 
@@ -190,9 +184,6 @@ def test_failed_issue_continues_to_next(repo_root: Path, state_dir: Path) -> Non
             return QueueResult(issues=[issue2])  # fail-1 will be in skip_ids
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "x"
@@ -201,7 +192,6 @@ def test_failed_issue_continues_to_next(repo_root: Path, state_dir: Path) -> Non
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, fail_runner)
@@ -227,9 +217,6 @@ def test_events_are_recorded(repo_root: Path, state_dir: Path) -> None:
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -238,7 +225,6 @@ def test_events_are_recorded(repo_root: Path, state_dir: Path) -> None:
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
@@ -248,11 +234,10 @@ def test_events_are_recorded(repo_root: Path, state_dir: Path) -> None:
     assert "issue_selected" in event_types
     assert "amp_started" in event_types
     assert "amp_finished" in event_types
-    assert "merge_attempt" in event_types
     assert "issue_closed" in event_types
 
 
-def test_evaluation_pass_proceeds_to_merge(repo_root: Path, state_dir: Path) -> None:
+def test_evaluation_pass_completes_issue(repo_root: Path, state_dir: Path) -> None:
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     runner = StubAmpRunner.completed()
@@ -268,9 +253,6 @@ def test_evaluation_pass_proceeds_to_merge(repo_root: Path, state_dir: Path) -> 
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -279,17 +261,15 @@ def test_evaluation_pass_proceeds_to_merge(repo_root: Path, state_dir: Path) -> 
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner, evaluator=evaluator)
 
-    mock_merge.assert_called_once()
     state = StateStore(state_dir).load()
     assert state.run_history[0]["result"] == "completed"
 
 
-def test_evaluation_fail_blocks_merge(repo_root: Path, state_dir: Path) -> None:
+def test_evaluation_fail_creates_followup(repo_root: Path, state_dir: Path) -> None:
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     runner = StubAmpRunner.completed()
@@ -305,8 +285,6 @@ def test_evaluation_fail_blocks_merge(repo_root: Path, state_dir: Path) -> None:
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -315,16 +293,13 @@ def test_evaluation_fail_blocks_merge(repo_root: Path, state_dir: Path) -> None:
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler._create_followup_issue", return_value="followup-1"),
     ):
         run_loop(repo_root, state_dir, config, runner, evaluator=evaluator)
 
-    mock_merge.assert_not_called()
     state = StateStore(state_dir).load()
-    assert state.run_history[0]["result"] == "needs_rework"
-    assert "evaluation" in state.run_history[0]
-    assert state.run_history[0]["evaluation"]["verdict"] == "fail"
+    assert state.run_history[0]["result"] == "completed_with_followup"
 
 
 def test_evaluation_crash_treated_as_fail(repo_root: Path, state_dir: Path) -> None:
@@ -345,8 +320,6 @@ def test_evaluation_crash_treated_as_fail(repo_root: Path, state_dir: Path) -> N
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -355,14 +328,13 @@ def test_evaluation_crash_treated_as_fail(repo_root: Path, state_dir: Path) -> N
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler._create_followup_issue", return_value="followup-1"),
     ):
         run_loop(repo_root, state_dir, config, runner, evaluator=crash_evaluator)
 
-    mock_merge.assert_not_called()
     state = StateStore(state_dir).load()
-    assert state.run_history[0]["result"] == "needs_rework"
+    assert state.run_history[0]["result"] == "completed_with_followup"
 
 
 def test_no_evaluator_skips_evaluation(repo_root: Path, state_dir: Path) -> None:
@@ -380,9 +352,6 @@ def test_no_evaluator_skips_evaluation(repo_root: Path, state_dir: Path) -> None
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -391,12 +360,10 @@ def test_no_evaluator_skips_evaluation(repo_root: Path, state_dir: Path) -> None
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
 
-    mock_merge.assert_called_once()
     state = StateStore(state_dir).load()
     assert state.run_history[0]["result"] == "completed"
 
@@ -417,9 +384,6 @@ def test_evaluation_events_recorded(repo_root: Path, state_dir: Path) -> None:
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -428,7 +392,6 @@ def test_evaluation_events_recorded(repo_root: Path, state_dir: Path) -> None:
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner, evaluator=evaluator)
@@ -439,7 +402,7 @@ def test_evaluation_events_recorded(repo_root: Path, state_dir: Path) -> None:
     assert "evaluation_finished" in event_types
 
 
-def test_evaluation_failure_persists_needs_rework(repo_root: Path, state_dir: Path) -> None:
+def test_evaluation_failure_creates_followup_and_records_run(repo_root: Path, state_dir: Path) -> None:
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     runner = StubAmpRunner.completed()
@@ -463,18 +426,13 @@ def test_evaluation_failure_persists_needs_rework(repo_root: Path, state_dir: Pa
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge"),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler._create_followup_issue", return_value="followup-1"),
     ):
         run_loop(repo_root, state_dir, config, runner, evaluator=evaluator)
 
     state = StateStore(state_dir).load()
-    assert "test-1" in state.issue_failures
-    failure = state.issue_failures["test-1"]
-    assert failure["summary"] == "Missing tests"
-    assert failure["category"] == "issue_needs_rework"
-    assert failure["stage"] == "evaluation_running"
-    assert "timestamp" in failure
+    assert state.run_history[0]["result"] == "completed_with_followup"
 
 
 def test_claim_issue_called_before_amp(repo_root: Path, state_dir: Path) -> None:
@@ -492,9 +450,6 @@ def test_claim_issue_called_before_amp(repo_root: Path, state_dir: Path) -> None
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -503,7 +458,6 @@ def test_claim_issue_called_before_amp(repo_root: Path, state_dir: Path) -> None
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
         patch("orc.scheduler.claim_issue", return_value=True) as mock_claim,
     ):
@@ -527,9 +481,6 @@ def test_claim_failure_still_runs_amp(repo_root: Path, state_dir: Path) -> None:
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -538,7 +489,6 @@ def test_claim_failure_still_runs_amp(repo_root: Path, state_dir: Path) -> None:
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
         patch("orc.scheduler.claim_issue", return_value=False),
     ):
@@ -573,9 +523,6 @@ def test_needs_rework_skipped_on_restart(repo_root: Path, state_dir: Path) -> No
     runner_mock = MagicMock()
     runner_mock.run.return_value = AmpResult(result=ResultType.completed, summary="done", merge_ready=True)
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "x"
@@ -584,7 +531,6 @@ def test_needs_rework_skipped_on_restart(repo_root: Path, state_dir: Path) -> No
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config=OrchestratorConfig(), runner=runner_mock)
@@ -745,7 +691,6 @@ def test_decomposed_records_blocked_by_dependency(repo_root: Path, state_dir: Pa
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge") as mock_merge,
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
@@ -755,7 +700,8 @@ def test_decomposed_records_blocked_by_dependency(repo_root: Path, state_dir: Pa
     assert state.issue_failures["test-1"]["category"] == "blocked_by_dependency"
 
 
-def test_merge_conflict_preserves_worktree(repo_root: Path, state_dir: Path) -> None:
+def test_sync_failure_records_needs_rework(repo_root: Path, state_dir: Path) -> None:
+    """When _sync_repo_root fails, a needs_rework failure is recorded."""
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     runner = StubAmpRunner.completed()
@@ -770,14 +716,6 @@ def test_merge_conflict_preserves_worktree(repo_root: Path, state_dir: Path) -> 
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(
-        success=False, stage="rebase", error="conflict resolution failed",
-        spec=["success", "stage", "error", "conflict_resolved", "diagnostics"],
-    )
-    mock_merge.return_value.conflict_resolved = False
-    mock_merge.return_value.diagnostics = None
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -786,7 +724,7 @@ def test_merge_conflict_preserves_worktree(repo_root: Path, state_dir: Path) -> 
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler._sync_repo_root", return_value=(False, "git pull failed")),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner)
@@ -794,56 +732,8 @@ def test_merge_conflict_preserves_worktree(repo_root: Path, state_dir: Path) -> 
     state = StateStore(state_dir).load()
     assert "test-1" in state.issue_failures
     failure = state.issue_failures["test-1"]
-    assert failure["category"] == "stale_or_conflicted"
-    assert failure["preserve_worktree"] is True
-    # Worktree should NOT have been cleaned up
-    mock_worktree_mgr.return_value.cleanup_worktree.assert_not_called()
-
-
-def test_merge_non_conflict_failure_preserves_worktree(repo_root: Path, state_dir: Path) -> None:
-    """All merge-stage failures now preserve the worktree for retry."""
-    _set_state(state_dir, OrchestratorMode.running)
-    config = OrchestratorConfig()
-    runner = StubAmpRunner.completed()
-    issue = _make_issue()
-
-    call_count = 0
-
-    def fake_ready(cwd=None):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return QueueResult(issues=[issue])
-        return QueueResult()
-
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(
-        success=False, stage="push", error="network timeout",
-        spec=["success", "stage", "error", "conflict_resolved", "diagnostics"],
-    )
-    mock_merge.return_value.conflict_resolved = False
-    mock_merge.return_value.diagnostics = None
-
-    mock_worktree_mgr = MagicMock()
-    mock_wt_info = MagicMock()
-    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
-    mock_wt_info.branch_name = "amp/test-1"
-    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
-
-    with (
-        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
-        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
-    ):
-        run_loop(repo_root, state_dir, config, runner)
-
-    state = StateStore(state_dir).load()
-    assert "test-1" in state.issue_failures
-    failure = state.issue_failures["test-1"]
-    assert failure["category"] == "stale_or_conflicted"
-    assert failure["preserve_worktree"] is True
-    # Worktree should NOT have been cleaned up — all merge failures preserve
-    mock_worktree_mgr.return_value.cleanup_worktree.assert_not_called()
+    assert failure["category"] == "issue_needs_rework"
+    assert failure["stage"] == "post_merge_eval"
 
 
 def test_successful_completion_clears_failure(repo_root: Path, state_dir: Path) -> None:
@@ -879,9 +769,6 @@ def test_successful_completion_clears_failure(repo_root: Path, state_dir: Path) 
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -890,7 +777,6 @@ def test_successful_completion_clears_failure(repo_root: Path, state_dir: Path) 
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config=OrchestratorConfig(), runner=runner)
@@ -949,9 +835,6 @@ def test_queue_failure_retries_before_continuing(repo_root: Path, state_dir: Pat
             return QueueResult(issues=[_make_issue()])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -960,7 +843,6 @@ def test_queue_failure_retries_before_continuing(repo_root: Path, state_dir: Pat
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
         patch("orc.scheduler.time.sleep") as mock_sleep,
     ):
@@ -1057,8 +939,8 @@ def test_failed_and_needs_human_record_issue_needs_rework(repo_root: Path, state
     assert state.issue_failures["test-1"]["category"] == "issue_needs_rework"
 
 
-def test_completed_no_merge_records_issue_needs_rework(repo_root: Path, state_dir: Path) -> None:
-    """Completed but not merge-ready records issue_needs_rework."""
+def test_completed_no_merge_ready_still_syncs_and_completes(repo_root: Path, state_dir: Path) -> None:
+    """Completed but not merge-ready still proceeds to sync+complete (agent handles merge)."""
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     runner = StubAmpRunner(AmpResult(
@@ -1088,9 +970,8 @@ def test_completed_no_merge_records_issue_needs_rework(repo_root: Path, state_di
         run_loop(repo_root, state_dir, config, runner)
 
     state = StateStore(state_dir).load()
-    assert "test-1" in state.issue_failures
-    assert state.issue_failures["test-1"]["category"] == "issue_needs_rework"
-    assert state.run_history[0]["result"] == "completed_no_merge"
+    assert state.last_completed_issue == "test-1"
+    assert state.run_history[0]["result"] == "completed"
 
 
 # --- fail-fast tests ---
@@ -1130,8 +1011,8 @@ def test_fail_fast_stops_on_failed_issue(repo_root: Path, state_dir: Path) -> No
     assert "fail-1" in state.issue_failures
 
 
-def test_fail_fast_stops_on_merge_failure(repo_root: Path, state_dir: Path) -> None:
-    """With fail_fast=True, a merge failure stops the loop."""
+def test_fail_fast_stops_on_sync_failure(repo_root: Path, state_dir: Path) -> None:
+    """With fail_fast=True, a sync failure stops the loop."""
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     runner = StubAmpRunner.completed()
@@ -1146,11 +1027,6 @@ def test_fail_fast_stops_on_merge_failure(repo_root: Path, state_dir: Path) -> N
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(
-        success=False, stage="rebase", error="conflict detected",
-    )
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -1159,7 +1035,7 @@ def test_fail_fast_stops_on_merge_failure(repo_root: Path, state_dir: Path) -> N
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
+        patch("orc.scheduler._sync_repo_root", return_value=(False, "git pull failed")),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, runner, fail_fast=True)
@@ -1170,7 +1046,7 @@ def test_fail_fast_stops_on_merge_failure(repo_root: Path, state_dir: Path) -> N
 
 
 def test_fail_fast_stops_on_evaluation_failure(repo_root: Path, state_dir: Path) -> None:
-    """With fail_fast=True, an evaluation failure stops the loop."""
+    """With fail_fast=True, an evaluation failure creates a follow-up and stops the loop."""
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     runner = StubAmpRunner.completed()
@@ -1195,13 +1071,14 @@ def test_fail_fast_stops_on_evaluation_failure(repo_root: Path, state_dir: Path)
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler._create_followup_issue", return_value="followup-1"),
     ):
         run_loop(repo_root, state_dir, config, runner, evaluator=evaluator, fail_fast=True)
 
     state = StateStore(state_dir).load()
     assert state.mode == OrchestratorMode.idle
-    assert "test-1" in state.issue_failures
     assert len(state.run_history) == 1
+    assert state.run_history[0]["result"] == "completed_with_followup"
 
 
 def test_fail_fast_from_config(repo_root: Path, state_dir: Path) -> None:
@@ -1289,7 +1166,7 @@ def _make_resume_candidate(
 
 
 def test_resume_candidate_amp_running_success(repo_root: Path, state_dir: Path) -> None:
-    """Resume from amp_running: re-runs amp, merges on success."""
+    """Resume from amp_running: re-runs amp, completes on success."""
     store = StateStore(state_dir)
     state = OrchestratorState(
         mode=OrchestratorMode.running,
@@ -1299,15 +1176,11 @@ def test_resume_candidate_amp_running_success(repo_root: Path, state_dir: Path) 
 
     runner = StubAmpRunner.completed()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = True
 
     with (
         patch("orc.scheduler.get_ready_issues", return_value=QueueResult()),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
@@ -1320,8 +1193,8 @@ def test_resume_candidate_amp_running_success(repo_root: Path, state_dir: Path) 
     assert state.run_history[0]["result"] == "completed"
 
 
-def test_resume_candidate_amp_finished_skips_to_merge(repo_root: Path, state_dir: Path) -> None:
-    """Resume from amp_finished with merge_ready: skips amp, goes to merge."""
+def test_resume_candidate_amp_finished_skips_to_sync(repo_root: Path, state_dir: Path) -> None:
+    """Resume from amp_finished with merge_ready: skips amp, goes to sync+complete."""
     store = StateStore(state_dir)
     state = OrchestratorState(
         mode=OrchestratorMode.running,
@@ -1334,15 +1207,11 @@ def test_resume_candidate_amp_finished_skips_to_merge(repo_root: Path, state_dir
 
     runner = StubAmpRunner.completed()  # should NOT be called
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = True
 
     with (
         patch("orc.scheduler.get_ready_issues", return_value=QueueResult()),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
@@ -1354,7 +1223,7 @@ def test_resume_candidate_amp_finished_skips_to_merge(repo_root: Path, state_dir
 
 
 def test_resume_candidate_ready_to_merge_skips_amp_and_eval(repo_root: Path, state_dir: Path) -> None:
-    """Resume from ready_to_merge: skips amp+eval, goes straight to merge."""
+    """Resume from ready_to_merge: skips amp+eval, goes straight to sync+complete."""
     store = StateStore(state_dir)
     state = OrchestratorState(
         mode=OrchestratorMode.running,
@@ -1363,22 +1232,18 @@ def test_resume_candidate_ready_to_merge_skips_amp_and_eval(repo_root: Path, sta
     store.save(state)
 
     runner = StubAmpRunner.completed()
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
 
     mock_worktree_mgr = MagicMock()
     mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = True
 
     with (
         patch("orc.scheduler.get_ready_issues", return_value=QueueResult()),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
 
     state = StateStore(state_dir).load()
     assert state.last_completed_issue == "resume-1"
-    mock_merge.assert_called_once()
 
 
 def test_resume_candidate_no_worktree_discards(repo_root: Path, state_dir: Path) -> None:
@@ -1416,15 +1281,12 @@ def test_resume_records_events(repo_root: Path, state_dir: Path) -> None:
     store.save(state)
 
     runner = StubAmpRunner.completed()
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
 
     mock_worktree_mgr = MagicMock()
     mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = True
 
     with (
         patch("orc.scheduler.get_ready_issues", return_value=QueueResult()),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
@@ -1459,9 +1321,6 @@ def test_parent_promoted_after_last_child_closes(repo_root: Path, state_dir: Pat
             return QueueResult(issues=[parent])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "x"
@@ -1470,7 +1329,6 @@ def test_parent_promoted_after_last_child_closes(repo_root: Path, state_dir: Pat
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
         patch("orc.scheduler.get_issue_parent", return_value="parent-1"),
         patch("orc.scheduler.get_children_all_closed", return_value=True),
@@ -1507,9 +1365,6 @@ def test_no_promotion_when_siblings_still_open(repo_root: Path, state_dir: Path)
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -1518,7 +1373,6 @@ def test_no_promotion_when_siblings_still_open(repo_root: Path, state_dir: Path)
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
         patch("orc.scheduler.get_issue_parent", return_value="parent-1"),
         patch("orc.scheduler.get_children_all_closed", return_value=False),
@@ -1549,9 +1403,6 @@ def test_no_promotion_when_no_parent(repo_root: Path, state_dir: Path) -> None:
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -1560,7 +1411,6 @@ def test_no_promotion_when_no_parent(repo_root: Path, state_dir: Path) -> None:
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
         patch("orc.scheduler.get_issue_parent", return_value=None),
     ):
@@ -1601,9 +1451,6 @@ def test_promotion_clears_parent_failure_record(repo_root: Path, state_dir: Path
             return QueueResult(issues=[parent])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "x"
@@ -1612,7 +1459,6 @@ def test_promotion_clears_parent_failure_record(repo_root: Path, state_dir: Path
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
         patch("orc.scheduler.get_issue_parent", return_value="parent-1"),
         patch("orc.scheduler.get_children_all_closed", return_value=True),
@@ -1624,9 +1470,95 @@ def test_promotion_clears_parent_failure_record(repo_root: Path, state_dir: Path
     assert "parent-1" not in state.issue_failures
 
 
+def test_pseudo_parent_no_promotion(repo_root: Path, state_dir: Path) -> None:
+    """Regression: pseudo-parent (dependency-only) must not trigger promotion.
+
+    When an agent used ``--deps 'parent:<id>'`` instead of ``--parent <id>``,
+    the child's ``parent`` field was absent and ``bd children`` returned an
+    empty list.  This test verifies that the promotion pipeline correctly
+    short-circuits: get_issue_parent returns None → no promotion check.
+    """
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    runner = StubAmpRunner.completed()
+    child = _make_issue("child-1", "Child issue")
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return QueueResult(issues=[child])
+        return QueueResult()
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "x"
+    mock_wt_info.branch_name = "amp/x"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        # Simulate pseudo-parent: no 'parent' field → get_issue_parent returns None
+        patch("orc.scheduler.get_issue_parent", return_value=None),
+    ):
+        run_loop(repo_root, state_dir, config, runner)
+
+    state = StateStore(state_dir).load()
+    assert state.promoted_parent is None
+    events = EventLog(state_dir).all()
+    event_types = [e["event_type"] for e in events]
+    assert "parent_promoted" not in event_types
+
+
+def test_pseudo_parent_empty_children_no_promotion(repo_root: Path, state_dir: Path) -> None:
+    """Regression: even if get_issue_parent somehow returns a parent ID,
+    an empty children list from bd children must not trigger promotion.
+
+    This covers the edge case where a parent field exists but bd children
+    returns [] (e.g., children were created with --deps not --parent).
+    """
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    runner = StubAmpRunner.completed()
+    child = _make_issue("child-1", "Child issue")
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return QueueResult(issues=[child])
+        return QueueResult()
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "x"
+    mock_wt_info.branch_name = "amp/x"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_issue_parent", return_value="parent-1"),
+        # bd children returns empty list → get_children_all_closed returns None
+        patch("orc.scheduler.get_children_all_closed", return_value=None),
+    ):
+        run_loop(repo_root, state_dir, config, runner)
+
+    state = StateStore(state_dir).load()
+    assert state.promoted_parent is None
+    events = EventLog(state_dir).all()
+    event_types = [e["event_type"] for e in events]
+    assert "parent_promoted" not in event_types
+
+
 def test_pause_request_during_amp_stops_after_amp(repo_root: Path, state_dir: Path) -> None:
     """A pause request enqueued while amp is running should stop the scheduler
-    after amp finishes, without proceeding to merge."""
+    after amp finishes."""
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     issue = _make_issue()
@@ -1650,9 +1582,6 @@ def test_pause_request_during_amp_stops_after_amp(repo_root: Path, state_dir: Pa
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -1661,15 +1590,12 @@ def test_pause_request_during_amp_stops_after_amp(repo_root: Path, state_dir: Pa
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, mock_runner)
 
     state = StateStore(state_dir).load()
     assert state.mode == OrchestratorMode.paused
-    # Merge should NOT have been called
-    mock_merge.assert_not_called()
     # Active run should be preserved as resume_candidate
     assert state.active_run is None
     assert state.resume_candidate is not None
@@ -1703,9 +1629,6 @@ def test_stop_request_during_amp_stops_after_amp(repo_root: Path, state_dir: Pat
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-    mock_merge.return_value = MagicMock(success=True, stage="complete")
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -1714,14 +1637,12 @@ def test_stop_request_during_amp_stops_after_amp(repo_root: Path, state_dir: Pat
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, mock_runner)
 
     state = StateStore(state_dir).load()
     assert state.mode == OrchestratorMode.idle
-    mock_merge.assert_not_called()
     # Resume candidate preserved for potential restart
     assert state.resume_candidate is not None
     assert state.resume_candidate["issue_id"] == "test-1"
@@ -1753,7 +1674,6 @@ def test_pause_request_before_eval_stops_before_eval(repo_root: Path, state_dir:
         return QueueResult()
 
     mock_evaluator = MagicMock()
-    mock_merge = MagicMock()
 
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
@@ -1763,16 +1683,14 @@ def test_pause_request_before_eval_stops_before_eval(repo_root: Path, state_dir:
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, mock_runner, evaluator=mock_evaluator)
 
     state = StateStore(state_dir).load()
     assert state.mode == OrchestratorMode.paused
-    # Neither evaluation nor merge should have been called
+    # Evaluation should not have been called
     mock_evaluator.evaluate.assert_not_called()
-    mock_merge.assert_not_called()
     assert state.resume_candidate is not None
     assert state.resume_candidate["issue_id"] == "test-1"
     assert len(state.run_history) == 0
@@ -1802,8 +1720,6 @@ def test_stop_request_before_amp_stops_before_amp(repo_root: Path, state_dir: Pa
             return QueueResult(issues=[issue])
         return QueueResult()
 
-    mock_merge = MagicMock()
-
     mock_worktree_mgr = MagicMock()
     mock_wt_info = MagicMock()
     mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
@@ -1812,7 +1728,6 @@ def test_stop_request_before_amp_stops_before_amp(repo_root: Path, state_dir: Pa
 
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
-        patch("orc.scheduler.verify_and_merge", mock_merge),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
     ):
         run_loop(repo_root, state_dir, config, mock_runner)
@@ -1821,7 +1736,6 @@ def test_stop_request_before_amp_stops_before_amp(repo_root: Path, state_dir: Pa
     assert state.mode == OrchestratorMode.idle
     # Amp should NOT have been invoked
     mock_runner.run.assert_not_called()
-    mock_merge.assert_not_called()
     # Resume candidate preserved
     assert state.resume_candidate is not None
     assert state.resume_candidate["issue_id"] == "test-1"
