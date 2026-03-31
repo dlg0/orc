@@ -11,7 +11,7 @@ from textual.widgets import Button, DataTable, Input, Label, RichLog, Static
 
 from orc.config import OrchestratorConfig
 from orc.queue import BdIssue
-from orc.state import OrchestratorMode
+from orc.state import OrchestratorMode, OrchestratorState
 from orc.tui.snapshot import DashboardSnapshot
 
 MODE_STYLES: dict[OrchestratorMode, tuple[str, str]] = {
