@@ -579,6 +579,10 @@ def run_loop(
     # CLI flag takes precedence; fall back to config file setting
     fail_fast = fail_fast or config.fail_fast
 
+    if only_issue:
+        click.echo(f"[SCHEDULER] Single-issue mode: {only_issue}")
+    click.echo(f"[SCHEDULER] Entering run loop (fail_fast={fail_fast})")
+
     while True:
         state = store.load()
 
@@ -628,6 +632,7 @@ def run_loop(
 
         # Reconcile issue_failures against beads state
         if state.issue_failures:
+            click.echo(f"[SCHEDULER] Reconciling {len(state.issue_failures)} held issue(s) against beads ...")
             pruned = reconcile_issue_failures(state.issue_failures, cwd=repo_root)
             if pruned:
                 _save_with_requests(store, state, state_dir)
@@ -639,6 +644,7 @@ def run_loop(
         failed_ids: set[str] = set(state.issue_failures.keys())
 
         # Select next issue — with queue-failure retry
+        click.echo("[SCHEDULER] Fetching ready issues from backlog ...")
         queue_result = None
         for attempt in range(1, _QUEUE_RETRY_MAX + 1):
             queue_result = get_ready_issues(repo_root)
@@ -656,8 +662,11 @@ def run_loop(
             events.record(EventType.error, {"stage": "queue", "error": queue_result.error, "retries_exhausted": True})
             continue
 
+        click.echo(f"[SCHEDULER] Backlog: {len(queue_result.issues)} ready issue(s), {len(failed_ids)} held")
+
         # If a parent was promoted, prioritize it in selection
         priority_id = state.promoted_parent
+        click.echo("[SCHEDULER] Selecting next issue ...")
         issue = select_next_issue(queue_result.issues, skip_ids=failed_ids, priority_id=priority_id)
         # Clear promoted_parent after selection attempt (one-shot)
         if state.promoted_parent:
@@ -694,6 +703,7 @@ def run_loop(
         click.echo(_ISSUE_DIVIDER)
 
         # Create worktree
+        click.echo(f"[WORKTREE] {issue.id} creating worktree ...")
         try:
             wt_info = worktree_mgr.create_worktree(issue.id, issue.title)
         except Exception as exc:
@@ -734,8 +744,11 @@ def run_loop(
         _save_with_requests(store, state, state_dir)
 
         # Claim the issue in bd so it shows as in-progress
+        click.echo(f"[CLAIM] {issue.id} claiming in backlog ...")
         claimed = claim_issue(issue.id, cwd=repo_root)
-        if not claimed:
+        if claimed:
+            click.echo(f"[CLAIM] {issue.id} claimed")
+        else:
             click.echo(f"[CLAIM] {issue.id} WARNING: bd update --claim failed (continuing)")
             events.record(EventType.error, {"issue_id": issue.id, "stage": "claim", "error": "bd update --claim failed"})
 
@@ -746,6 +759,7 @@ def run_loop(
             return
 
         # Invoke Amp
+        click.echo(f"[AMP] {issue.id} spawning agent ...")
         _update_checkpoint(store, state_dir, state, RunStage.amp_running, events=events)
         ctx = IssueContext(
             issue_id=issue.id,
@@ -908,6 +922,7 @@ def run_loop(
             continue
 
         # --- Post-amp: sync main and evaluate ---
+        click.echo(f"[AMP] {issue.id} agent finished — processing result ...")
 
         # Sync repo root to latest main (agent should have merged+pushed)
         click.echo(f"[SYNC] {issue.id} syncing repo root to {config.base_branch} ...")
