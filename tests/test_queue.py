@@ -12,11 +12,13 @@ from orc.queue import (
     compute_queue_breakdown,
     create_issue,
     get_children_all_closed,
+    get_children_ids,
     get_issue_parent,
     get_issue_state,
     get_issue_status,
     get_ready_issues,
     reconcile_issue_failures,
+    rewrite_parent_as_integration_issue,
     select_next_issue,
     unclaim_issue,
 )
@@ -604,3 +606,53 @@ class TestPaginatedHeldOverlap:
         assert breakdown.beads_ready == 10
         assert breakdown.runnable == 0
         assert breakdown.has_held_blocking
+
+
+# --- rewrite_parent_as_integration_issue ---
+
+
+class TestRewriteParentAsIntegrationIssue:
+    def test_success(self) -> None:
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            assert rewrite_parent_as_integration_issue("parent-1", ["child-a", "child-b"]) is True
+            args = mock_run.call_args[0][0]
+            assert args[:3] == ["bd", "update", "parent-1"]
+            assert "--title" in args
+            assert "--description" in args
+            assert "--acceptance" in args
+            # Verify child IDs appear in the description
+            desc_idx = args.index("--description") + 1
+            assert "child-a" in args[desc_idx]
+            assert "child-b" in args[desc_idx]
+
+    def test_failure(self) -> None:
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            assert rewrite_parent_as_integration_issue("parent-1", []) is False
+
+    def test_os_error(self) -> None:
+        with patch("orc.queue.subprocess.run", side_effect=OSError):
+            assert rewrite_parent_as_integration_issue("parent-1", []) is False
+
+
+# --- get_children_ids ---
+
+
+class TestGetChildrenIds:
+    def test_returns_ids(self) -> None:
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = '[{"id": "c1"}, {"id": "c2"}]'
+            assert get_children_ids("parent-1") == ["c1", "c2"]
+
+    def test_no_children(self) -> None:
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "[]"
+            assert get_children_ids("parent-1") == []
+
+    def test_failure(self) -> None:
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            assert get_children_ids("parent-1") == []

@@ -12,13 +12,17 @@ from orc.amp_runner import AmpRunner, IssueContext, ResultType
 from orc.config import OrchestratorConfig
 from orc.evaluator import IssueEvaluator
 from orc.events import EventLog, EventType
-from orc.merge import _git_status_porcelain, verify_and_merge
 from orc.queue import (
     claim_issue,
+    close_issue,
+    create_issue,
     get_children_all_closed,
+    get_children_ids,
     get_issue_parent,
+    get_issue_status,
     get_ready_issues,
     reconcile_issue_failures,
+    rewrite_parent_as_integration_issue,
     select_next_issue,
     unclaim_issue,
 )
@@ -52,6 +56,131 @@ _RECOVERY_PROMPT = (
 )
 _QUEUE_RETRY_MAX = 3
 _QUEUE_RETRY_DELAY = 5  # seconds
+
+
+def _sync_repo_root(repo_root: Path, base_branch: str) -> tuple[bool, str | None]:
+    """Sync the repo root to the latest base branch after agent merge.
+
+    Returns (success, error_message).
+    """
+    import subprocess
+
+    try:
+        subprocess.run(
+            ["git", "fetch", "origin"],
+            cwd=repo_root, check=True, capture_output=True,
+        )
+    except subprocess.CalledProcessError as e:
+        return False, f"git fetch failed: {e}"
+
+    try:
+        subprocess.run(
+            ["git", "checkout", base_branch],
+            cwd=repo_root, check=True, capture_output=True,
+        )
+    except subprocess.CalledProcessError as e:
+        return False, f"git checkout {base_branch} failed: {e}"
+
+    try:
+        subprocess.run(
+            ["git", "pull", "--ff-only", "origin", base_branch],
+            cwd=repo_root, check=True, capture_output=True,
+        )
+    except subprocess.CalledProcessError as e:
+        return False, f"git pull failed: {e}"
+
+    return True, None
+
+
+def _create_followup_issue(
+    original_issue_id: str,
+    original_title: str,
+    original_description: str,
+    original_acceptance_criteria: str,
+    eval_summary: str,
+    eval_gaps: list[str],
+    repo_root: Path,
+    state: OrchestratorState,
+    store: StateStore,
+    state_dir: Path,
+    events: EventLog,
+) -> str | None:
+    """Create a follow-up bd issue when post-merge evaluation fails.
+
+    The follow-up is created as a sibling of the original (same parent).
+    The original issue is closed, and the follow-up is prioritized.
+
+    Returns the new issue ID, or None if creation failed.
+    """
+    # Build follow-up content
+    short_summary = eval_summary[:100] if eval_summary else "evaluation failed"
+    followup_title = f"Follow-up: {original_title} - {short_summary}"
+
+    gaps_text = "\n".join(f"- {g}" for g in eval_gaps) if eval_gaps else "- (no specific gaps reported)"
+    followup_description = "\n".join([
+        f"## Follow-up to {original_issue_id}",
+        "",
+        f"The original issue ({original_issue_id}: {original_title}) was implemented and merged,",
+        "but post-merge evaluation identified issues that need to be addressed.",
+        "",
+        "## Evaluation Summary",
+        eval_summary or "(no summary)",
+        "",
+        "## Gaps Identified",
+        gaps_text,
+        "",
+        "## Original Requirements",
+        "",
+        "### Description",
+        original_description or "(no description)",
+        "",
+        "### Acceptance Criteria",
+        original_acceptance_criteria or "(none specified)",
+        "",
+        "## Notes",
+        "- Work from the original issue is already merged into main",
+        "- This follow-up should build on top of that work",
+        f"- Original issue {original_issue_id} has been closed",
+    ])
+
+    # Get parent of original issue to make follow-up a sibling
+    parent_id = get_issue_parent(original_issue_id, cwd=repo_root)
+
+    # Create the follow-up issue
+    new_id = create_issue(
+        title=followup_title,
+        description=followup_description,
+        parent=parent_id,
+        priority="1",  # High priority for follow-ups
+        cwd=repo_root,
+    )
+
+    if not new_id:
+        click.echo(f"[FOLLOWUP] FAILED to create follow-up issue for {original_issue_id}")
+        events.record(EventType.error, {
+            "issue_id": original_issue_id,
+            "stage": "followup_creation",
+            "error": "bd create failed",
+        })
+        return None
+
+    click.echo(f"[FOLLOWUP] Created {new_id} as follow-up to {original_issue_id}")
+    events.record(EventType.followup_created, {
+        "original_issue_id": original_issue_id,
+        "followup_issue_id": new_id,
+        "eval_summary": eval_summary,
+    })
+
+    # Ensure original is closed
+    original_status = get_issue_status(original_issue_id, cwd=repo_root)
+    if original_status != "closed":
+        close_issue(original_issue_id, cwd=repo_root)
+
+    # Prioritize the follow-up for next selection
+    state.promoted_parent = new_id
+    _save_with_requests(store, state, state_dir)
+
+    return new_id
 
 
 def _save_with_requests(store: StateStore, state: OrchestratorState, state_dir: Path) -> None:
@@ -274,6 +403,7 @@ def _attempt_resume(
             acceptance_criteria="",
             worktree_path=wt_info.worktree_path,
             repo_root=repo_root,
+            base_branch=config.base_branch,
         )
         events.record(EventType.amp_started, {"issue_id": issue_id, "recovery": True})
         click.echo(f"[AMP] {issue_id} running (recovery) ...")
@@ -322,18 +452,10 @@ def _attempt_resume(
             return True
 
     elif stage == RunStage.amp_finished.value:
-        # Amp already finished — check stored result
-        amp_result = candidate.get("amp_result", {})
-        if not amp_result.get("merge_ready"):
-            click.echo(f"[RESUME] {issue_id} amp_finished but not merge-ready — discarding")
-            _unclaim_active(state, events, repo_root)
-            _clear_active(store, state_dir, state)
-            events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "not_merge_ready"})
-            return False
-        click.echo(f"[RESUME] {issue_id} skipping amp (already finished with merge-ready)")
+        click.echo(f"[RESUME] {issue_id} skipping amp (already finished)")
 
     elif stage == RunStage.ready_to_merge.value:
-        click.echo(f"[RESUME] {issue_id} skipping amp+eval (ready to merge)")
+        click.echo(f"[RESUME] {issue_id} skipping amp (legacy ready_to_merge — treating as finished)")
 
     else:
         click.echo(f"[RESUME] {issue_id} unknown/non-resumable stage={stage} — discarding")
@@ -342,23 +464,39 @@ def _attempt_resume(
         events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "unknown_stage"})
         return False
 
-    # Check for pause/stop before evaluation (resume flow)
+    # Check for pause/stop before post-merge evaluation
     if _check_stop_at_safe_point(store, state_dir, state, events, repo_root, "before_resume_eval"):
         return True
 
-    # Run evaluation if needed and stage hasn't passed it
-    if evaluator is not None and stage != RunStage.ready_to_merge.value:
-        _update_checkpoint(store, state_dir, state, RunStage.evaluation_running, events=events)
+    # Sync repo root
+    click.echo(f"[SYNC] {issue_id} syncing repo root ...")
+    sync_ok, sync_error = _sync_repo_root(repo_root, config.base_branch)
+    if not sync_ok:
+        click.echo(f"[SYNC] {issue_id} sync failed: {sync_error}")
+        _record_failure(
+            store, state_dir, state, issue_id, FailureCategory.issue_needs_rework,
+            WorkflowPhase.post_merge_eval.value,
+            f"repo sync failed: {sync_error}", branch, wt_path_str,
+        )
+        _unclaim_active(state, events, repo_root)
+        _clear_active(store, state_dir, state)
+        events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "sync_failed"})
+        return True
+
+    # Post-merge evaluation
+    if evaluator is not None:
+        _update_checkpoint(store, state_dir, state, RunStage.post_merge_eval, events=events)
         events.record(EventType.evaluation_started, {"issue_id": issue_id, "recovery": True})
-        click.echo(f"[EVAL] {issue_id} running ...")
+        click.echo(f"[EVAL] {issue_id} running post-merge evaluation ...")
 
         ctx_for_eval = IssueContext(
             issue_id=issue_id,
             title=candidate.get("issue_title", ""),
-            description="",
-            acceptance_criteria="",
+            description=candidate.get("issue_description", ""),
+            acceptance_criteria=candidate.get("issue_acceptance_criteria", ""),
             worktree_path=wt_info.worktree_path,
             repo_root=repo_root,
+            base_branch=config.base_branch,
         )
         try:
             eval_result = evaluator.evaluate(
@@ -377,70 +515,42 @@ def _attempt_resume(
 
         if eval_result.passed:
             click.echo(f"[EVAL] {issue_id} PASSED: {eval_result.summary}")
-            _update_checkpoint(store, state_dir, state, RunStage.ready_to_merge, eval_result=eval_result.to_dict(), events=events)
         else:
             click.echo(f"[EVAL] {issue_id} FAILED: {eval_result.summary}")
-            _record_failure(
-                store, state_dir, state, issue_id, FailureCategory.issue_needs_rework, WorkflowPhase.evaluation_running.value,
-                eval_result.summary, branch, wt_path_str,
+            followup_id = _create_followup_issue(
+                original_issue_id=issue_id,
+                original_title=candidate.get("issue_title", ""),
+                original_description=candidate.get("issue_description", ""),
+                original_acceptance_criteria=candidate.get("issue_acceptance_criteria", ""),
+                eval_summary=eval_result.summary,
+                eval_gaps=eval_result.gaps,
+                repo_root=repo_root,
+                state=state,
+                store=store,
+                state_dir=state_dir,
+                events=events,
             )
             _unclaim_active(state, events, repo_root)
             _clear_active(store, state_dir, state)
-            events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "eval_failed"})
+            _record_run(store, state_dir, state, issue_id,
+                        "completed_with_followup" if followup_id else "followup_failed",
+                        eval_result.summary, branch, wt_path_str,
+                        amp_mode=config.amp_mode)
+            events.record(EventType.resume_succeeded if followup_id else EventType.resume_failed,
+                          {"issue_id": issue_id})
             return True
 
-    # Check for pause/stop before merge (resume flow)
-    if _check_stop_at_safe_point(store, state_dir, state, events, repo_root, "before_resume_merge"):
-        return True
-
-    # Merge
-    _update_checkpoint(store, state_dir, state, RunStage.merge_running, events=events)
-    click.echo(f"[MERGE] {issue_id} starting verify-and-merge ...")
-    events.record(EventType.merge_attempt, {"issue_id": issue_id, "recovery": True})
-    merge_result = verify_and_merge(
-        worktree_info=wt_info,
-        repo_root=repo_root,
-        base_branch=config.base_branch,
-        verification_commands=config.verification_commands,
-        auto_push=config.auto_push,
-        issue_id=issue_id,
-        state_dir=state_dir,
-    )
-
-    if merge_result.success:
-        click.echo(f"[MERGE] {issue_id} OK (recovered)")
-        events.record(EventType.issue_closed, {"issue_id": issue_id, "recovery": True})
-        events.record(EventType.resume_succeeded, {"issue_id": issue_id})
-        state.last_completed_issue = issue_id
-        state.issue_failures.pop(issue_id, None)
-        _clear_active(store, state_dir, state)
-        _record_run(store, state_dir, state, issue_id, "completed", "recovered from interrupted run",
-                    branch, wt_path_str, amp_mode=config.amp_mode)
-        _try_cleanup(worktree_mgr, wt_info)
-        _check_parent_promotion(issue_id, repo_root, store, state_dir, state, events)
-    else:
-        click.echo(f"[MERGE] {issue_id} FAILED at {merge_result.stage}: {merge_result.error}")
-        resume_merge_extra: dict = {
-            "merge_stage": merge_result.stage,
-            "merge_error": merge_result.error,
-            "conflict_resolved": bool(getattr(merge_result, "conflict_resolved", False)),
-        }
-        resume_merge_diagnostics = getattr(merge_result, 'diagnostics', None)
-        if isinstance(resume_merge_diagnostics, dict):
-            resume_merge_extra["merge_diagnostics"] = resume_merge_diagnostics
-        _record_failure(
-            store, state_dir, state, issue_id, FailureCategory.stale_or_conflicted,
-            WorkflowPhase.merge_running.value,
-            f"merge failed at {merge_result.stage}", branch, wt_path_str,
-            preserve_worktree=True,
-            extra=resume_merge_extra,
-        )
-        _unclaim_active(state, events, repo_root)
-        _clear_active(store, state_dir, state)
-        _record_run(store, state_dir, state, issue_id, "failed",
-                    f"merge failed at {merge_result.stage} (recovery)",
-                    branch, wt_path_str, amp_mode=config.amp_mode)
-        events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "merge_failed"})
+    # Success
+    click.echo(f"[COMPLETE] {issue_id} OK (recovered)")
+    events.record(EventType.issue_closed, {"issue_id": issue_id, "recovery": True})
+    events.record(EventType.resume_succeeded, {"issue_id": issue_id})
+    state.last_completed_issue = issue_id
+    state.issue_failures.pop(issue_id, None)
+    _clear_active(store, state_dir, state)
+    _record_run(store, state_dir, state, issue_id, "completed", "recovered from interrupted run",
+                branch, wt_path_str, amp_mode=config.amp_mode)
+    _try_cleanup(worktree_mgr, wt_info)
+    _check_parent_promotion(issue_id, repo_root, store, state_dir, state, events)
 
     return True
 
@@ -612,6 +722,8 @@ def run_loop(
         checkpoint = RunCheckpoint(
             issue_id=issue.id,
             issue_title=issue.title,
+            issue_description=issue.description,
+            issue_acceptance_criteria=issue.acceptance_criteria,
             branch=wt_info.branch_name,
             worktree_path=str(wt_info.worktree_path),
             stage=RunStage.worktree_created,
@@ -642,6 +754,7 @@ def run_loop(
             acceptance_criteria=issue.acceptance_criteria,
             worktree_path=wt_info.worktree_path,
             repo_root=repo_root,
+            base_branch=config.base_branch,
         )
         events.record(EventType.amp_started, {"issue_id": issue.id})
         click.echo(f"[AMP] {issue.id} running ...")
@@ -735,6 +848,13 @@ def run_loop(
         # Handle non-merge outcomes
         if result.result == ResultType.decomposed:
             click.echo(f"[AMP] {issue.id} decomposed -- skipping merge")
+            # Rewrite the parent into a verification/integration issue
+            child_ids = get_children_ids(issue.id, cwd=repo_root)
+            if rewrite_parent_as_integration_issue(issue.id, child_ids, cwd=repo_root):
+                click.echo(f"[AMP] {issue.id} rewritten as integration issue")
+            else:
+                click.echo(f"[AMP] {issue.id} WARNING: failed to rewrite parent as integration issue")
+                events.record(EventType.error, {"issue_id": issue.id, "stage": "decomposition_rewrite", "error": "rewrite_parent_as_integration_issue failed"})
             _record_failure(
                 store, state_dir, state, issue.id, FailureCategory.blocked_by_dependency, WorkflowPhase.amp_finished.value,
                 result.summary, wt_info.branch_name, wt_path,
@@ -787,57 +907,47 @@ def run_loop(
                 return
             continue
 
-        if not result.merge_ready:
-            click.echo(f"[AMP] {issue.id} completed but not merge-ready -- skipping merge")
+        # --- Post-amp: sync main and evaluate ---
+
+        # Sync repo root to latest main (agent should have merged+pushed)
+        click.echo(f"[SYNC] {issue.id} syncing repo root to {config.base_branch} ...")
+        sync_ok, sync_error = _sync_repo_root(repo_root, config.base_branch)
+        if not sync_ok:
+            click.echo(f"[SYNC] {issue.id} WARNING: sync failed: {sync_error}")
+            events.record(EventType.error, {
+                "issue_id": issue.id,
+                "stage": "post_merge_sync",
+                "error": sync_error,
+            })
+            # If sync fails, the agent may not have merged. Record failure.
             _record_failure(
-                store, state_dir, state, issue.id, FailureCategory.issue_needs_rework, WorkflowPhase.amp_finished.value,
-                result.summary, wt_info.branch_name, wt_path,
+                store, state_dir, state, issue.id, FailureCategory.issue_needs_rework,
+                WorkflowPhase.post_merge_eval.value,
+                f"repo sync failed: {sync_error}", wt_info.branch_name, wt_path,
                 extra=ctx_extra or None,
             )
             _unclaim_active(state, events, repo_root)
             _clear_active(store, state_dir, state)
-            _record_run(store, state_dir, state, issue.id, "completed_no_merge", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
+            _record_run(store, state_dir, state, issue.id, "failed",
+                        f"repo sync failed: {sync_error}",
+                        wt_info.branch_name, wt_path, amp_mode=config.amp_mode,
+                        extra=ctx_extra or None)
             if fail_fast:
-                click.echo("[SCHEDULER] Fail-fast: stopping after completed_no_merge result")
+                click.echo("[SCHEDULER] Fail-fast: stopping after sync failure")
                 store.transition(state, OrchestratorMode.idle)
                 events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
                 return
             continue
 
-        # Enforce clean worktree before merge/evaluation
-        events.set_phase(WorkflowPhase.dirty_worktree_check)
-        if config.require_clean_worktree:
-            dirty = _git_status_porcelain(wt_info.worktree_path)
-            if dirty:
-                click.echo(f"[WORKTREE] {issue.id} dirty after amp -- attempting finalize commit")
-                _finalize_dirty_worktree(wt_info.worktree_path, issue.id)
-                dirty = _git_status_porcelain(wt_info.worktree_path)
-            if dirty:
-                click.echo(f"[WORKTREE] {issue.id} still dirty after finalize:\n{dirty[:300]}")
-                _record_failure(
-                    store, state_dir, state, issue.id, FailureCategory.issue_needs_rework, WorkflowPhase.dirty_worktree_check.value,
-                    f"worktree not clean: {dirty[:200]}", wt_info.branch_name, wt_path,
-                    extra=ctx_extra or None,
-                )
-                _unclaim_active(state, events, repo_root)
-                _clear_active(store, state_dir, state)
-                _record_run(store, state_dir, state, issue.id, "failed", f"worktree not clean: {dirty[:200]}", wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
-                if fail_fast:
-                    click.echo("[SCHEDULER] Fail-fast: stopping after dirty worktree")
-                    store.transition(state, OrchestratorMode.idle)
-                    events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
-                    return
-                continue
-
-        # Check for pause/stop before starting evaluation
+        # Check for pause/stop before evaluation
         if _check_stop_at_safe_point(store, state_dir, state, events, repo_root, "before_eval"):
             return
 
-        # Independent evaluation
+        # Post-merge evaluation on main
         if evaluator is not None:
-            _update_checkpoint(store, state_dir, state, RunStage.evaluation_running, events=events)
+            _update_checkpoint(store, state_dir, state, RunStage.post_merge_eval, events=events)
             events.record(EventType.evaluation_started, {"issue_id": issue.id})
-            click.echo(f"[EVAL] {issue.id} running ...")
+            click.echo(f"[EVAL] {issue.id} running post-merge evaluation on {config.base_branch} ...")
 
             try:
                 eval_result = evaluator.evaluate(
@@ -861,103 +971,68 @@ def run_loop(
 
             if eval_result.passed:
                 click.echo(f"[EVAL] {issue.id} PASSED: {eval_result.summary}")
-                _update_checkpoint(
-                    store, state_dir, state, RunStage.ready_to_merge,
-                    eval_result=eval_result.to_dict(),
-                    events=events,
-                )
             else:
                 click.echo(f"[EVAL] {issue.id} FAILED: {eval_result.summary}")
                 events.record(EventType.issue_needs_rework, {
                     "issue_id": issue.id,
                     "summary": eval_result.summary,
                 })
-                eval_failure_extra = {"evaluation": eval_result.to_dict()}
-                eval_failure_extra.update(ctx_extra)
-                _record_failure(
-                    store, state_dir, state, issue.id, FailureCategory.issue_needs_rework, WorkflowPhase.evaluation_running.value,
-                    eval_result.summary, wt_info.branch_name, wt_path,
-                    extra=eval_failure_extra,
+                # Create follow-up issue instead of holding the original
+                followup_id = _create_followup_issue(
+                    original_issue_id=issue.id,
+                    original_title=issue.title,
+                    original_description=issue.description,
+                    original_acceptance_criteria=issue.acceptance_criteria,
+                    eval_summary=eval_result.summary,
+                    eval_gaps=eval_result.gaps,
+                    repo_root=repo_root,
+                    state=state,
+                    store=store,
+                    state_dir=state_dir,
+                    events=events,
                 )
+                if followup_id is None:
+                    # Follow-up creation failed — pause orchestrator
+                    click.echo("[SCHEDULER] Pausing: follow-up issue creation failed")
+                    _unclaim_active(state, events, repo_root)
+                    _clear_active(store, state_dir, state)
+                    _record_run(
+                        store, state_dir, state, issue.id, "followup_failed",
+                        eval_result.summary, wt_info.branch_name, wt_path,
+                        amp_mode=config.amp_mode, extra=ctx_extra or None,
+                    )
+                    store.transition(state, OrchestratorMode.paused)
+                    events.record(EventType.state_changed, {"to": "paused", "reason": "followup_creation_failed"})
+                    return
+
                 _unclaim_active(state, events, repo_root)
                 _clear_active(store, state_dir, state)
-                rework_extra = {"evaluation": eval_result.to_dict()}
-                rework_extra.update(ctx_extra)
                 _record_run(
-                    store, state_dir, state, issue.id, "needs_rework", eval_result.summary,
-                    wt_info.branch_name, wt_path, amp_mode=config.amp_mode,
-                    extra=rework_extra,
+                    store, state_dir, state, issue.id, "completed_with_followup",
+                    eval_result.summary, wt_info.branch_name, wt_path,
+                    amp_mode=config.amp_mode,
+                    extra={**(ctx_extra or {}), "followup_issue_id": followup_id,
+                           "evaluation": eval_result.to_dict()},
                 )
+                _try_cleanup(worktree_mgr, wt_info)
                 if fail_fast:
-                    click.echo("[SCHEDULER] Fail-fast: stopping after evaluation failure")
+                    click.echo("[SCHEDULER] Fail-fast: stopping after eval failure with follow-up")
                     store.transition(state, OrchestratorMode.idle)
                     events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
                     return
                 continue
 
-        # Check for pause/stop before starting merge
-        if _check_stop_at_safe_point(store, state_dir, state, events, repo_root, "before_merge"):
-            return
-
-        # Verify and merge
-        _update_checkpoint(store, state_dir, state, RunStage.merge_running, events=events)
-        click.echo(f"[MERGE] {issue.id} starting verify-and-merge ...")
-        events.record(EventType.merge_attempt, {"issue_id": issue.id})
-        merge_result = verify_and_merge(
-            worktree_info=wt_info,
-            repo_root=repo_root,
-            base_branch=config.base_branch,
-            verification_commands=config.verification_commands,
-            auto_push=config.auto_push,
-            issue_id=issue.id,
-            state_dir=state_dir,
-        )
-
-        if merge_result.success:
-            if merge_result.conflict_resolved:
-                click.echo(f"[MERGE] {issue.id} OK (conflicts auto-resolved)")
-            else:
-                click.echo(f"[MERGE] {issue.id} OK")
-            events.record(EventType.issue_closed, {"issue_id": issue.id})
-            state.last_completed_issue = issue.id
-            # Clear failure record on success
-            state.issue_failures.pop(issue.id, None)
-            _clear_active(store, state_dir, state)
-            _record_run(store, state_dir, state, issue.id, "completed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
-            _try_cleanup(worktree_mgr, wt_info)
-            _check_parent_promotion(issue.id, repo_root, store, state_dir, state, events)
-        else:
-            click.echo(f"[MERGE] {issue.id} FAILED at {merge_result.stage}: {merge_result.error}")
-            events.record(EventType.error, {
-                "issue_id": issue.id,
-                "stage": merge_result.stage,
-                "error": merge_result.error,
-            })
-            merge_category = FailureCategory.stale_or_conflicted
-            merge_failure_extra = {
-                "merge_stage": merge_result.stage,
-                "merge_error": merge_result.error,
-                "conflict_resolved": bool(getattr(merge_result, "conflict_resolved", False)),
-            }
-            merge_diagnostics = getattr(merge_result, 'diagnostics', None)
-            if isinstance(merge_diagnostics, dict):
-                merge_failure_extra["merge_diagnostics"] = merge_diagnostics
-            merge_failure_extra.update(ctx_extra)
-            _record_failure(
-                store, state_dir, state, issue.id, merge_category, WorkflowPhase.merge_running.value,
-                f"merge failed at {merge_result.stage}", wt_info.branch_name, wt_path,
-                preserve_worktree=True,
-                extra=merge_failure_extra,
-            )
-            state.last_error = f"{issue.id}: merge failed at {merge_result.stage}"
-            _unclaim_active(state, events, repo_root)
-            _clear_active(store, state_dir, state)
-            _record_run(store, state_dir, state, issue.id, "failed", f"merge failed at {merge_result.stage}", wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
-            if fail_fast:
-                click.echo("[SCHEDULER] Fail-fast: stopping after merge failure")
-                store.transition(state, OrchestratorMode.idle)
-                events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
-                return
+        # Success path
+        click.echo(f"[COMPLETE] {issue.id} OK")
+        events.record(EventType.issue_closed, {"issue_id": issue.id})
+        state.last_completed_issue = issue.id
+        state.issue_failures.pop(issue.id, None)
+        _clear_active(store, state_dir, state)
+        _record_run(store, state_dir, state, issue.id, "completed", result.summary,
+                    wt_info.branch_name, wt_path, amp_mode=config.amp_mode,
+                    extra=ctx_extra or None)
+        _try_cleanup(worktree_mgr, wt_info)
+        _check_parent_promotion(issue.id, repo_root, store, state_dir, state, events)
 
         if only_issue:
             click.echo("[SCHEDULER] --only: single issue processed — stopping")
@@ -1010,9 +1085,17 @@ def _unclaim_active(
     events: EventLog,
     repo_root: Path,
 ) -> None:
-    """Release the bd claim for the active run if one was acquired."""
+    """Release the bd claim for the active run if one was acquired.
+
+    Checks issue status first — does not reopen a closed issue.
+    """
     if state.active_run and state.active_run.get("bd_claimed"):
         issue_id = state.active_run["issue_id"]
+        # Don't reopen a closed issue
+        status = get_issue_status(issue_id, cwd=repo_root)
+        if status == "closed":
+            state.active_run["bd_claimed"] = False
+            return
         if unclaim_issue(issue_id, cwd=repo_root):
             state.active_run["bd_claimed"] = False
         else:
@@ -1062,27 +1145,4 @@ def _try_cleanup(worktree_mgr: WorktreeManager, wt_info) -> None:
         pass
 
 
-def _finalize_dirty_worktree(worktree_path: Path, issue_id: str) -> None:
-    """Commit all uncommitted changes left by amp in the worktree.
 
-    This handles the common case where amp leaves modified/untracked files
-    (e.g. regenerated lockfiles) without committing them.
-    """
-    import subprocess
-
-    try:
-        subprocess.run(
-            ["git", "add", "-A"],
-            cwd=worktree_path,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "commit", "-m", f"chore: commit uncommitted changes for {issue_id}"],
-            cwd=worktree_path,
-            check=True,
-            capture_output=True,
-        )
-    except subprocess.CalledProcessError:
-        # If commit fails (e.g. nothing to commit after add), leave as-is
-        pass

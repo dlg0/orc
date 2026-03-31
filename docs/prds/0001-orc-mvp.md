@@ -342,9 +342,9 @@ If decomposed:
 
 1. create child issues with `bd create "<title>" --parent <current-issue-id>` (do **not** use `--deps "parent:<id>"` — that creates a flat dependency, not a true parent-child relationship)
 2. let `bd` parent-child blocking govern readiness
-3. rewrite the parent into a verification/integration issue
-4. mark the current issue outcome as `decomposed`
-5. stop implementation on the parent
+3. mark the current issue outcome as `decomposed`
+4. stop implementation on the parent
+5. **orc** automatically rewrites the parent into a verification/integration issue after the worker returns a `decomposed` result (the worker must **not** use `bd update` — all issue status management is handled by orc)
 
 ## Git And Merge Policy
 

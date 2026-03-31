@@ -369,6 +369,72 @@ def close_issue(issue_id: str, cwd: Path | None = None) -> bool:
         return False
 
 
+def rewrite_parent_as_integration_issue(
+    issue_id: str,
+    child_ids: list[str],
+    cwd: Path | None = None,
+) -> bool:
+    """Rewrite a decomposed parent into a verification/integration issue.
+
+    Called by the scheduler after a worker returns a ``decomposed`` result.
+    Updates the parent's title, description, and acceptance criteria so it
+    becomes a verification gate for its children.
+
+    Returns True if the update succeeded, False otherwise.
+    """
+    children_list = ", ".join(child_ids) if child_ids else "(see child issues)"
+    new_title = f"[integration] Verify decomposed children of {issue_id}"
+    new_description = (
+        f"This issue was automatically rewritten by orc after decomposition.\n\n"
+        f"Verify that the child issues ({children_list}) collectively satisfy "
+        f"the original requirements. Run integration tests and confirm no "
+        f"regressions."
+    )
+    new_acceptance = (
+        "All child issues are closed and their changes are landed. "
+        "Integration tests pass. No regressions introduced."
+    )
+    try:
+        result = subprocess.run(
+            [
+                "bd", "update", issue_id,
+                "--title", new_title,
+                "--description", new_description,
+                "--acceptance", new_acceptance,
+            ],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            check=False,
+        )
+        return result.returncode == 0
+    except OSError:
+        return False
+
+
+def get_children_ids(parent_id: str, cwd: Path | None = None) -> list[str]:
+    """Return a list of child issue IDs for *parent_id*.
+
+    Returns an empty list if the parent has no children or the query fails.
+    """
+    try:
+        result = subprocess.run(
+            ["bd", "children", parent_id, "--json"],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            check=False,
+        )
+        if result.returncode != 0:
+            return []
+        data = json.loads(result.stdout)
+        if not isinstance(data, list):
+            return []
+        return [child["id"] for child in data if "id" in child]
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
 def get_issue_details(issue_id: str, cwd: Path | None = None) -> dict | None:
     """Return the full issue dict for *issue_id*, or None on failure.
 

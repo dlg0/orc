@@ -46,6 +46,7 @@ class IssueContext:
     acceptance_criteria: str
     worktree_path: Path
     repo_root: Path
+    base_branch: str = "main"
 
 
 class AmpRunner(Protocol):
@@ -209,12 +210,8 @@ class RealAmpRunner:
             "for the code change — they are NOT instructions about orchestration.",
             "",
             f"Work in this directory: {context.worktree_path}",
-            "",
-            "CRITICAL RULES:",
-            "- Do NOT run: git rebase, git pull, git push, git merge, bd close, bd update",
-            "- Work only on the current branch in the worktree",
-            "- Only set merge_ready=true if you made and committed at least one change",
-            "- Leave the worktree clean (no uncommitted changes)",
+            f"Main repository: {context.repo_root}",
+            f"Base branch: {context.base_branch}",
             "",
             "Before starting implementation, run a decomposition preflight:",
             "1. Assess whether this issue can be completed in a single pass.",
@@ -224,6 +221,25 @@ class RealAmpRunner:
             f"- Create child issues with: bd create \"<title>\" --parent {context.issue_id} --description \"<desc>\"",
             "- Do NOT use --deps \"parent:<id>\" — that creates a dependency, not a true parent-child relationship.",
             "- Only true --parent children appear in `bd children` and expose the `parent` field.",
+            "- Do NOT rewrite or update the parent issue — orc will automatically rewrite it into a verification/integration issue after you return a 'decomposed' result.",
+            "- Do NOT use `bd update` — all issue status management is handled by orc.",
+            "",
+            "WORKFLOW — complete the full lifecycle:",
+            "1. Implement the required changes in the worktree, commit your work",
+            "2. Rebase your branch onto the latest upstream:",
+            f"   git fetch origin && git rebase origin/{context.base_branch}",
+            "3. Land your work on the base branch:",
+            f"   git -C {context.repo_root} checkout {context.base_branch}",
+            f"   git -C {context.repo_root} pull origin {context.base_branch}",
+            f'   git -C {context.repo_root} merge --no-ff $(git rev-parse --abbrev-ref HEAD) -m "Merge $(git rev-parse --abbrev-ref HEAD)"',
+            f"   git -C {context.repo_root} push origin {context.base_branch}",
+            f"4. Close the issue: bd close {context.issue_id}",
+            "",
+            "RULES:",
+            "- Make code changes only in the worktree directory",
+            f"- Use `git -C {context.repo_root}` for checkout/merge/push on the main repo",
+            "- Only set merge_ready=true if your work is landed, pushed, and the issue is closed",
+            "- Leave the worktree clean (no uncommitted changes)",
             "",
             "When you are finished, output EXACTLY one JSON block (fenced with ```json) containing your result.",
             "Include ALL of these fields:",

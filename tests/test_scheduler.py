@@ -700,6 +700,40 @@ def test_decomposed_records_blocked_by_dependency(repo_root: Path, state_dir: Pa
     assert state.issue_failures["test-1"]["category"] == "blocked_by_dependency"
 
 
+def test_decomposed_rewrites_parent_as_integration(repo_root: Path, state_dir: Path) -> None:
+    """After a decomposed result, orc rewrites the parent into an integration issue."""
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    runner = StubAmpRunner.decomposed()
+    issue = _make_issue()
+
+    call_count = 0
+
+    def fake_ready(cwd=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return QueueResult(issues=[issue])
+        return QueueResult()
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
+    mock_wt_info.branch_name = "amp/test-1"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_children_ids", return_value=["child-a", "child-b"]) as mock_children,
+        patch("orc.scheduler.rewrite_parent_as_integration_issue", return_value=True) as mock_rewrite,
+    ):
+        run_loop(repo_root, state_dir, config, runner)
+
+    mock_children.assert_called_once_with(issue.id, cwd=repo_root)
+    mock_rewrite.assert_called_once_with(issue.id, ["child-a", "child-b"], cwd=repo_root)
+
+
 def test_sync_failure_records_needs_rework(repo_root: Path, state_dir: Path) -> None:
     """When _sync_repo_root fails, a needs_rework failure is recorded."""
     _set_state(state_dir, OrchestratorMode.running)
