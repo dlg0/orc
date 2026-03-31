@@ -664,8 +664,8 @@ def run_loop(
 
         click.echo(f"[SCHEDULER] Backlog: {len(queue_result.issues)} ready issue(s), {len(failed_ids)} held")
 
-        # If a parent was promoted, prioritize it in selection
-        priority_id = state.promoted_parent
+        # If --only is set, force-select that issue; otherwise honour promoted parent
+        priority_id = only_issue or state.promoted_parent
         click.echo("[SCHEDULER] Selecting next issue ...")
         issue = select_next_issue(queue_result.issues, skip_ids=failed_ids, priority_id=priority_id)
         # Clear promoted_parent after selection attempt (one-shot)
