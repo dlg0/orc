@@ -69,7 +69,7 @@ def get_ready_issues(cwd: Path | None = None) -> QueueResult:
     """
     try:
         result = subprocess.run(
-            ["bd", "ready", "--json"],
+            ["bd", "ready", "--json", "--limit", "0"],
             capture_output=True,
             text=True,
             cwd=cwd,
@@ -314,5 +314,80 @@ def get_children_all_closed(parent_id: str, cwd: Path | None = None) -> bool | N
         if not isinstance(data, list) or len(data) == 0:
             return None
         return all(child.get("status") == "closed" for child in data)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def create_issue(
+    title: str,
+    description: str,
+    *,
+    parent: str | None = None,
+    priority: int | None = None,
+    cwd: Path | None = None,
+) -> str | None:
+    """Create a new bd issue and return its ID, or None on failure.
+
+    Runs ``bd create "<title>" --description "<description>" --silent``
+    with optional ``--parent`` and ``--priority`` flags.
+    """
+    cmd: list[str] = ["bd", "create", title, "--description", description, "--silent"]
+    if parent is not None:
+        cmd.extend(["--parent", parent])
+    if priority is not None:
+        cmd.extend(["--priority", str(priority)])
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip() or None
+    except OSError:
+        return None
+
+
+def close_issue(issue_id: str, cwd: Path | None = None) -> bool:
+    """Run ``bd close <issue_id>`` to close an issue.
+
+    Returns True if the close succeeded, False otherwise.
+    """
+    try:
+        result = subprocess.run(
+            ["bd", "close", issue_id],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            check=False,
+        )
+        return result.returncode == 0
+    except OSError:
+        return False
+
+
+def get_issue_details(issue_id: str, cwd: Path | None = None) -> dict | None:
+    """Return the full issue dict for *issue_id*, or None on failure.
+
+    Calls ``bd show <id> --json`` and returns the first element of the
+    resulting list.
+    """
+    try:
+        result = subprocess.run(
+            ["bd", "show", issue_id, "--json"],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout)
+        if isinstance(data, list) and len(data) > 0:
+            return data[0]
+        return None
     except (OSError, json.JSONDecodeError):
         return None

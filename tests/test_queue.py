@@ -9,6 +9,7 @@ from orc.queue import (
     IssueState,
     QueueResult,
     claim_issue,
+    compute_queue_breakdown,
     get_children_all_closed,
     get_issue_parent,
     get_issue_state,
@@ -127,6 +128,15 @@ class TestGetReadyIssues:
         assert len(result.issues) == 2
         assert result.issues[0].id == "i1"
         assert result.issues[1].id == "i2"
+
+    def test_passes_unlimited_limit(self, tmp_path) -> None:
+        """Ensure get_ready_issues requests the full result set (--limit 0)."""
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "[]"
+            get_ready_issues(tmp_path)
+            cmd = mock_run.call_args[0][0]
+            assert cmd == ["bd", "ready", "--json", "--limit", "0"]
 
     def test_success_empty_queue(self, tmp_path) -> None:
         with patch("orc.queue.subprocess.run") as mock_run:
@@ -454,3 +464,45 @@ class TestReconcileIssueFailures:
         assert len(pruned) == 2
         pruned_ids = {p[0] for p in pruned}
         assert pruned_ids == {"closed1", "missing1"}
+
+
+class TestPaginatedHeldOverlap:
+    """Regression test: first page entirely held but later issues are runnable.
+
+    Before the fix, get_ready_issues used ``bd ready --json`` without
+    ``--limit 0``, so only the first 10 issues (the default page) were
+    returned.  If all 10 were in the local held set, the scheduler
+    incorrectly concluded the queue was exhausted even though runnable
+    issues existed beyond page 1.
+    """
+
+    def test_scheduler_finds_runnable_beyond_held_page(self) -> None:
+        """Simulates a 15-issue ready queue where the first 10 are held."""
+        held_ids = {f"held-{i}" for i in range(10)}
+        all_issues = [
+            _issue(id=f"held-{i}", priority=3) for i in range(10)
+        ] + [
+            _issue(id=f"runnable-{i}", priority=2) for i in range(5)
+        ]
+
+        issue_failures = {iid: {"category": "stale", "action": "hold_for_retry"} for iid in held_ids}
+
+        breakdown = compute_queue_breakdown(all_issues, issue_failures)
+        assert breakdown.beads_ready == 15
+        assert breakdown.held_and_ready == 10
+        assert breakdown.runnable == 5
+        assert not breakdown.has_held_blocking
+
+        selected = select_next_issue(all_issues, skip_ids=held_ids)
+        assert selected is not None
+        assert selected.id.startswith("runnable-")
+
+    def test_all_held_reports_blocking(self) -> None:
+        """When every ready issue is held, has_held_blocking should be True."""
+        all_issues = [_issue(id=f"held-{i}", priority=3) for i in range(10)]
+        issue_failures = {f"held-{i}": {"category": "stale"} for i in range(10)}
+
+        breakdown = compute_queue_breakdown(all_issues, issue_failures)
+        assert breakdown.beads_ready == 10
+        assert breakdown.runnable == 0
+        assert breakdown.has_held_blocking
