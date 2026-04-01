@@ -13,7 +13,7 @@ from textual.widgets import Footer, Header
 
 from orc.config import OrchestratorConfig
 from orc.queue import get_issue_status
-from orc.state import OrchestratorMode, StateStore, clear_issue_hold, RequestQueue
+from orc.state import OrchestratorMode, StateStore, RequestQueue
 from orc.tui.snapshot import (
     DashboardSnapshot,
     load_snapshot,

@@ -200,7 +200,7 @@ def inspect(issue_id: str) -> None:
     # Check active_run
     if state.active_run and state.active_run.get("issue_id") == issue_id:
         click.echo(f"Issue: {issue_id}")
-        click.echo(f"Status: active")
+        click.echo("Status: active")
         run = state.active_run
         if run.get("stage"):
             click.echo(f"Stage: {run['stage']}")
@@ -215,7 +215,7 @@ def inspect(issue_id: str) -> None:
     # Check resume_candidate
     if state.resume_candidate and state.resume_candidate.get("issue_id") == issue_id:
         click.echo(f"Issue: {issue_id}")
-        click.echo(f"Status: queued for resume")
+        click.echo("Status: queued for resume")
         rc = state.resume_candidate
         if rc.get("stage"):
             click.echo(f"Stage: {rc['stage']}")
@@ -230,7 +230,7 @@ def inspect(issue_id: str) -> None:
     failure_info = state.issue_failures.get(issue_id)
     if failure_info is not None:
         click.echo(f"Issue: {issue_id}")
-        click.echo(f"Status: held/failed")
+        click.echo("Status: held/failed")
         click.echo(f"Category: {failure_info.get('category', 'unknown')}")
         click.echo(f"Stage: {failure_info.get('stage', 'unknown')}")
         click.echo(f"Attempts: {failure_info.get('attempts', 1)}")

@@ -333,7 +333,6 @@ class TestGetChildrenAllClosed:
             assert get_children_all_closed("parent-1") is False
 
     def test_no_children_returns_none(self) -> None:
-        import json
         with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stdout = "[]"
@@ -478,7 +477,6 @@ class TestCreateIssueParentSemantics:
     """
 
     def test_uses_parent_flag(self) -> None:
-        import json
 
         with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0

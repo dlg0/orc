@@ -164,7 +164,6 @@ def test_failed_issue_continues_to_next(repo_root: Path, state_dir: Path) -> Non
     issue2 = _make_issue("ok-2", "Good issue")
 
     fail_runner = MagicMock()
-    call_count = 0
 
     def run_side_effect(ctx, **kwargs):
         if ctx.issue_id == "fail-1":
@@ -909,7 +908,6 @@ def test_failure_increments_attempts(repo_root: Path, state_dir: Path) -> None:
     # and fails again, attempts should increment.
     # We simulate by removing from skip set temporarily
     runner = StubAmpRunner.failed(summary="second failure")
-    issue = _make_issue()
 
     call_count = 0
 

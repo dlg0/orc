@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -23,7 +22,7 @@ from orc.tui.event_helpers import (
     _event_severity,
     _human_message,
 )
-from orc.tui.modals import AmpStreamModal, CopyableField, _THREAD_URL_PREFIX, build_thread_continue_cmd
+from orc.tui.modals import AmpStreamModal, _THREAD_URL_PREFIX, build_thread_continue_cmd
 from orc.workflow import PHASE_INFO, PHASE_ORDER, normalize_failure_phase, phase_label
 
 
@@ -538,10 +537,10 @@ class HeldIssueInspectScreen(Screen[None]):
         if self._model.thread_id:
             url = f"{_THREAD_URL_PREFIX}{self._model.thread_id}"
             self.app.copy_to_clipboard(url)
-            self.app.notify(f"Copied thread URL", timeout=2)
+            self.app.notify("Copied thread URL", timeout=2)
 
     def action_copy_debug_cmd(self) -> None:
         if self._model.thread_id:
             cmd = build_thread_continue_cmd(self._model.thread_id, self._model.worktree_path)
             self.app.copy_to_clipboard(cmd)
-            self.app.notify(f"Copied debug cmd", timeout=2)
+            self.app.notify("Copied debug cmd", timeout=2)

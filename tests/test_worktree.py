@@ -40,7 +40,6 @@ class TestSlugify:
 
 class TestBranchNameGeneration:
     def test_branch_name_format(self) -> None:
-        mgr = WorktreeManager(repo_root=Path("/repo"))
         slug = slugify("Add user auth")
         branch = f"amp/ISSUE-1-{slug}"
         assert branch == "amp/ISSUE-1-add-user-auth"

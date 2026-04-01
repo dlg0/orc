@@ -9,7 +9,6 @@ from unittest.mock import patch
 from click.testing import CliRunner
 
 from orc.cli import main
-from orc.control import start_orchestrator
 from orc.queue import QueueResult
 from orc.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
 

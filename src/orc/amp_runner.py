@@ -504,7 +504,7 @@ class RealAmpRunner:
                 return None
 
             # Count new commits
-            new_commits = [l for l in log_proc.stdout.strip().splitlines() if l.strip()]
+            new_commits = [line for line in log_proc.stdout.strip().splitlines() if line.strip()]
             if not new_commits:
                 return None
 

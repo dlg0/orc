@@ -442,7 +442,7 @@ class AmpStreamModal(ModalScreen[None]):
                     pct = f" ctx={round(inp / mx * 100)}%"
             return f"[result] error={is_err}{pct}"
         if msg_type == "session_start":
-            return f"[session] started"
+            return "[session] started"
         return ""
 
     def _update_thread_info(self) -> None:

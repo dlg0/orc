@@ -6,13 +6,11 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 from orc.config import OrchestratorConfig
 from orc.doctor import (
     DoctorContext,
     Finding,
-    build_context,
     check_config_and_env,
     check_git_state,
     check_held_issues,
@@ -21,14 +19,11 @@ from orc.doctor import (
     run_doctor,
 )
 from orc.state import (
-    FailureAction,
-    FailureCategory,
     OrchestratorMode,
     OrchestratorState,
     RunCheckpoint,
     RunStage,
     StateStore,
-    _MAX_RESUME_ATTEMPTS,
 )
 from orc.worktree import WorktreeInfo
 
@@ -144,7 +139,7 @@ class TestStateConsistency:
         )
         ctx = _make_ctx(tmp_path, state=state)
         findings = [f for f in check_state_consistency(ctx) if f.code == "state.active_run_in_non_running_mode"]
-        result = findings[0].fix(ctx)
+        findings[0].fix(ctx)
         assert ctx.state.active_run is None
         assert ctx.state.resume_candidate is not None
 
