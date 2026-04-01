@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 from orc.config import OrchestratorConfig, load_config
 from orc.lock import OrchestratorLock
@@ -106,7 +109,7 @@ def build_context(
         mgr = WorktreeManager(repo_root, base)
         worktrees = mgr.list_worktrees()
     except Exception:
-        pass
+        logger.debug("Failed to list worktrees during doctor context build", exc_info=True)
 
     return DoctorContext(
         repo_root=repo_root,

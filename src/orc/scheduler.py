@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import click
+
+logger = logging.getLogger(__name__)
 
 from orc.amp_runner import AmpRunner, IssueContext, ResultType
 from orc.config import OrchestratorConfig
@@ -1156,7 +1159,7 @@ def _try_cleanup(worktree_mgr: WorktreeManager, wt_info) -> None:
     try:
         worktree_mgr.cleanup_worktree(wt_info)
     except Exception:
-        pass
+        logger.debug("Worktree cleanup failed for %s", wt_info, exc_info=True)
 
 
 
