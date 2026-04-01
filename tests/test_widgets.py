@@ -13,7 +13,6 @@ from orc.state import OrchestratorMode, OrchestratorState, RequestQueue, RunChec
 from orc.tui.app import OrchestratorApp
 from orc.tui.snapshot import DashboardSnapshot
 from orc.tui.widgets import (
-    EVENT_SEVERITY,
     MODE_STYLES,
     NO_PROJECT_PLACEHOLDER,
     _ACTION_ENABLED,

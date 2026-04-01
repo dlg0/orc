@@ -11,7 +11,7 @@ from textual.widgets import DataTable
 
 from orc.config import OrchestratorConfig
 from orc.queue import BdIssue
-from orc.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
+from orc.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage
 from orc.tui.app import OrchestratorApp
 from orc.tui.snapshot import DashboardSnapshot
 from orc.tui.widgets import (
@@ -38,7 +38,7 @@ def _make_snap(**kwargs) -> DashboardSnapshot:
 @pytest.mark.asyncio
 async def test_app_has_all_panels() -> None:
     app = OrchestratorApp()
-    async with app.run_test() as pilot:
+    async with app.run_test():
         assert app.query_one(StatusPanel)
         assert app.query_one(ActiveIssuePanel)
         assert app.query_one(ConfigPanel)
@@ -127,7 +127,7 @@ async def test_refresh_binding_no_crash() -> None:
 async def test_app_no_timers_without_paths() -> None:
     """App without repo_root/state_dir should not start timers."""
     app = OrchestratorApp()
-    async with app.run_test() as pilot:
+    async with app.run_test():
         assert app.query_one(StatusPanel)
         assert app._config is not None
 

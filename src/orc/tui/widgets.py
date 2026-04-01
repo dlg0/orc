@@ -6,12 +6,20 @@ from datetime import datetime, timezone
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 from textual.widgets import Button, DataTable, Input, Label, RichLog, Static
 
 from orc.config import OrchestratorConfig
 from orc.queue import BdIssue
 from orc.state import OrchestratorMode, OrchestratorState
+from orc.tui.event_helpers import (
+    EVENT_COLORS,
+    _CATEGORY_ICONS,
+    _CATEGORY_LABELS,
+    _event_severity,
+    _SEVERITY_STYLE,
+    _human_message,
+)
 from orc.tui.snapshot import DashboardSnapshot
 
 MODE_STYLES: dict[OrchestratorMode, tuple[str, str]] = {
@@ -111,17 +119,6 @@ class NotConnectedBanner(Static):
 
     def compose(self) -> ComposeResult:
         yield Label(NO_PROJECT_MSG, id="no-project-banner-text")
-
-
-from orc.tui.event_helpers import (
-    EVENT_COLORS,
-    EVENT_SEVERITY,
-    _CATEGORY_ICONS,
-    _CATEGORY_LABELS,
-    _event_severity,
-    _SEVERITY_STYLE,
-    _human_message,
-)
 
 
 class ErrorAlert(Static):
@@ -292,7 +289,6 @@ class StatusPanel(Static):
 
         # Consolidated counts: Beads ready | Runnable | In-progress | Held
         active = 1 if snap.state.active_issue_id else 0
-        held = len(snap.state.issue_failures)
         counts = self.query_one("#counts-summary", Label)
         if not snap.is_fast and snap.queue_breakdown is not None:
             bd = snap.queue_breakdown
@@ -727,11 +723,11 @@ class ConfigPanel(Static):
             f"[bold]Context window warn threshold:[/] {cfg.context_window_warn_threshold}",
         ]
         if cfg.verification_commands:
-            lines.append(f"\n[bold]Verification commands:[/]")
+            lines.append("\n[bold]Verification commands:[/]")
             for cmd in cfg.verification_commands:
                 lines.append(f"  • {cmd}")
         else:
-            lines.append(f"\n[bold]Verification commands:[/] (none)")
+            lines.append("\n[bold]Verification commands:[/] (none)")
         from orc.tui.modals import InspectModal
 
         self.app.push_screen(InspectModal(title=title, body="\n".join(lines)))

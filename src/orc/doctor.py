@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
 from orc.config import OrchestratorConfig, load_config
 from orc.lock import OrchestratorLock
-from orc.queue import get_issue_state, get_ready_issues, IssueState, reconcile_issue_failures
+from orc.queue import get_issue_state, get_ready_issues, IssueState
 from orc.state import (
     OrchestratorMode,
     OrchestratorState,
@@ -281,7 +280,6 @@ def check_held_issues(ctx: DoctorContext) -> list[Finding]:
 
     for issue_id, info in list(ctx.state.issue_failures.items()):
         category = info.get("category", "unknown")
-        action = info.get("action", "unknown")
         summary = info.get("summary", "(no summary)")
         timestamp = info.get("timestamp", "")
         attempts = info.get("attempts", 1)
@@ -298,7 +296,7 @@ def check_held_issues(ctx: DoctorContext) -> list[Finding]:
                 code="held.bd_closed_or_missing",
                 severity="warn",
                 summary=f"Held issue {issue_id} is {bd_state.value} in beads.",
-                recommendation=f"Safe to remove from held list.",
+                recommendation="Safe to remove from held list.",
                 issue_id=issue_id,
                 auto_fixable=True,
                 fix=fix_prune_closed,

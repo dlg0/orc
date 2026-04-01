@@ -34,7 +34,6 @@ from orc.state import (
     OrchestratorState,
     RunCheckpoint,
     StateStore,
-    _MAX_RESUME_ATTEMPTS,
     apply_requests,
 )
 from orc.workflow import WorkflowPhase

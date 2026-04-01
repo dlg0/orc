@@ -7,7 +7,7 @@ from unittest.mock import patch
 from orc.config import OrchestratorConfig
 from orc.queue import BdIssue, QueueResult
 from orc.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
-from orc.tui.snapshot import DashboardSnapshot, load_snapshot, load_snapshot_fast
+from orc.tui.snapshot import load_snapshot, load_snapshot_fast
 
 
 def test_load_snapshot_defaults(tmp_path: Path) -> None:
