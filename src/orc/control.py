@@ -5,9 +5,12 @@ Provides start/pause/resume/stop operations used by both the CLI and TUI.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import click
+
+logger = logging.getLogger(__name__)
 
 from orc.amp_runner import RealAmpRunner
 from orc.config import OrchestratorConfig, load_config
@@ -81,6 +84,7 @@ def start_orchestrator(
                     try:
                         config = load_config(repo_root)
                     except Exception:
+                        logger.debug("Failed to load config during recovery, using defaults", exc_info=True)
                         config = OrchestratorConfig()
                     worktree_mgr = WorktreeManager(repo_root, config.base_branch)
                     if worktree_mgr.ensure_resumable_worktree(branch, wt_path):
@@ -149,7 +153,7 @@ def start_orchestrator(
             if state.mode == OrchestratorMode.running:
                 store.transition(state, OrchestratorMode.error)
         except Exception:
-            pass
+            logger.warning("Failed to transition state to error during cleanup", exc_info=True)
         raise
     finally:
         lock.release()
@@ -225,7 +229,7 @@ def resume_orchestrator(repo_root: Path, state_dir: Path, *, fail_fast: bool = F
             if state.mode == OrchestratorMode.running:
                 store.transition(state, OrchestratorMode.error)
         except Exception:
-            pass
+            logger.warning("Failed to transition state to error during cleanup", exc_info=True)
         raise
     finally:
         lock.release()
