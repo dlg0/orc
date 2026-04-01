@@ -12,6 +12,18 @@ bd close <id>         # Complete work
 bd dolt push          # Push beads data to remote
 ```
 
+## Beads-First Architecture
+
+The orchestrator (`orc`) follows a **beads-first architecture**. Beads (`bd`) is designed to be wrapped by agent management tooling — it already handles issue tracking, state management, claiming, dependencies, and workflow out of the box.
+
+**Before building any orchestrator feature, ask: "Does beads already do this?"**
+
+- **Always discover beads capabilities first.** Run `bd help`, `bd prime`, and explore subcommands before assuming you need custom logic. Beads likely already supports what you need.
+- **Never build workarounds for things beads handles natively.** If beads has a mechanism for something (dependencies, priorities, state transitions, metadata, memory), use it directly rather than reimplementing or wrapping it with custom code.
+- **Follow the directions beads encourages.** Beads' design choices are intentional — its data model, CLI patterns, and workflow conventions should guide how `orc` structures its own logic. Work *with* beads, not around it.
+- **Treat beads as the source of truth** for all issue/task state. The orchestrator coordinates agents and delegates work, but beads owns the task graph.
+- **When in doubt, check beads first.** If you're about to write code that manages task state, tracks progress, stores metadata, or coordinates work items, verify that `bd` doesn't already provide that functionality before writing a single line.
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
@@ -35,6 +47,36 @@ cp -rf source dest          # NOT: cp -r source dest
 - `ssh` - use `-o BatchMode=yes` to fail instead of prompting
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
+
+## Draft Issues (Deferred-as-Draft Workflow)
+
+When brainstorming or discussing issues with AI (Oracle/Amp), **create issues as deferred** so the orchestrator doesn't pick them up prematurely via `bd ready`.
+
+### Rules
+
+- **During brainstorming/exploration**: Always create issues with `--defer` unless the user explicitly says the issue is ready for work.
+  ```bash
+  bd create "Refactor auth module" --defer=+1y -d "Needs design discussion"
+  ```
+- **When an issue is fully spec'd and ready**: Create it normally (no `--defer`) or promote a deferred issue:
+  ```bash
+  bd update <id> --defer=""
+  ```
+
+### How it works
+
+- `bd ready` automatically excludes deferred issues — **no orchestrator code changes needed**
+- Deferred issues remain visible in `bd list` for tracking and review
+- Use `--defer=+1y` (or any far-future date) for pure drafts with no target date
+- Use `--defer=<date>` for time-gated issues that should become ready at a specific time
+
+### Status meanings
+
+| Status | Meaning |
+|--------|---------|
+| **Deferred** | Draft / not ready for work / time-gated |
+| **Open** | Promoted / fully spec'd / ready for orchestrator pickup |
+| **Closed** | Completed |
 
 ## Testing in a Target Repository
 
