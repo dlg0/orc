@@ -134,8 +134,12 @@ def check_state_consistency(ctx: DoctorContext) -> list[Finding]:
     findings: list[Finding] = []
     state = ctx.state
 
-    # 1. Mode is running/pause_requested but no lock held
-    if state.mode in (OrchestratorMode.running, OrchestratorMode.pause_requested) and not ctx.lock_held:
+    # 1. Mode is in-flight but no lock held
+    if state.mode in (
+        OrchestratorMode.running,
+        OrchestratorMode.pause_requested,
+        OrchestratorMode.stopping,
+    ) and not ctx.lock_held:
         def fix_stale_running(c: DoctorContext) -> str:
             c.state.mode = OrchestratorMode.idle
             if c.state.active_run:

@@ -81,6 +81,36 @@ class TestStateConsistency:
         assert ctx.state.mode == OrchestratorMode.idle
         assert "idle" in result.lower()
 
+    def test_stale_stopping_no_lock(self, tmp_path: Path) -> None:
+        state = OrchestratorState(mode=OrchestratorMode.stopping)
+        ctx = _make_ctx(tmp_path, state=state, lock_held=False)
+        findings = check_state_consistency(ctx)
+        assert len(findings) == 1
+        assert findings[0].code == "state.stale_running_no_lock"
+        assert findings[0].severity == "error"
+        assert findings[0].auto_fixable
+
+    def test_stale_stopping_fix_moves_resume_candidate(self, tmp_path: Path) -> None:
+        checkpoint = RunCheckpoint(
+            issue_id="ISSUE-STOP",
+            issue_title="Test",
+            branch="amp/test-stop",
+            worktree_path="/tmp/wt-stop",
+            stage=RunStage.amp_running,
+        )
+        state = OrchestratorState(
+            mode=OrchestratorMode.stopping,
+            active_run=checkpoint.to_dict(),
+        )
+        ctx = _make_ctx(tmp_path, state=state, lock_held=False)
+        findings = check_state_consistency(ctx)
+        result = findings[0].fix(ctx)
+        assert ctx.state.mode == OrchestratorMode.idle
+        assert ctx.state.active_run is None
+        assert ctx.state.resume_candidate is not None
+        assert ctx.state.resume_candidate["issue_id"] == "ISSUE-STOP"
+        assert "resume_candidate" in result
+
     def test_stale_running_with_resumable_active_run(self, tmp_path: Path) -> None:
         checkpoint = RunCheckpoint(
             issue_id="ISSUE-1",
@@ -104,6 +134,12 @@ class TestStateConsistency:
 
     def test_running_with_lock_no_finding(self, tmp_path: Path) -> None:
         state = OrchestratorState(mode=OrchestratorMode.running)
+        ctx = _make_ctx(tmp_path, state=state, lock_held=True)
+        findings = check_state_consistency(ctx)
+        assert not any(f.code == "state.stale_running_no_lock" for f in findings)
+
+    def test_stopping_with_lock_no_finding(self, tmp_path: Path) -> None:
+        state = OrchestratorState(mode=OrchestratorMode.stopping)
         ctx = _make_ctx(tmp_path, state=state, lock_held=True)
         findings = check_state_consistency(ctx)
         assert not any(f.code == "state.stale_running_no_lock" for f in findings)

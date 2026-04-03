@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 from pathlib import Path
 from unittest.mock import patch
 
 from click.testing import CliRunner
 
+from orc import cli
 from orc.cli import main
 from orc.dispatch_policy import DispatchSkip
 from orc.queue import BdIssue, QueueResult
@@ -34,6 +36,23 @@ def test_version() -> None:
     result = runner.invoke(main, ["--version"])
     assert result.exit_code == 0
     assert "0.1.0" in result.output
+
+
+def test_register_viz_skips_when_module_missing() -> None:
+    real_import = builtins.__import__
+
+    def fake_import(name: str, globals: dict | None = None, locals: dict | None = None, fromlist: tuple[str, ...] = (), level: int = 0):
+        if name == "orc.viz":
+            raise ModuleNotFoundError("No module named 'orc.viz'", name="orc.viz")
+        return real_import(name, globals, locals, fromlist, level)
+
+    with (
+        patch("builtins.__import__", side_effect=fake_import),
+        patch.object(cli.main, "add_command") as add_command,
+    ):
+        cli._register_viz()
+
+    add_command.assert_not_called()
 
 
 def test_status_shows_mode(tmp_path: Path) -> None:

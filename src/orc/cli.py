@@ -410,7 +410,14 @@ def init_config() -> None:
 
 # Lazy-register viz to avoid import cost on every CLI invocation
 def _register_viz() -> None:
-    from orc.viz import viz as viz_cmd
+    try:
+        from orc.viz import viz as viz_cmd
+    except ModuleNotFoundError as exc:
+        # ``viz`` is an optional command while the feature is still being
+        # evaluated; keep the rest of the CLI importable from a clean checkout.
+        if exc.name == "orc.viz":
+            return
+        raise
     main.add_command(viz_cmd)
 
 

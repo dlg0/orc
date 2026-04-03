@@ -115,6 +115,46 @@ def test_start_crash_recovery(tmp_path: Path) -> None:
     assert state.active_run is None
 
 
+def test_start_crash_recovery_from_stopping(tmp_path: Path) -> None:
+    """Start from stale stopping state (no lock held) triggers crash recovery."""
+    state_dir = _setup(tmp_path, OrchestratorMode.stopping)
+    store = StateStore(state_dir)
+    state = store.load()
+    checkpoint = RunCheckpoint(
+        issue_id="X-stopping",
+        issue_title="Stopping issue",
+        branch="amp/stopping",
+        stage=RunStage.amp_running,
+    )
+    state.active_run = checkpoint.to_dict()
+    store.save(state)
+
+    with (
+        patch("orc.control.load_config"),
+        patch("orc.control.run_loop"),
+    ):
+        start_orchestrator(tmp_path, state_dir)
+
+    state = StateStore(state_dir).load()
+    assert state.mode == OrchestratorMode.running
+    assert state.active_issue_id is None
+    assert state.active_run is None
+
+
+def test_start_crash_recovery_from_stopping_no_active_run(tmp_path: Path) -> None:
+    """Start from stale stopping state with no active run resets to idle then starts."""
+    state_dir = _setup(tmp_path, OrchestratorMode.stopping)
+
+    with (
+        patch("orc.control.load_config"),
+        patch("orc.control.run_loop"),
+    ):
+        start_orchestrator(tmp_path, state_dir)
+
+    state = StateStore(state_dir).load()
+    assert state.mode == OrchestratorMode.running
+
+
 def test_start_refuses_when_locked(tmp_path: Path) -> None:
     state_dir = _setup(tmp_path, OrchestratorMode.idle)
     from orc.lock import OrchestratorLock

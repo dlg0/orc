@@ -17,7 +17,7 @@ from orc.config import OrchestratorConfig, load_config
 from orc.evaluator import AmpEvaluatorRunner
 from orc.events import EventLog, EventType
 from orc.lock import OrchestratorLock
-from orc.queue import unclaim_issue
+from orc.queue import IssueState, get_issue_state, unclaim_issue
 from orc.scheduler import run_loop
 from orc.state import OrchestratorMode, RequestQueue, StateStore, _MAX_RESUME_ATTEMPTS, _RESUMABLE_STAGES
 from orc.worktree import WorktreeManager
@@ -46,9 +46,9 @@ def start_orchestrator(
         store = StateStore(state_dir)
         state = store.load()
 
-        # Crash recovery: if state is running/pause_requested but no lock was
+        # Crash recovery: if state is an in-flight mode but no lock was
         # held (we just acquired it), the previous process must have crashed.
-        if state.mode in (OrchestratorMode.running, OrchestratorMode.pause_requested):
+        if state.mode in (OrchestratorMode.running, OrchestratorMode.pause_requested, OrchestratorMode.stopping):
             click.echo(
                 f"[RECOVERY] Detected stale {state.mode.value} state (previous process crashed)"
             )
@@ -108,7 +108,11 @@ def start_orchestrator(
                     # Not resumable — unclaim and discard
                     if state.active_run.get("bd_claimed"):
                         issue_id = state.active_run["issue_id"]
-                        if unclaim_issue(issue_id, cwd=repo_root):
+                        # Don't reopen a closed/missing issue
+                        bd_state = get_issue_state(issue_id, cwd=repo_root)
+                        if bd_state in (IssueState.closed, IssueState.missing):
+                            click.echo(f"[RECOVERY] {issue_id} already {bd_state.value} — skipping unclaim")
+                        elif unclaim_issue(issue_id, cwd=repo_root):
                             click.echo(f"[RECOVERY] Unclaimed {issue_id}")
                         else:
                             click.echo(f"[RECOVERY] WARNING: failed to unclaim {issue_id}")
