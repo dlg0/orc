@@ -24,7 +24,7 @@ def test_help_shows_all_commands() -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["--help"])
     assert result.exit_code == 0
-    for cmd in ["status", "start", "pause", "resume", "stop", "inspect", "logs", "init-config", "tui", "unhold"]:
+    for cmd in ["status", "start", "pause", "resume", "stop", "inspect", "logs", "init-config", "tui", "unhold", "explore"]:
         assert cmd in result.output
 
 
@@ -203,6 +203,7 @@ def test_unhold_clears_failure(tmp_path: Path) -> None:
 
     with (
         patch("orc.cli._get_state_dir", return_value=state_dir),
+        patch("orc.cli.resolve_issue_id", return_value="bz5"),
         patch("orc.cli.get_issue_status", return_value="open"),
     ):
         runner = CliRunner()
@@ -220,7 +221,10 @@ def test_unhold_not_in_failures(tmp_path: Path) -> None:
     store = StateStore(state_dir)
     store.save(OrchestratorState(mode=OrchestratorMode.idle))
 
-    with patch("orc.cli._get_state_dir", return_value=state_dir):
+    with (
+        patch("orc.cli._get_state_dir", return_value=state_dir),
+        patch("orc.cli.resolve_issue_id", return_value="bz99"),
+    ):
         runner = CliRunner()
         result = runner.invoke(main, ["unhold", "bz99"])
         assert result.exit_code != 0
@@ -249,6 +253,7 @@ def test_unhold_clears_hold_for_conflict_failure(tmp_path: Path) -> None:
 
     with (
         patch("orc.cli._get_state_dir", return_value=state_dir),
+        patch("orc.cli.resolve_issue_id", return_value="bz6"),
         patch("orc.cli.get_issue_status", return_value="open"),
     ):
         runner = CliRunner()
@@ -334,7 +339,10 @@ def test_inspect_shows_failure_details(tmp_path: Path) -> None:
     )
     store.save(state)
 
-    with patch("orc.cli._get_state_dir", return_value=state_dir):
+    with (
+        patch("orc.cli._get_state_dir", return_value=state_dir),
+        patch("orc.cli.resolve_issue_id", return_value="bz10"),
+    ):
         runner = CliRunner()
         result = runner.invoke(main, ["inspect", "bz10"])
         assert result.exit_code == 0
@@ -352,11 +360,80 @@ def test_inspect_not_found(tmp_path: Path) -> None:
     store = StateStore(state_dir)
     store.save(OrchestratorState(mode=OrchestratorMode.idle))
 
-    with patch("orc.cli._get_state_dir", return_value=state_dir):
+    with (
+        patch("orc.cli._get_state_dir", return_value=state_dir),
+        patch("orc.cli.resolve_issue_id", return_value="bz99"),
+    ):
         runner = CliRunner()
         result = runner.invoke(main, ["inspect", "bz99"])
         assert result.exit_code != 0
         assert "No run history" in result.output
+
+
+def test_unhold_resolves_suffix_id(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".orc"
+    state_dir.mkdir(parents=True)
+    store = StateStore(state_dir)
+    state = OrchestratorState(
+        mode=OrchestratorMode.idle,
+        issue_failures={"proj-abc": {
+            "category": "issue_needs_rework",
+            "action": "hold_for_retry",
+            "stage": "evaluation",
+            "summary": "Missing tests",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "attempts": 1,
+        }},
+    )
+    store.save(state)
+
+    with (
+        patch("orc.cli._get_state_dir", return_value=state_dir),
+        patch("orc.cli.resolve_issue_id", return_value="proj-abc"),
+        patch("orc.cli.get_issue_status", return_value="open"),
+    ):
+        runner = CliRunner()
+        result = runner.invoke(main, ["unhold", "abc"])
+        assert result.exit_code == 0
+        assert "Removed hold for proj-abc" in result.output
+
+
+def test_unhold_suffix_not_found(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".orc"
+    state_dir.mkdir(parents=True)
+    store = StateStore(state_dir)
+    store.save(OrchestratorState(mode=OrchestratorMode.idle))
+
+    with (
+        patch("orc.cli._get_state_dir", return_value=state_dir),
+        patch("orc.cli.resolve_issue_id", side_effect=ValueError("Cannot resolve issue suffix 'zzz'")),
+    ):
+        runner = CliRunner()
+        result = runner.invoke(main, ["unhold", "zzz"])
+        assert result.exit_code != 0
+        assert "Cannot resolve" in result.output
+
+
+def test_inspect_resolves_suffix_id(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".orc"
+    state_dir.mkdir(parents=True)
+    store = StateStore(state_dir)
+    state = OrchestratorState(
+        mode=OrchestratorMode.idle,
+        run_history=[
+            {"issue_id": "proj-abc", "result": "success", "summary": "did stuff"},
+        ],
+    )
+    store.save(state)
+
+    with (
+        patch("orc.cli._get_state_dir", return_value=state_dir),
+        patch("orc.cli.resolve_issue_id", return_value="proj-abc"),
+    ):
+        runner = CliRunner()
+        result = runner.invoke(main, ["inspect", "abc"])
+        assert result.exit_code == 0
+        assert "proj-abc" in result.output
 
 
 def test_inspect_shows_entry(tmp_path: Path) -> None:
@@ -371,7 +448,10 @@ def test_inspect_shows_entry(tmp_path: Path) -> None:
     )
     store.save(state)
 
-    with patch("orc.cli._get_state_dir", return_value=state_dir):
+    with (
+        patch("orc.cli._get_state_dir", return_value=state_dir),
+        patch("orc.cli.resolve_issue_id", return_value="bz1"),
+    ):
         runner = CliRunner()
         result = runner.invoke(main, ["inspect", "bz1"])
         assert result.exit_code == 0

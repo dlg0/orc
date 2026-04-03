@@ -14,7 +14,7 @@ from orc.control import (
     stop_orchestrator,
 )
 from orc.events import EventLog
-from orc.queue import compute_queue_breakdown, get_issue_status, get_ready_issues, reconcile_issue_failures
+from orc.queue import compute_queue_breakdown, get_issue_status, get_ready_issues, reconcile_issue_failures, resolve_issue_id
 from orc.lock import OrchestratorLock
 from orc.state import (
     OrchestratorMode,
@@ -118,6 +118,11 @@ def start(fail_fast: bool, only_issue: str | None) -> None:
     project = detect_project()
     repo_root = project.repo_root
     state_dir = repo_root / CONFIG_DIR
+    if only_issue is not None:
+        try:
+            only_issue = resolve_issue_id(only_issue, cwd=repo_root)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
     start_orchestrator(repo_root, state_dir, fail_fast=fail_fast, only_issue=only_issue)
 
 
@@ -150,6 +155,10 @@ def stop() -> None:
 def unhold(issue_id: str) -> None:
     """Remove hold on ISSUE_ID so it is eligible for normal scheduling."""
     state_dir = _get_state_dir()
+    try:
+        issue_id = resolve_issue_id(issue_id, cwd=state_dir.parent)
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
     store = StateStore(state_dir)
     state = store.load()
     if issue_id not in state.issue_failures:
@@ -194,6 +203,10 @@ def retry(issue_id: str) -> None:
 def inspect(issue_id: str) -> None:
     """View last run summary for ISSUE_ID."""
     state_dir = _get_state_dir()
+    try:
+        issue_id = resolve_issue_id(issue_id, cwd=state_dir.parent)
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
     store = StateStore(state_dir)
     state = store.load()
 
@@ -376,3 +389,20 @@ def init_config() -> None:
     ctx = detect_project()
     config_path = create_default_config(ctx.repo_root)
     click.echo(f"Config created: {config_path}")
+
+
+# Lazy-register viz to avoid import cost on every CLI invocation
+def _register_viz() -> None:
+    from orc.viz import viz as viz_cmd
+    main.add_command(viz_cmd)
+
+
+_register_viz()
+
+
+def _register_explore() -> None:
+    from orc.explore.cli import explore as explore_cmd
+    main.add_command(explore_cmd)
+
+
+_register_explore()

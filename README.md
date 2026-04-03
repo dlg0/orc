@@ -39,7 +39,70 @@ orc logs
 # Diagnose common issues
 orc doctor            # report only
 orc doctor --fix      # apply safe auto-remediations
+
+# Explore raw Beads dispatch behavior before changing scheduler policy
+orc explore dispatch --all
 ```
+
+## Dispatch Policy
+
+`orc` has two distinct concepts:
+
+- `bd ready` is the Beads-owned answer to "what is ready right now?"
+- Orc dispatchability is the Orc-owned answer to "what is safe to hand to a worker right now?"
+
+The exploration harness behind `orc explore dispatch` is the reference for the
+settled policy we plan to promote into the main scheduler. That policy is:
+
+1. Preserve the exact order returned by `bd ready`.
+2. Dispatch only worker leaf types: `task`, `bug`, `feature`, and `chore`.
+3. Never dispatch control/container nodes such as `epic`, `integration`, or any issue that currently has children.
+4. Exclude `in_progress` work from a new dispatch frontier, even if Beads ever includes it in `bd ready`.
+5. Fail closed on unsupported types, and suppress any ready descendants that sit inside an unsupported container subtree.
+
+This keeps Orc predictable: Beads decides readiness and ordering, while Orc adds
+only a small set of explicit safety filters.
+
+## Dispatch Examples
+
+The exploration harness records both raw Beads observations and the Orc dispatch
+frontier. These examples come from live harness runs against the current `bd`
+behavior:
+
+| Scenario | `bd ready` order | Orc dispatch frontier | Why |
+|---------|------------------|-----------------------|-----|
+| Open epic with children | `E.2`, `E.1`, `E` | `E.2`, `E.1` | Beads can return child tasks before the parent epic; Orc preserves that order and filters out the container. |
+| Nested integration container | `P.2`, `P.1`, `I.3`, `I.2`, `I.1`, `I`, `P` | `P.2`, `P.1`, `I.3`, `I.2`, `I.1` | `integration` behaves like a real parent/container in Beads, so Orc treats it as control-only once classified. |
+| Unknown custom container | `X.1`, `X`, `P` | `(none)` from the `X` subtree | Unsupported container semantics are treated as unsafe; Orc suppresses the subtree until the type is classified. |
+| In-progress sibling | `Open` | `Open` | Current Beads builds exclude `in_progress` work from `bd ready`, and Orc keeps the same behavior by default. |
+
+## Exploration CLI
+
+Use `orc explore dispatch` to validate scheduler assumptions before changing the
+production queue logic.
+
+```bash
+# Run the whole scenario suite and write markdown + JSON reports
+orc explore dispatch --all
+
+# Run one scenario by name
+orc explore dispatch --scenario open-epic-with-children
+
+# Keep temporary Beads sandboxes for manual inspection
+orc explore dispatch --scenario nested-integration-container --keep-sandbox
+```
+
+By default, reports are written under `.orc/explore/dispatch-<timestamp>/`.
+Each scenario gets:
+
+- `report.md` - human-readable scenario definition, raw `bd` observations, Orc plan, and mismatches
+- `report.json` - machine-readable artifact for regression checks or future tooling
+
+Exit codes:
+
+- `0` - all selected scenarios matched expectations
+- `1` - one or more scenarios ran but mismatched expectations
+- `2` - one or more scenarios failed during sandbox setup or observation
 
 ## Configuration
 
@@ -65,7 +128,7 @@ file with all defaults.
 
 ## Architecture
 
-- **Queue Manager** — reads `bd ready --json`, selects next issue by priority/age
+- **Queue Manager (current MVP)** — reads `bd ready --json --exclude-type epic`, then selects the next issue by priority/age
 - **Worktree Manager** — creates isolated git worktrees from `origin/main`
 - **Amp Runner** — invokes Amp per-issue (stub adapter for MVP)
 - **Merge Manager** — rebase, verify, merge, push, and `bd close`
@@ -75,6 +138,8 @@ file with all defaults.
 ## Documents
 
 - [Product requirements document](docs/prds/0001-orc-mvp.md)
+- [Dispatch exploration PRD](docs/prds/orc-beads-dispatch-exploration-prd.md)
+- [Dispatch policy derived from exploration](docs/prds/orc-epic-orchestration-prd.md)
 
 ## Design Principles
 
