@@ -1,6 +1,6 @@
 # PRD: Orc Dispatch Policy Derived From Beads Exploration
 
-**Status:** Adopted for the exploration harness; not yet fully promoted into `orc start`  
+**Status:** Adopted for the exploration harness and promoted into `orc start`  
 **Date:** 2026-04-04  
 **Audience:** Orc engineering  
 **Scope:** How Orc should turn Beads `bd ready` output into a worker dispatch frontier with minimal surprises
@@ -201,22 +201,17 @@ need to be refined.
 
 ### `orc start`
 
-The production runner has not fully adopted this policy yet. Today it still uses
-the simpler MVP queue path in `src/orc/queue.py`, which excludes epics before
-selection and then chooses among remaining items by priority and age.
+The production runner now follows this policy in its main queue path:
 
-That means:
+1. fetch raw `bd ready --json --limit 0`
+2. preserve Beads ordering exactly
+3. fetch full issue metadata for structural safety checks
+4. filter out containers/control nodes, unsupported subtrees, and `in_progress`
+5. surface policy skip reasons in operator-facing scheduler/status output
 
-- `orc explore dispatch` is the source of truth for the intended dispatch policy
-- `orc start` is still the current executor implementation
+## Promotion Outcome
 
-Documenting both states explicitly avoids surprises while the policy is being
-promoted from exploration into production scheduling.
-
-## Acceptance Criteria For Promotion
-
-The policy in this document is ready to replace the MVP queue behavior when all
-of the following are true:
+The promotion work is complete when all of the following are true:
 
 1. the main queue path preserves raw Beads ordering instead of re-sorting it
 2. container types are filtered explicitly rather than only excluding `epic`

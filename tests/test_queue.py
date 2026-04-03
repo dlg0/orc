@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from orc.dispatch_policy import DispatchSkip
 from orc.queue import (
     BdIssue,
     IssueState,
@@ -18,8 +19,10 @@ from orc.queue import (
     get_issue_status,
     get_ready_issues,
     reconcile_issue_failures,
+    resolve_issue_id,
     rewrite_parent_as_integration_issue,
     select_next_issue,
+    summarize_skipped_issues,
     unclaim_issue,
 )
 
@@ -41,26 +44,26 @@ class TestSelectNextIssue:
         issue = _issue()
         assert select_next_issue([issue]) is issue
 
-    def test_selects_highest_priority(self) -> None:
+    def test_preserves_beads_order(self) -> None:
         low = _issue(id="low", priority=4)
         high = _issue(id="high", priority=1)
         normal = _issue(id="normal", priority=3)
-        assert select_next_issue([low, high, normal]) is high
+        assert select_next_issue([low, high, normal]) is low
 
-    def test_breaks_ties_by_oldest_created(self) -> None:
+    def test_does_not_reorder_by_created(self) -> None:
         newer = _issue(id="new", priority=2, created="2026-03-01T00:00:00Z")
         older = _issue(id="old", priority=2, created="2026-01-01T00:00:00Z")
-        assert select_next_issue([newer, older]) is older
+        assert select_next_issue([newer, older]) is newer
 
-    def test_priority_zero_treated_as_lowest(self) -> None:
+    def test_does_not_reorder_for_priority_zero(self) -> None:
         none_pri = _issue(id="none", priority=0)
         low = _issue(id="low", priority=4)
-        assert select_next_issue([none_pri, low]) is low
+        assert select_next_issue([none_pri, low]) is none_pri
 
-    def test_priority_zero_only(self) -> None:
+    def test_priority_zero_only_keeps_input_order(self) -> None:
         a = _issue(id="a", priority=0, created="2026-01-01T00:00:00Z")
         b = _issue(id="b", priority=0, created="2026-02-01T00:00:00Z")
-        assert select_next_issue([b, a]) is a
+        assert select_next_issue([b, a]) is b
 
     def test_skip_ids_filters_issues(self) -> None:
         a = _issue(id="a", priority=1)
@@ -84,8 +87,7 @@ class TestSelectNextIssue:
         ]
         result = select_next_issue(issues)
         assert result is not None
-        assert result.id == "u1"
-
+        assert result.id == "u2"
 
 class TestClaimIssue:
     def test_claim_success(self, tmp_path) -> None:
@@ -117,34 +119,41 @@ class TestGetReadyIssues:
         import json
 
         data = [
-            {"id": "i1", "title": "First", "priority": 2, "created_at": "2026-01-01T00:00:00Z"},
-            {"id": "i2", "title": "Second", "priority": 3, "created_at": "2026-02-01T00:00:00Z"},
+            {"id": "i1", "title": "First", "priority": 2, "created_at": "2026-01-01T00:00:00Z", "issue_type": "task", "status": "open"},
+            {"id": "i2", "title": "Second", "priority": 3, "created_at": "2026-02-01T00:00:00Z", "issue_type": "bug", "status": "open"},
         ]
         with patch("orc.queue.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = json.dumps(data)
+            mock_run.side_effect = [
+                Mock(returncode=0, stdout=json.dumps(data)),
+                Mock(returncode=0, stdout=json.dumps(data)),
+            ]
             result = get_ready_issues(tmp_path)
 
         assert isinstance(result, QueueResult)
         assert result.success is True
         assert result.error is None
         assert len(result.issues) == 2
+        assert len(result.raw_issues) == 2
         assert result.issues[0].id == "i1"
         assert result.issues[1].id == "i2"
 
-    def test_passes_unlimited_limit(self, tmp_path) -> None:
-        """Ensure get_ready_issues requests the full result set (--limit 0)."""
+    def test_requests_ready_and_full_issue_graph(self, tmp_path) -> None:
+        """Ensure get_ready_issues asks Beads for raw ready work and full metadata."""
         with patch("orc.queue.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "[]"
+            mock_run.side_effect = [
+                Mock(returncode=0, stdout="[]"),
+                Mock(returncode=0, stdout="[]"),
+            ]
             get_ready_issues(tmp_path)
-            cmd = mock_run.call_args[0][0]
-            assert cmd == ["bd", "ready", "--json", "--limit", "0"]
+            assert mock_run.call_args_list[0][0][0] == ["bd", "ready", "--json", "--limit", "0"]
+            assert mock_run.call_args_list[1][0][0] == ["bd", "list", "--all", "--json", "--limit", "0"]
 
     def test_success_empty_queue(self, tmp_path) -> None:
         with patch("orc.queue.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "[]"
+            mock_run.side_effect = [
+                Mock(returncode=0, stdout="[]"),
+                Mock(returncode=0, stdout="[]"),
+            ]
             result = get_ready_issues(tmp_path)
 
         assert result.success is True
@@ -198,6 +207,40 @@ class TestGetReadyIssues:
         assert result.success is False
         assert "non-list" in result.error
         assert result.issues == []
+
+    def test_filters_containers_and_tracks_policy_skips(self, tmp_path) -> None:
+        import json
+
+        ready_rows = [
+            {"id": "child", "title": "Child", "priority": 2, "created_at": "2026-01-01T00:00:00Z", "issue_type": "task", "status": "open", "parent": "epic-1"},
+            {"id": "epic-1", "title": "Epic", "priority": 2, "created_at": "2026-01-01T00:00:00Z", "issue_type": "epic", "status": "open"},
+        ]
+        all_rows = ready_rows
+
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                Mock(returncode=0, stdout=json.dumps(ready_rows)),
+                Mock(returncode=0, stdout=json.dumps(all_rows)),
+            ]
+            result = get_ready_issues(tmp_path)
+
+        assert result.success is True
+        assert [issue.id for issue in result.issues] == ["child"]
+        assert [issue.id for issue in result.raw_issues] == ["child", "epic-1"]
+        assert len(result.skipped) == 1
+        assert result.skipped[0].issue_id == "epic-1"
+        assert result.skipped[0].category == "container/control"
+
+    def test_fails_closed_when_full_issue_graph_fetch_fails(self, tmp_path) -> None:
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                Mock(returncode=0, stdout="[]"),
+                Mock(returncode=1, stdout="", stderr="bd list exploded"),
+            ]
+            result = get_ready_issues(tmp_path)
+
+        assert result.success is False
+        assert result.error == "bd list exploded"
 
 
 class TestUnclaimIssue:
@@ -577,21 +620,27 @@ class TestPaginatedHeldOverlap:
     def test_scheduler_finds_runnable_beyond_held_page(self) -> None:
         """Simulates a 15-issue ready queue where the first 10 are held."""
         held_ids = {f"held-{i}" for i in range(10)}
-        all_issues = [
+        dispatchable_issues = [
             _issue(id=f"held-{i}", priority=3) for i in range(10)
         ] + [
             _issue(id=f"runnable-{i}", priority=2) for i in range(5)
         ]
+        queue_result = QueueResult(
+            issues=dispatchable_issues,
+            raw_issues=dispatchable_issues + [_issue(id="epic-1")],
+            skipped=[DispatchSkip(issue_id="epic-1", issue_type="epic", status="open", category="container/control", reason="container/control issue")],
+        )
 
         issue_failures = {iid: {"category": "stale", "action": "hold_for_retry"} for iid in held_ids}
 
-        breakdown = compute_queue_breakdown(all_issues, issue_failures)
-        assert breakdown.beads_ready == 15
+        breakdown = compute_queue_breakdown(queue_result, issue_failures)
+        assert breakdown.beads_ready == 16
+        assert breakdown.policy_skipped == 1
         assert breakdown.held_and_ready == 10
         assert breakdown.runnable == 5
         assert not breakdown.has_held_blocking
 
-        selected = select_next_issue(all_issues, skip_ids=held_ids)
+        selected = select_next_issue(dispatchable_issues, skip_ids=held_ids)
         assert selected is not None
         assert selected.id.startswith("runnable-")
 
@@ -602,8 +651,23 @@ class TestPaginatedHeldOverlap:
 
         breakdown = compute_queue_breakdown(all_issues, issue_failures)
         assert breakdown.beads_ready == 10
+        assert breakdown.policy_skipped == 0
         assert breakdown.runnable == 0
         assert breakdown.has_held_blocking
+
+
+class TestSummarizeSkippedIssues:
+    def test_groups_by_category(self) -> None:
+        skipped = [
+            DispatchSkip(issue_id="epic-1", issue_type="epic", status="open", category="container/control", reason="x"),
+            DispatchSkip(issue_id="epic-2", issue_type="epic", status="open", category="container/control", reason="x"),
+            DispatchSkip(issue_id="x.1", issue_type="task", status="open", category="unsupported subtree", reason="x", suppressed_by="x"),
+        ]
+
+        assert summarize_skipped_issues(skipped) == {
+            "container/control": 2,
+            "unsupported subtree": 1,
+        }
 
 
 # --- rewrite_parent_as_integration_issue ---
@@ -654,3 +718,57 @@ class TestGetChildrenIds:
         with patch("orc.queue.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 1
             assert get_children_ids("parent-1") == []
+
+
+class TestResolveIssueId:
+    def test_full_id_returned_unchanged(self) -> None:
+        assert resolve_issue_id("orc-1wf") == "orc-1wf"
+
+    def test_suffix_resolved_via_bd(self) -> None:
+        import json as json_mod
+
+        data = [{"id": "orc-1wf", "title": "Test"}]
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json_mod.dumps(data)
+            assert resolve_issue_id("1wf") == "orc-1wf"
+            mock_run.assert_called_once()
+            cmd = mock_run.call_args[0][0]
+            assert cmd == ["bd", "show", "1wf", "--json"]
+
+    def test_suffix_not_found_raises(self) -> None:
+        import pytest
+
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stderr = 'no issue found matching "zzz"'
+            with pytest.raises(ValueError, match="Cannot resolve issue suffix 'zzz'"):
+                resolve_issue_id("zzz")
+
+    def test_ambiguous_suffix_raises(self) -> None:
+        import json as json_mod
+        import pytest
+
+        data = [{"id": "orc-1ab"}, {"id": "proj-1ab"}]
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json_mod.dumps(data)
+            with pytest.raises(ValueError, match="Ambiguous suffix '1ab'"):
+                resolve_issue_id("1ab")
+
+    def test_os_error_raises(self) -> None:
+        import pytest
+
+        with patch("orc.queue.subprocess.run", side_effect=OSError("no bd")):
+            with pytest.raises(ValueError, match="Cannot resolve"):
+                resolve_issue_id("1wf")
+
+    def test_passes_cwd(self, tmp_path) -> None:
+        import json as json_mod
+
+        data = [{"id": "orc-1wf"}]
+        with patch("orc.queue.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = json_mod.dumps(data)
+            resolve_issue_id("1wf", cwd=tmp_path)
+            assert mock_run.call_args[1]["cwd"] == tmp_path

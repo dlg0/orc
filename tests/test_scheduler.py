@@ -9,9 +9,10 @@ import pytest
 
 from orc.amp_runner import AmpResult, ResultType, StubAmpRunner
 from orc.config import OrchestratorConfig
+from orc.dispatch_policy import DispatchSkip
 from orc.evaluator import StubEvaluator
 from orc.events import EventLog
-from orc.queue import BdIssue, QueueResult
+from orc.queue import BdIssue, IssueState, QueueResult
 from orc.scheduler import run_loop
 from orc.state import (
     FailureAction,
@@ -1214,6 +1215,7 @@ def test_resume_candidate_amp_running_success(repo_root: Path, state_dir: Path) 
     with (
         patch("orc.scheduler.get_ready_issues", return_value=QueueResult()),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_issue_state", return_value=IssueState.open),
     ):
         run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
 
@@ -1245,6 +1247,7 @@ def test_resume_candidate_amp_finished_skips_to_sync(repo_root: Path, state_dir:
     with (
         patch("orc.scheduler.get_ready_issues", return_value=QueueResult()),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_issue_state", return_value=IssueState.open),
     ):
         run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
 
@@ -1271,6 +1274,7 @@ def test_resume_candidate_ready_to_merge_skips_amp_and_eval(repo_root: Path, sta
     with (
         patch("orc.scheduler.get_ready_issues", return_value=QueueResult()),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_issue_state", return_value=IssueState.open),
     ):
         run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
 
@@ -1320,6 +1324,7 @@ def test_resume_records_events(repo_root: Path, state_dir: Path) -> None:
     with (
         patch("orc.scheduler.get_ready_issues", return_value=QueueResult()),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_issue_state", return_value=IssueState.open),
     ):
         run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
 
@@ -1329,11 +1334,63 @@ def test_resume_records_events(repo_root: Path, state_dir: Path) -> None:
     assert "resume_succeeded" in event_types
 
 
+def test_resume_candidate_closed_issue_discards(repo_root: Path, state_dir: Path) -> None:
+    """Resume candidate for a closed issue is discarded without running amp."""
+    store = StateStore(state_dir)
+    state = OrchestratorState(
+        mode=OrchestratorMode.running,
+        resume_candidate=_make_resume_candidate(stage="amp_running"),
+    )
+    store.save(state)
+
+    runner = StubAmpRunner.completed()
+    mock_worktree_mgr = MagicMock()
+    mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = True
+
+    with (
+        patch("orc.scheduler.get_ready_issues", return_value=QueueResult()),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_issue_state", return_value=IssueState.closed),
+    ):
+        run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
+
+    state = StateStore(state_dir).load()
+    assert state.resume_candidate is None
+    assert state.active_run is None
+    assert state.run_history == []  # amp was never invoked
+
+
+def test_resume_candidate_missing_issue_discards(repo_root: Path, state_dir: Path) -> None:
+    """Resume candidate for a missing issue is discarded without running amp."""
+    store = StateStore(state_dir)
+    state = OrchestratorState(
+        mode=OrchestratorMode.running,
+        resume_candidate=_make_resume_candidate(stage="amp_running"),
+    )
+    store.save(state)
+
+    runner = StubAmpRunner.completed()
+    mock_worktree_mgr = MagicMock()
+    mock_worktree_mgr.return_value.ensure_resumable_worktree.return_value = True
+
+    with (
+        patch("orc.scheduler.get_ready_issues", return_value=QueueResult()),
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.scheduler.get_issue_state", return_value=IssueState.missing),
+    ):
+        run_loop(repo_root, state_dir, OrchestratorConfig(), runner)
+
+    state = StateStore(state_dir).load()
+    assert state.resume_candidate is None
+    assert state.active_run is None
+    assert state.run_history == []
+
+
 # --- parent promotion tests ---
 
 
-def test_parent_promoted_after_last_child_closes(repo_root: Path, state_dir: Path) -> None:
-    """When a child issue is closed and all siblings are closed, the parent is promoted."""
+def test_closed_children_do_not_force_parent_dispatch(repo_root: Path, state_dir: Path) -> None:
+    """Containers stay non-dispatchable even after the last child closes."""
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     runner = StubAmpRunner.completed()
@@ -1349,8 +1406,19 @@ def test_parent_promoted_after_last_child_closes(repo_root: Path, state_dir: Pat
         if call_count == 1:
             return QueueResult(issues=[child])
         if call_count == 2:
-            # Parent should now appear in the queue after promotion
-            return QueueResult(issues=[parent])
+            return QueueResult(
+                issues=[],
+                raw_issues=[parent],
+                skipped=[
+                    DispatchSkip(
+                        issue_id="parent-1",
+                        issue_type="epic",
+                        status="open",
+                        category="container/control",
+                        reason="container/control issue",
+                    )
+                ],
+            )
         return QueueResult()
 
     mock_worktree_mgr = MagicMock()
@@ -1368,17 +1436,12 @@ def test_parent_promoted_after_last_child_closes(repo_root: Path, state_dir: Pat
         run_loop(repo_root, state_dir, config, runner)
 
     state = StateStore(state_dir).load()
-    # Both child and parent should have been processed
-    assert len(state.run_history) == 2
+    assert len(state.run_history) == 1
     assert state.run_history[0]["issue_id"] == "child-1"
-    assert state.run_history[1]["issue_id"] == "parent-1"
 
     events = EventLog(state_dir).all()
     event_types = [e["event_type"] for e in events]
-    assert "parent_promoted" in event_types
-    promoted_event = next(e for e in events if e["event_type"] == "parent_promoted")
-    assert promoted_event["data"]["parent_id"] == "parent-1"
-    assert promoted_event["data"]["triggered_by"] == "child-1"
+    assert "parent_promoted" not in event_types
 
 
 def test_no_promotion_when_siblings_still_open(repo_root: Path, state_dir: Path) -> None:
@@ -1456,8 +1519,8 @@ def test_no_promotion_when_no_parent(repo_root: Path, state_dir: Path) -> None:
     assert "parent_promoted" not in event_types
 
 
-def test_promotion_clears_parent_failure_record(repo_root: Path, state_dir: Path) -> None:
-    """When a parent is promoted, any existing failure record is cleared."""
+def test_closed_children_clear_parent_failure_record(repo_root: Path, state_dir: Path) -> None:
+    """When children finish, stale local holds on the parent are cleared."""
     store = StateStore(state_dir)
     state = OrchestratorState(
         mode=OrchestratorMode.running,
@@ -1480,7 +1543,19 @@ def test_promotion_clears_parent_failure_record(repo_root: Path, state_dir: Path
         if call_count == 1:
             return QueueResult(issues=[child])
         if call_count == 2:
-            return QueueResult(issues=[parent])
+            return QueueResult(
+                issues=[],
+                raw_issues=[parent],
+                skipped=[
+                    DispatchSkip(
+                        issue_id="parent-1",
+                        issue_type="epic",
+                        status="open",
+                        category="container/control",
+                        reason="container/control issue",
+                    )
+                ],
+            )
         return QueueResult()
 
     mock_worktree_mgr = MagicMock()
@@ -1498,8 +1573,32 @@ def test_promotion_clears_parent_failure_record(repo_root: Path, state_dir: Path
         run_loop(repo_root, state_dir, config, runner)
 
     state = StateStore(state_dir).load()
-    # parent-1 should not be in failures (cleared by promotion, then processed)
+    assert len(state.run_history) == 1
     assert "parent-1" not in state.issue_failures
+
+
+def test_policy_skips_are_reported_in_scheduler_output(repo_root: Path, state_dir: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    runner = StubAmpRunner()
+
+    skipped = DispatchSkip(
+        issue_id="epic-1",
+        issue_type="epic",
+        status="open",
+        category="container/control",
+        reason="container/control issue",
+    )
+
+    with patch(
+        "orc.scheduler.get_ready_issues",
+        return_value=QueueResult(issues=[], raw_issues=[_make_issue("epic-1", "Epic")], skipped=[skipped]),
+    ):
+        run_loop(repo_root, state_dir, config, runner)
+
+    output = capsys.readouterr().out
+    assert "Backlog: 1 beads-ready, 1 skipped by policy, 0 held, 0 runnable" in output
+    assert "Policy skips: 1 container/control" in output
 
 
 def test_pseudo_parent_no_promotion(repo_root: Path, state_dir: Path) -> None:

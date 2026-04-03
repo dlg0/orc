@@ -14,7 +14,14 @@ from orc.control import (
     stop_orchestrator,
 )
 from orc.events import EventLog
-from orc.queue import compute_queue_breakdown, get_issue_status, get_ready_issues, reconcile_issue_failures, resolve_issue_id
+from orc.queue import (
+    compute_queue_breakdown,
+    get_issue_status,
+    get_ready_issues,
+    reconcile_issue_failures,
+    resolve_issue_id,
+    summarize_skipped_issues,
+)
 from orc.lock import OrchestratorLock
 from orc.state import (
     OrchestratorMode,
@@ -68,12 +75,22 @@ def status() -> None:
 
     queue_result = get_ready_issues(state_dir.parent)
     if queue_result.success:
-        breakdown = compute_queue_breakdown(queue_result.issues, state.issue_failures)
+        breakdown = compute_queue_breakdown(queue_result, state.issue_failures)
         click.echo(
             f"Queue: {breakdown.beads_ready} beads-ready, "
+            f"{breakdown.policy_skipped} skipped by policy, "
             f"{breakdown.held_and_ready} held, "
             f"{breakdown.runnable} runnable"
         )
+        if queue_result.skipped:
+            click.echo("Policy-skipped ready issues:")
+            for category, count in summarize_skipped_issues(queue_result.skipped).items():
+                examples = [skip.issue_id for skip in queue_result.skipped if skip.category == category][:3]
+                example_text = ", ".join(examples)
+                extra = ""
+                if count > len(examples):
+                    extra = f" (+{count - len(examples)} more)"
+                click.echo(f"  {category}: {count} [{example_text}]{extra}")
     else:
         click.echo(f"Queue: error fetching issues ({queue_result.error})")
 

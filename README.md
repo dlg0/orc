@@ -51,8 +51,8 @@ orc explore dispatch --all
 - `bd ready` is the Beads-owned answer to "what is ready right now?"
 - Orc dispatchability is the Orc-owned answer to "what is safe to hand to a worker right now?"
 
-The exploration harness behind `orc explore dispatch` is the reference for the
-settled policy we plan to promote into the main scheduler. That policy is:
+The exploration harness behind `orc explore dispatch` established the policy the
+main scheduler now follows. That policy is:
 
 1. Preserve the exact order returned by `bd ready`.
 2. Dispatch only worker leaf types: `task`, `bug`, `feature`, and `chore`.
@@ -128,7 +128,7 @@ file with all defaults.
 
 ## Architecture
 
-- **Queue Manager (current MVP)** — reads `bd ready --json --exclude-type epic`, then selects the next issue by priority/age
+- **Queue Manager** — reads raw `bd ready`, preserves Beads ordering, and applies Orc dispatch-safety filtering for containers, unsupported types, and local holds
 - **Worktree Manager** — creates isolated git worktrees from `origin/main`
 - **Amp Runner** — invokes Amp per-issue (stub adapter for MVP)
 - **Merge Manager** — rebase, verify, merge, push, and `bd close`

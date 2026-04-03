@@ -9,24 +9,26 @@ from pathlib import Path
 
 import click
 
-logger = logging.getLogger(__name__)
-
 from orc.amp_runner import AmpRunner, IssueContext, ResultType
 from orc.config import OrchestratorConfig
 from orc.evaluator import IssueEvaluator
 from orc.events import EventLog, EventType
 from orc.queue import (
+    IssueState,
     claim_issue,
     close_issue,
+    compute_queue_breakdown,
     create_issue,
     get_children_all_closed,
     get_children_ids,
     get_issue_parent,
+    get_issue_state,
     get_issue_status,
     get_ready_issues,
     reconcile_issue_failures,
     rewrite_parent_as_integration_issue,
     select_next_issue,
+    summarize_skipped_issues,
     unclaim_issue,
 )
 from orc.state import (
@@ -41,6 +43,8 @@ from orc.state import (
 )
 from orc.workflow import WorkflowPhase
 from orc.worktree import WorktreeInfo, WorktreeManager
+
+logger = logging.getLogger(__name__)
 
 # Local alias for conciseness in checkpoint calls.
 RunStage = WorkflowPhase
@@ -110,7 +114,7 @@ def _create_followup_issue(
     """Create a follow-up bd issue when post-merge evaluation fails.
 
     The follow-up is created as a sibling of the original (same parent).
-    The original issue is closed, and the follow-up is prioritized.
+    The original issue is closed, and Beads priority nudges future ordering.
 
     Returns the new issue ID, or None if creation failed.
     """
@@ -177,10 +181,6 @@ def _create_followup_issue(
     original_status = get_issue_status(original_issue_id, cwd=repo_root)
     if original_status != "closed":
         close_issue(original_issue_id, cwd=repo_root)
-
-    # Prioritize the follow-up for next selection
-    state.promoted_parent = new_id
-    _save_with_requests(store, state, state_dir)
 
     return new_id
 
@@ -377,6 +377,20 @@ def _attempt_resume(
         state.resume_candidate = None
         _save_with_requests(store, state, state_dir)
         events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "worktree_not_recoverable"})
+        return False
+
+    # Validate the issue is still relevant in beads before resuming
+    bd_state = get_issue_state(issue_id, cwd=repo_root)
+    if bd_state in (IssueState.closed, IssueState.missing):
+        click.echo(f"[RESUME] {issue_id} is {bd_state.value} in beads — discarding candidate")
+        state.resume_candidate = None
+        _save_with_requests(store, state, state_dir)
+        events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": f"issue_{bd_state.value}"})
+        return False
+    if bd_state == IssueState.unknown:
+        click.echo(f"[RESUME] {issue_id} beads state unknown (transient failure) — deferring")
+        events.record(EventType.resume_failed, {"issue_id": issue_id, "reason": "bd_state_unknown"})
+        time.sleep(_QUEUE_RETRY_DELAY)
         return False
 
     # Promote resume_candidate to active_run
@@ -664,24 +678,36 @@ def run_loop(
             events.record(EventType.error, {"stage": "queue", "error": queue_result.error, "retries_exhausted": True})
             continue
 
-        click.echo(f"[SCHEDULER] Backlog: {len(queue_result.issues)} ready issue(s), {len(failed_ids)} held")
+        breakdown = compute_queue_breakdown(queue_result, state.issue_failures)
+        click.echo(
+            f"[SCHEDULER] Backlog: {breakdown.beads_ready} beads-ready, "
+            f"{breakdown.policy_skipped} skipped by policy, "
+            f"{breakdown.held_and_ready} held, {breakdown.runnable} runnable"
+        )
+        if queue_result.skipped:
+            skip_summary = ", ".join(
+                f"{count} {category}"
+                for category, count in summarize_skipped_issues(queue_result.skipped).items()
+            )
+            click.echo(f"[SCHEDULER] Policy skips: {skip_summary}")
 
-        # If --only is set, force-select that issue; otherwise honour promoted parent
-        priority_id = only_issue or state.promoted_parent
         click.echo("[SCHEDULER] Selecting next issue ...")
-        issue = select_next_issue(queue_result.issues, skip_ids=failed_ids, priority_id=priority_id)
-        # Clear promoted_parent after selection attempt (one-shot)
+        issue = select_next_issue(queue_result.issues, skip_ids=failed_ids, priority_id=only_issue)
+        # Clear any legacy local queue override after selection attempt.
         if state.promoted_parent:
             state.promoted_parent = None
             _save_with_requests(store, state, state_dir)
 
         if issue is None:
-            total_ready = len(queue_result.issues)
-            held_count = len(failed_ids)
-            if total_ready > 0 and held_count > 0:
+            if breakdown.beads_ready > 0:
+                reasons: list[str] = []
+                if breakdown.policy_skipped:
+                    reasons.append(f"{breakdown.policy_skipped} skipped by dispatch policy")
+                if breakdown.held_and_ready:
+                    reasons.append(f"{breakdown.held_and_ready} held locally")
                 click.echo(
-                    f"[SCHEDULER] No runnable issues -- {total_ready} beads-ready "
-                    f"but {held_count} held locally. Use 'orc status' or 'orc unhold' to inspect."
+                    f"[SCHEDULER] No runnable issues -- {breakdown.beads_ready} beads-ready "
+                    f"but {' and '.join(reasons)}. Use 'orc status' or 'orc unhold' to inspect."
                 )
             else:
                 click.echo("[SCHEDULER] No ready issues -- queue exhausted.")
@@ -1068,27 +1094,22 @@ def _check_parent_promotion(
     state: OrchestratorState,
     events: EventLog,
 ) -> None:
-    """After closing *issue_id*, check if its parent should be promoted.
+    """After closing *issue_id*, clear stale local holds on its parent.
 
-    If *issue_id* has a parent and all siblings are now closed,
-    set ``state.promoted_parent`` so the next queue selection prioritizes it.
+    Orc no longer reorders queue selection around parent promotion; Beads owns
+    readiness and ordering. When all children are closed we only clear any
+    local hold record on the parent so future Beads-ready appearances are not
+    blocked by stale orchestrator state.
     """
     parent_id = get_issue_parent(issue_id, cwd=repo_root)
     if not parent_id:
         return
 
     all_closed = get_children_all_closed(parent_id, cwd=repo_root)
-    if all_closed:
-        click.echo(f"[PROMOTE] {parent_id} all children closed — promoting parent")
-        events.set_phase(WorkflowPhase.parent_promotion)
-        state.promoted_parent = parent_id
-        # Clear any failure record so the parent is not skipped
+    if all_closed and parent_id in state.issue_failures:
+        click.echo(f"[PARENT] {parent_id} all children closed — clearing local hold")
         state.issue_failures.pop(parent_id, None)
         _save_with_requests(store, state, state_dir)
-        events.record(EventType.parent_promoted, {
-            "parent_id": parent_id,
-            "triggered_by": issue_id,
-        })
 
 
 def _clear_active(store: StateStore, state_dir: Path, state: OrchestratorState) -> None:
@@ -1160,6 +1181,3 @@ def _try_cleanup(worktree_mgr: WorktreeManager, wt_info) -> None:
         worktree_mgr.cleanup_worktree(wt_info)
     except Exception:
         logger.debug("Worktree cleanup failed for %s", wt_info, exc_info=True)
-
-
-

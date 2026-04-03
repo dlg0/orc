@@ -56,7 +56,7 @@ def load_snapshot(repo_root: Path, state_dir: Path) -> DashboardSnapshot:
 
     queue_result = get_ready_issues(repo_root)
     recent_events = EventLog(state_dir).recent(100)
-    breakdown = compute_queue_breakdown(queue_result.issues, state.issue_failures)
+    breakdown = compute_queue_breakdown(queue_result, state.issue_failures)
 
     return DashboardSnapshot(
         state=state,

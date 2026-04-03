@@ -9,7 +9,8 @@ from unittest.mock import patch
 from click.testing import CliRunner
 
 from orc.cli import main
-from orc.queue import QueueResult
+from orc.dispatch_policy import DispatchSkip
+from orc.queue import BdIssue, QueueResult
 from orc.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage, StateStore
 
 
@@ -294,6 +295,47 @@ def test_status_shows_held_issues(tmp_path: Path) -> None:
             assert "Held issues: 1" in result.output
             assert "[issue_needs_rework]" in result.output
             assert "bz7: Tests failing" in result.output
+
+
+def test_status_shows_policy_skips(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".orc"
+    state_dir.mkdir(parents=True)
+    StateStore(state_dir).save(OrchestratorState(mode=OrchestratorMode.idle))
+
+    queue_result = QueueResult(
+        issues=[],
+        raw_issues=[
+            BdIssue(id="epic-1", title="Epic", priority=2, created="2026-01-01"),
+            BdIssue(id="x.1", title="Child", priority=2, created="2026-01-01"),
+        ],
+        skipped=[
+            DispatchSkip(
+                issue_id="epic-1",
+                issue_type="epic",
+                status="open",
+                category="container/control",
+                reason="container/control issue",
+            ),
+            DispatchSkip(
+                issue_id="x.1",
+                issue_type="task",
+                status="open",
+                category="unsupported subtree",
+                reason="inside unsupported container subtree",
+                suppressed_by="x",
+            ),
+        ],
+    )
+
+    with patch("orc.cli._get_state_dir", return_value=state_dir):
+        with patch("orc.cli.get_ready_issues", return_value=queue_result):
+            runner = CliRunner()
+            result = runner.invoke(main, ["status"])
+            assert result.exit_code == 0
+            assert "Queue: 2 beads-ready, 2 skipped by policy, 0 held, 0 runnable" in result.output
+            assert "Policy-skipped ready issues:" in result.output
+            assert "container/control: 1 [epic-1]" in result.output
+            assert "unsupported subtree: 1 [x.1]" in result.output
 
 
 def test_status_normalizes_legacy_held_issues(tmp_path: Path) -> None:
