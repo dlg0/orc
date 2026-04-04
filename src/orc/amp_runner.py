@@ -489,6 +489,84 @@ class RealAmpRunner:
         return None
 
     @staticmethod
+    def run_merge_recovery(
+        *,
+        issue_id: str,
+        thread_id: str | None,
+        worktree_path: Path,
+        repo_root: Path,
+        base_branch: str = "main",
+        mode: str = "rush",
+        timeout: int = 600,
+    ) -> tuple[bool, str]:
+        """Launch a rush-mode agent to attempt merge recovery.
+
+        The agent is given the original thread context and tasked solely
+        with rebasing, merging to the base branch, and pushing.
+
+        Returns (success, summary_or_error).
+        """
+        amp_path = shutil.which("amp")
+        if amp_path is None:
+            return False, "amp CLI not found in PATH"
+
+        thread_ref = ""
+        if thread_id:
+            tid = thread_id if thread_id.startswith("T-") else f"T-{thread_id}"
+            thread_ref = (
+                f"\nRefer to the original work thread @{tid} for context "
+                "on what was implemented.\n"
+            )
+
+        prompt = (
+            f"MERGE RECOVERY for issue {issue_id}.\n"
+            f"{thread_ref}"
+            f"The agent completed its work but the merge to {base_branch} did not land.\n"
+            f"Your ONLY job is to land the work on {base_branch}:\n"
+            f"1. Inspect the current state: git status, git log --oneline -5\n"
+            f"2. Rebase onto the latest upstream:\n"
+            f"   git fetch origin && git rebase origin/{base_branch}\n"
+            f"3. Merge to the base branch:\n"
+            f"   git -C {repo_root} checkout {base_branch}\n"
+            f"   git -C {repo_root} pull origin {base_branch}\n"
+            f'   git -C {repo_root} merge --no-ff $(git -C {worktree_path} rev-parse --abbrev-ref HEAD) -m "Merge $(git -C {worktree_path} rev-parse --abbrev-ref HEAD)"\n'
+            f"   git -C {repo_root} push origin {base_branch}\n"
+            f"\n"
+            f"Do NOT make code changes. Do NOT close the issue. Only merge and push.\n"
+            f"If there are conflicts, resolve them minimally and push.\n"
+        )
+
+        cmd = [
+            amp_path,
+            "-x",
+            prompt,
+            "--mode",
+            mode,
+            "--dangerously-allow-all",
+            "--no-notifications",
+            "--no-color",
+            "--archive",
+        ]
+
+        logger.info("Running merge recovery agent for %s in %s", issue_id, worktree_path)
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(worktree_path),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=build_worktree_env(worktree_path),
+            )
+        except subprocess.TimeoutExpired:
+            return False, f"Merge recovery agent timed out after {timeout}s"
+
+        if proc.returncode != 0:
+            return False, f"Merge recovery agent exited with code {proc.returncode}"
+
+        return True, "Merge recovery agent completed"
+
+    @staticmethod
     def _detect_commits(worktree_path: Path) -> dict | None:
         """Check if the worktree branch has new commits not on any remote branch."""
         try:

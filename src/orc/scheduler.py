@@ -9,6 +9,10 @@ from pathlib import Path
 
 import click
 
+from orc.already_implemented import (
+    AlreadyImplementedChecker,
+    AmpAlreadyImplementedChecker,
+)
 from orc.amp_runner import AmpRunner, IssueContext, ResultType
 from orc.config import OrchestratorConfig
 from orc.evaluator import IssueEvaluator
@@ -17,6 +21,7 @@ from orc.queue import (
     IssueState,
     claim_issue,
     close_issue,
+    reopen_issue,
     compute_queue_breakdown,
     create_issue,
     get_children_all_closed,
@@ -577,6 +582,7 @@ def run_loop(
     config: OrchestratorConfig,
     runner: AmpRunner,
     evaluator: IssueEvaluator | None = None,
+    already_implemented_checker: AlreadyImplementedChecker | None = None,
     fail_fast: bool = False,
     only_issue: str | None = None,
 ) -> None:
@@ -729,6 +735,51 @@ def run_loop(
         click.echo(_ISSUE_DIVIDER)
         click.echo(f"[SELECT] #{issue_num} {issue.id} -- {issue.title}")
         click.echo(_ISSUE_DIVIDER)
+
+        # Already-implemented preflight check
+        if already_implemented_checker is not None:
+            events.set_phase(WorkflowPhase.already_implemented_check)
+            click.echo(f"[PREFLIGHT] {issue.id} checking if already implemented ...")
+            ai_result = already_implemented_checker.check(
+                issue_id=issue.id,
+                title=issue.title,
+                description=issue.description,
+                acceptance_criteria=issue.acceptance_criteria,
+                cwd=repo_root,
+            )
+            if ai_result.should_skip:
+                click.echo(
+                    f"[PREFLIGHT] {issue.id} {ai_result.confidence.value}: {ai_result.summary}"
+                )
+                events.record(EventType.already_implemented_detected, {
+                    "issue_id": issue.id,
+                    "confidence": ai_result.confidence.value,
+                    "summary": ai_result.summary,
+                    "evidence": ai_result.evidence,
+                })
+                _record_failure(
+                    store, state_dir, state, issue.id,
+                    FailureCategory.issue_needs_rework,
+                    WorkflowPhase.already_implemented_check.value,
+                    f"Already implemented ({ai_result.confidence.value}): {ai_result.summary}",
+                )
+                _record_run(
+                    store, state_dir, state, issue.id,
+                    "skipped_already_implemented",
+                    ai_result.summary,
+                    amp_mode=config.amp_mode,
+                    extra={
+                        "confidence": ai_result.confidence.value,
+                        "evidence": ai_result.evidence,
+                    },
+                )
+                if fail_fast:
+                    click.echo("[SCHEDULER] Fail-fast: stopping after already-implemented detection")
+                    store.transition(state, OrchestratorMode.idle)
+                    events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
+                    return
+                continue
+            click.echo(f"[PREFLIGHT] {issue.id} not already implemented — proceeding")
 
         # Create worktree
         click.echo(f"[WORKTREE] {issue.id} creating worktree ...")
@@ -962,25 +1013,55 @@ def run_loop(
                 "stage": "post_merge_sync",
                 "error": sync_error,
             })
-            # If sync fails, the agent may not have merged. Record failure.
-            _record_failure(
-                store, state_dir, state, issue.id, FailureCategory.issue_needs_rework,
-                WorkflowPhase.post_merge_eval.value,
-                f"repo sync failed: {sync_error}", wt_info.branch_name, wt_path,
-                extra=ctx_extra or None,
+
+            # --- Merge recovery: launch a rush-mode agent to land the work ---
+            click.echo(f"[MERGE-RECOVERY] {issue.id} launching rush agent to land work ...")
+            _update_checkpoint(store, state_dir, state, RunStage.merge_recovery, events=events)
+            events.record(EventType.merge_recovery_started, {"issue_id": issue.id})
+
+            from orc.amp_runner import RealAmpRunner
+
+            recovery_ok, recovery_msg = RealAmpRunner.run_merge_recovery(
+                issue_id=issue.id,
+                thread_id=result.thread_id,
+                worktree_path=wt_info.worktree_path,
+                repo_root=repo_root,
+                base_branch=config.base_branch,
             )
-            _unclaim_active(state, events, repo_root)
-            _clear_active(store, state_dir, state)
-            _record_run(store, state_dir, state, issue.id, "failed",
-                        f"repo sync failed: {sync_error}",
-                        wt_info.branch_name, wt_path, amp_mode=config.amp_mode,
-                        extra=ctx_extra or None)
-            if fail_fast:
-                click.echo("[SCHEDULER] Fail-fast: stopping after sync failure")
+            events.record(EventType.merge_recovery_finished, {
+                "issue_id": issue.id,
+                "success": recovery_ok,
+                "summary": recovery_msg,
+            })
+
+            if recovery_ok:
+                click.echo(f"[MERGE-RECOVERY] {issue.id} agent finished — re-syncing ...")
+                sync_ok, sync_error = _sync_repo_root(repo_root, config.base_branch)
+
+            if not sync_ok:
+                # Recovery exhausted — reopen the issue and stop orc
+                click.echo(f"[MERGE-RECOVERY] {issue.id} FAILED: merge not landed after recovery")
+                reopen_issue(issue.id, cwd=repo_root)
+                click.echo(f"[MERGE-RECOVERY] {issue.id} reopened — stopping orchestrator")
+                _record_failure(
+                    store, state_dir, state, issue.id, FailureCategory.issue_needs_rework,
+                    WorkflowPhase.merge_recovery.value,
+                    f"merge recovery exhausted: {sync_error}", wt_info.branch_name, wt_path,
+                    extra=ctx_extra or None,
+                )
+                _unclaim_active(state, events, repo_root)
+                _clear_active(store, state_dir, state)
+                _record_run(store, state_dir, state, issue.id, "failed",
+                            f"merge recovery exhausted: {sync_error}",
+                            wt_info.branch_name, wt_path, amp_mode=config.amp_mode,
+                            extra=ctx_extra or None)
                 store.transition(state, OrchestratorMode.idle)
-                events.record(EventType.state_changed, {"to": "idle", "reason": "fail_fast"})
+                events.record(EventType.state_changed, {
+                    "to": "idle", "reason": "merge_recovery_exhausted",
+                })
                 return
-            continue
+
+            click.echo(f"[MERGE-RECOVERY] {issue.id} sync OK after recovery")
 
         # Check for pause/stop before evaluation
         if _check_stop_at_safe_point(store, state_dir, state, events, repo_root, "before_eval"):

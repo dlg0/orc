@@ -15,6 +15,7 @@ class WorkflowPhase(str, Enum):
     """Ordered phases of an issue's lifecycle through the orchestrator."""
 
     preflight = "preflight"
+    already_implemented_check = "already_implemented_check"
     worktree_created = "worktree_created"
     claimed = "claimed"
     amp_running = "amp_running"
@@ -25,6 +26,7 @@ class WorkflowPhase(str, Enum):
     evaluation_running = "evaluation_running"
     ready_to_merge = "ready_to_merge"
     merge_running = "merge_running"
+    merge_recovery = "merge_recovery"
     conflict_resolution = "conflict_resolution"
     parent_promotion = "parent_promotion"
     claim_release_pending = "claim_release_pending"
@@ -38,6 +40,7 @@ class PhaseInfo:
 
 PHASE_INFO: dict[WorkflowPhase, PhaseInfo] = {
     WorkflowPhase.preflight: PhaseInfo("Preflight", False),
+    WorkflowPhase.already_implemented_check: PhaseInfo("Already-implemented check", False),
     WorkflowPhase.worktree_created: PhaseInfo("Worktree created", False),
     WorkflowPhase.claimed: PhaseInfo("Claimed in backlog", True),
     WorkflowPhase.amp_running: PhaseInfo("Agent running", True),
@@ -48,6 +51,7 @@ PHASE_INFO: dict[WorkflowPhase, PhaseInfo] = {
     WorkflowPhase.evaluation_running: PhaseInfo("Evaluation", False),
     WorkflowPhase.ready_to_merge: PhaseInfo("Ready to merge", True),
     WorkflowPhase.merge_running: PhaseInfo("Merge", False),
+    WorkflowPhase.merge_recovery: PhaseInfo("Merge recovery", False),
     WorkflowPhase.conflict_resolution: PhaseInfo("Conflict resolution", False),
     WorkflowPhase.parent_promotion: PhaseInfo("Parent promotion", False),
     WorkflowPhase.claim_release_pending: PhaseInfo("Claim release", False),
@@ -122,6 +126,8 @@ _EVENT_TYPE_PHASE_MAP: dict[str, str] = {
     "conflict_detected": WorkflowPhase.conflict_resolution.value,
     "conflict_resolution_started": WorkflowPhase.conflict_resolution.value,
     "conflict_resolution_finished": WorkflowPhase.conflict_resolution.value,
+    "merge_recovery_started": WorkflowPhase.merge_recovery.value,
+    "merge_recovery_finished": WorkflowPhase.merge_recovery.value,
     "followup_created": WorkflowPhase.post_merge_eval.value,
     "parent_promoted": WorkflowPhase.parent_promotion.value,
     "issue_needs_rework": WorkflowPhase.evaluation_running.value,

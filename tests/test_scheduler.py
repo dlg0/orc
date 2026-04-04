@@ -734,8 +734,11 @@ def test_decomposed_rewrites_parent_as_integration(repo_root: Path, state_dir: P
     mock_rewrite.assert_called_once_with(issue.id, ["child-a", "child-b"], cwd=repo_root)
 
 
-def test_sync_failure_records_needs_rework(repo_root: Path, state_dir: Path) -> None:
-    """When _sync_repo_root fails, a needs_rework failure is recorded."""
+def test_sync_failure_triggers_merge_recovery_then_stops(repo_root: Path, state_dir: Path) -> None:
+    """When _sync_repo_root fails, a merge recovery agent is launched.
+
+    If recovery also fails, the issue is reopened and orc stops.
+    """
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     runner = StubAmpRunner.completed()
@@ -760,14 +763,22 @@ def test_sync_failure_records_needs_rework(repo_root: Path, state_dir: Path) -> 
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
         patch("orc.scheduler._sync_repo_root", return_value=(False, "git pull failed")),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.amp_runner.RealAmpRunner.run_merge_recovery", return_value=(False, "recovery failed")),
+        patch("orc.scheduler.reopen_issue", return_value=True) as mock_reopen,
     ):
         run_loop(repo_root, state_dir, config, runner)
+
+    # Issue should have been reopened
+    mock_reopen.assert_called_once_with("test-1", cwd=repo_root)
 
     state = StateStore(state_dir).load()
     assert "test-1" in state.issue_failures
     failure = state.issue_failures["test-1"]
     assert failure["category"] == "issue_needs_rework"
-    assert failure["stage"] == "post_merge_eval"
+    assert failure["stage"] == "merge_recovery"
+
+    # Orc should have stopped (idle)
+    assert state.mode == OrchestratorMode.idle
 
 
 def test_successful_completion_clears_failure(repo_root: Path, state_dir: Path) -> None:
@@ -1045,7 +1056,7 @@ def test_fail_fast_stops_on_failed_issue(repo_root: Path, state_dir: Path) -> No
 
 
 def test_fail_fast_stops_on_sync_failure(repo_root: Path, state_dir: Path) -> None:
-    """With fail_fast=True, a sync failure stops the loop."""
+    """With fail_fast=True, a sync failure triggers merge recovery and stops."""
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     runner = StubAmpRunner.completed()
@@ -1070,6 +1081,8 @@ def test_fail_fast_stops_on_sync_failure(repo_root: Path, state_dir: Path) -> No
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
         patch("orc.scheduler._sync_repo_root", return_value=(False, "git pull failed")),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+        patch("orc.amp_runner.RealAmpRunner.run_merge_recovery", return_value=(False, "recovery failed")),
+        patch("orc.scheduler.reopen_issue", return_value=True),
     ):
         run_loop(repo_root, state_dir, config, runner, fail_fast=True)
 

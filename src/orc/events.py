@@ -33,6 +33,9 @@ class EventType(Enum):
     parent_promoted = "parent_promoted"
     issue_failure_pruned = "issue_failure_pruned"
     followup_created = "followup_created"
+    already_implemented_detected = "already_implemented_detected"
+    merge_recovery_started = "merge_recovery_started"
+    merge_recovery_finished = "merge_recovery_finished"
 
 
 class EventLog:

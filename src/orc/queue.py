@@ -524,6 +524,24 @@ def close_issue(issue_id: str, cwd: Path | None = None) -> bool:
         return False
 
 
+def reopen_issue(issue_id: str, cwd: Path | None = None) -> bool:
+    """Reopen a closed issue via ``bd update --status open``.
+
+    Returns True if the update succeeded, False otherwise.
+    """
+    try:
+        result = subprocess.run(
+            ["bd", "update", issue_id, "--status", "open"],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            check=False,
+        )
+        return result.returncode == 0
+    except OSError:
+        return False
+
+
 def rewrite_parent_as_integration_issue(
     issue_id: str,
     child_ids: list[str],
