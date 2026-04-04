@@ -126,6 +126,36 @@ file with all defaults.
 | `summary_amp_mode` | `"rush"` | Amp mode used when extracting summaries (applies to `"rush-extract"` mode). |
 | `fail_fast` | `false` | Stop the orchestrator loop on the first issue failure instead of continuing to the next issue. |
 
+## TUI Dashboard
+
+The TUI (`orc tui`) provides a live dashboard for monitoring the orchestrator.
+
+### Queue Semantics
+
+The **Dispatch Frontier** table shows the filtered set of issues that Orc
+considers safe to hand to a worker, *not* the raw output of `bd ready`.  The
+distinction matters because Orc applies dispatch-safety filters on top of Beads
+readiness:
+
+| Concept | Source | Description |
+|---------|--------|-------------|
+| **Beads ready** | `bd ready` | All issues Beads considers ready to work on. |
+| **Policy-skipped** | Orc dispatch policy | Ready items filtered out because they are containers (epics, integration issues), have children, or are unsupported types. |
+| **Held (ready)** | Orc state | Dispatchable items currently held due to prior failures (transient errors, needs-rework, conflicts). |
+| **Runnable** | Orc dispatch policy | Dispatchable items not held — these are what the scheduler will actually pick up. |
+
+These counts appear in the **Status** panel.  When policy-skipped items exist,
+grouped skip reasons are shown beneath the counts and in the queue diagnostics
+area.
+
+The default queue view preserves the exact order returned by Beads.  Local
+view toggles (press `o`) let the operator re-order by age without affecting
+dispatch order.
+
+When the queue refresh fails (e.g. `bd ready` times out), the TUI preserves
+the last successful queue view and shows a queue-specific error without
+advancing the queue-refresh timestamp.
+
 ## Architecture
 
 - **Queue Manager** — reads raw `bd ready`, preserves Beads ordering, and applies Orc dispatch-safety filtering for containers, unsupported types, and local holds

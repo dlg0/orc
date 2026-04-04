@@ -195,6 +195,7 @@ class StatusPanel(Static):
         self._cached_beads_ready: int | str = 0
         self._cached_runnable: int | str = 0
         self._cached_held_ready: int | str = 0
+        self._cached_policy_skipped: int | str = 0
 
     def compose(self) -> ComposeResult:
         yield Label("Status", classes="panel-title")
@@ -202,7 +203,11 @@ class StatusPanel(Static):
         yield Label("", id="refresh-error")
         yield Label("[italic]Last refresh: —[/]", id="last-updated")
         yield Label("[italic]Queue last refreshed: —[/]", id="queue-last-refreshed")
-        yield Label("Beads ready: 0 | Runnable: 0 | In-progress: 0 | Held (ready): 0", id="counts-summary")
+        yield Label(
+            "Beads ready: 0 | Skipped: 0 | Runnable: 0 | In-progress: 0 | Held (ready): 0",
+            id="counts-summary",
+        )
+        yield Label("", id="skip-diagnostics")
         yield Label("[italic]Events: —[/]", id="event-severity-counts")
         yield Label("[italic]Last completed: —[/]", id="last-completed")
         yield Label("[italic]Last error: —[/]", id="last-error")
@@ -216,6 +221,7 @@ class StatusPanel(Static):
         self.query_one("#last-updated", Label).update("[italic]Last refresh: —[/]")
         self.query_one("#queue-last-refreshed", Label).update("[italic]Queue last refreshed: —[/]")
         self.query_one("#counts-summary", Label).update(NO_PROJECT_PLACEHOLDER)
+        self.query_one("#skip-diagnostics", Label).update("")
         self.query_one("#event-severity-counts", Label).update("[italic]Events: —[/]")
         self.query_one("#last-completed", Label).update("[italic]Last completed: —[/]")
         self.query_one("#last-error", Label).update("[italic]Last error: —[/]")
@@ -287,32 +293,48 @@ class StatusPanel(Static):
         else:
             self.remove_class("error-state")
 
-        # Consolidated counts: Beads ready | Runnable | In-progress | Held
+        # Consolidated counts: Beads ready | Skipped | Runnable | In-progress | Held
         active = 1 if snap.state.active_issue_id else 0
         counts = self.query_one("#counts-summary", Label)
+        skip_label = self.query_one("#skip-diagnostics", Label)
         if not snap.is_fast and snap.queue_breakdown is not None:
             bd = snap.queue_breakdown
             self._cached_beads_ready = bd.beads_ready
             self._cached_runnable = bd.runnable
             self._cached_held_ready = bd.held_and_ready
+            self._cached_policy_skipped = bd.policy_skipped
             beads_part = str(bd.beads_ready)
+            skipped_part = f"[bold orchid1]{bd.policy_skipped}[/]" if bd.policy_skipped else "0"
             runnable_part = f"[bold green]{bd.runnable}[/]" if bd.runnable else "0"
             active_part = f"[bold dodger_blue]{active}[/]" if active else "0"
             held_part = f"[bold bright_yellow]{bd.held_and_ready}[/]" if bd.held_and_ready else "0"
             counts.update(
-                f"Beads ready: {beads_part} | Runnable: {runnable_part} | "
+                f"Beads ready: {beads_part} | Skipped: {skipped_part} | Runnable: {runnable_part} | "
                 f"In-progress: {active_part} | Held (ready): {held_part}"
             )
+            # Skip diagnostics: grouped reasons
+            if snap.queue_skip_summary:
+                parts = [
+                    f"{cat}: {cnt}"
+                    for cat, cnt in snap.queue_skip_summary.items()
+                ]
+                skip_label.update(
+                    f"[dim]Policy-skipped: {', '.join(parts)}[/]"
+                )
+            else:
+                skip_label.update("")
         else:
             # Fast refresh: use cached queue counts with staleness marker
             beads_str = f"~{self._cached_beads_ready}"
             runnable_str = str(self._cached_runnable)
             held_ready_str = str(self._cached_held_ready)
+            skipped_str = str(self._cached_policy_skipped)
+            skipped_part = f"[bold orchid1]~{skipped_str}[/]" if skipped_str != "0" else "~0"
             runnable_part = f"[bold green]~{runnable_str}[/]" if runnable_str != "0" else "~0"
             active_part = f"[bold dodger_blue]{active}[/]" if active else "0"
             held_part = f"[bold bright_yellow]~{held_ready_str}[/]" if held_ready_str != "0" else "~0"
             counts.update(
-                f"Beads ready: [dim]{beads_str}[/] | Runnable: {runnable_part} | "
+                f"Beads ready: [dim]{beads_str}[/] | Skipped: {skipped_part} | Runnable: {runnable_part} | "
                 f"In-progress: {active_part} | Held (ready): {held_part}"
             )
 
@@ -827,12 +849,16 @@ class QueueTable(Static):
         self._issues: list[BdIssue] = []
         self._filtered_issues: list[BdIssue] = []
         self._held_issue_ids: set[str] = set()
-        self._render_key: list[tuple[str, str, int, str, bool]] = []
+        self._render_key: tuple[object, ...] = ()
         self._view_mode: str = "beads"
         self._filter_text: str = ""
+        self._policy_skipped: int = 0
+        self._empty_message: str = "[italic]No issues in dispatch frontier[/]"
 
     def compose(self) -> ComposeResult:
         yield Label(self._panel_title_text(), classes="panel-title")
+        yield Label("[italic]Dispatch frontier: —[/]", id="queue-summary")
+        yield Label("[italic]Dispatch diagnostics: —[/]", id="queue-diagnostics")
         yield Input(
             placeholder="Filter frontier by issue ID or title…",
             id="queue-filter",
@@ -851,10 +877,12 @@ class QueueTable(Static):
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "queue-filter":
             self._filter_text = event.value.strip()
-            self._render_key = []  # force re-render
+            self._render_key = ()  # force re-render
             self._rebuild_table()
 
     def show_no_project(self) -> None:
+        self.query_one("#queue-summary", Label).update(NO_PROJECT_PLACEHOLDER)
+        self.query_one("#queue-diagnostics", Label).update("")
         table = self.query_one("#queue-datatable", DataTable)
         table.clear()
         table.add_row("-", "-", "-", NO_PROJECT_PLACEHOLDER, "-")
@@ -883,21 +911,10 @@ class QueueTable(Static):
         table.clear()
         if not self._filtered_issues:
             if self._filter_text:
-                table.add_row(
-                    "-",
-                    "-",
-                    "-",
-                    f"[italic]No matches for '{self._filter_text}'[/]",
-                    "-",
-                )
+                msg = f"[italic]No matches for '{self._filter_text}'[/]"
             else:
-                table.add_row(
-                    "-",
-                    "-",
-                    "-",
-                    "[italic]No issues in dispatch frontier[/]",
-                    "-",
-                )
+                msg = self._empty_message
+            table.add_row("-", "-", "-", msg, "-")
             return
         for issue in self._filtered_issues:
             state_label = (
@@ -910,23 +927,104 @@ class QueueTable(Static):
         if table.row_count > 0:
             table.move_cursor(row=min(saved_cursor, table.row_count - 1))
 
+    def _empty_frontier_message(self, snap: DashboardSnapshot) -> str:
+        """Return the most helpful empty-state message for the queue panel."""
+        if snap.queue_error and snap.queue_breakdown is None:
+            return "[italic]Queue refresh failed — no cached frontier[/]"
+        if snap.queue_breakdown is None:
+            return "[italic]No issues in dispatch frontier[/]"
+        if snap.queue_breakdown.beads_ready == 0:
+            return "[italic]No Beads-ready issues[/]"
+        if snap.queue_breakdown.runnable == 0:
+            return "[italic]No runnable issues — see dispatch diagnostics above[/]"
+        return "[italic]No issues in dispatch frontier[/]"
+
+    def _update_diagnostics(self, snap: DashboardSnapshot) -> None:
+        """Show grouped skip reasons and held-ready diagnostics."""
+        summary = self.query_one("#queue-summary", Label)
+        diagnostics = self.query_one("#queue-diagnostics", Label)
+
+        if snap.queue_breakdown is None:
+            if snap.queue_error:
+                summary.update("[italic]Dispatch frontier unavailable[/]")
+                diagnostics.update(
+                    f"[bold yellow]Queue refresh failed[/] — {snap.queue_error}"
+                )
+            else:
+                summary.update("[italic]Dispatch frontier: —[/]")
+                diagnostics.update("[italic]Dispatch diagnostics: —[/]")
+            return
+
+        bd = snap.queue_breakdown
+        summary.update(
+            "[italic]Dispatch frontier: "
+            f"{bd.beads_ready} beads-ready | {bd.runnable} runnable | "
+            f"{bd.held_and_ready} held-ready | {bd.policy_skipped} skipped by policy[/]"
+        )
+
+        lines: list[str] = []
+        if snap.queue_error:
+            lines.append(
+                "[bold yellow]Queue refresh failed[/] — showing last good queue view."
+            )
+        if bd.beads_ready == 0:
+            lines.append("[italic]No Beads-ready issues.[/]")
+        elif bd.runnable == 0:
+            reasons: list[str] = []
+            if bd.policy_skipped:
+                reasons.append(f"{bd.policy_skipped} skipped by dispatch policy")
+            if bd.held_and_ready:
+                reasons.append(f"{bd.held_and_ready} held locally")
+            lines.append(
+                "[bold yellow]No runnable issues[/]"
+                + (f" — {' and '.join(reasons)}." if reasons else ".")
+            )
+        if snap.queue_skip_summary:
+            lines.append(
+                "[italic]Policy skips:[/] "
+                + ", ".join(
+                    f"{category}: {count}"
+                    for category, count in snap.queue_skip_summary.items()
+                )
+            )
+        held_ready_ids = [
+            issue.id for issue in snap.ready_issues if issue.id in self._held_issue_ids
+        ]
+        if held_ready_ids:
+            preview = ", ".join(held_ready_ids[:3])
+            extra = ""
+            if len(held_ready_ids) > 3:
+                extra = f" (+{len(held_ready_ids) - 3} more)"
+            lines.append(f"[italic]Held-ready:[/] {preview}{extra}")
+
+        diagnostics.update(
+            "\n".join(lines) if lines else "[italic]Dispatch diagnostics: —[/]"
+        )
+
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
         held_issue_ids = set(snap.state.issue_failures)
-        render_key = [
-            (
-                issue.id,
-                issue.title,
-                issue.priority,
-                issue.created,
-                issue.id in held_issue_ids,
-            )
-            for issue in snap.ready_issues
-        ]
+        self._held_issue_ids = held_issue_ids
+        self._update_diagnostics(snap)
+        self._empty_message = self._empty_frontier_message(snap)
+        render_key = (
+            tuple(
+                (
+                    issue.id,
+                    issue.title,
+                    issue.priority,
+                    issue.created,
+                    issue.id in held_issue_ids,
+                )
+                for issue in snap.ready_issues
+            ),
+            self._empty_message,
+        )
         if render_key == self._render_key:
             return
         self._issues = list(snap.ready_issues)
-        self._held_issue_ids = held_issue_ids
         self._render_key = render_key
+        if snap.queue_breakdown is not None:
+            self._policy_skipped = snap.queue_breakdown.policy_skipped
         self._rebuild_table()
 
     def action_cycle_view(self) -> None:
@@ -934,7 +1032,7 @@ class QueueTable(Static):
         idx = self._VIEW_MODES.index(self._view_mode)
         self._view_mode = self._VIEW_MODES[(idx + 1) % len(self._VIEW_MODES)]
         self.query_one(".panel-title", Label).update(self._panel_title_text())
-        self._render_key = []  # force re-render
+        self._render_key = ()  # force re-render
         self._rebuild_table()
 
     def action_toggle_filter(self) -> None:
@@ -946,7 +1044,7 @@ class QueueTable(Static):
         else:
             self._filter_text = ""
             filter_input.value = ""
-            self._render_key = []
+            self._render_key = ()
             self._rebuild_table()
 
     def action_inspect(self) -> None:

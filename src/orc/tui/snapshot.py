@@ -13,6 +13,7 @@ from orc.queue import (
     compute_queue_breakdown,
     get_ready_issues,
     reconcile_issue_failures,
+    summarize_skipped_issues,
 )
 from orc.state import OrchestratorState, StateStore
 
@@ -25,8 +26,10 @@ class DashboardSnapshot:
     config: OrchestratorConfig
     queue_breakdown: QueueBreakdown | None = None
     queue_result: QueueResult | None = None
+    queue_skip_summary: dict[str, int] | None = None
     is_fast: bool = False
     config_error: str | None = None
+    queue_error: str | None = None
 
 
 def load_snapshot_fast(
@@ -65,15 +68,20 @@ def load_snapshot(repo_root: Path, state_dir: Path) -> DashboardSnapshot:
     queue_result = get_ready_issues(repo_root)
     recent_events = EventLog(state_dir).recent(100)
     breakdown = None
+    skip_summary = None
     if queue_result.success:
         breakdown = compute_queue_breakdown(queue_result, state.issue_failures)
+        if queue_result.skipped:
+            skip_summary = summarize_skipped_issues(queue_result.skipped)
 
     return DashboardSnapshot(
         state=state,
-        ready_issues=queue_result.issues,
+        ready_issues=queue_result.issues if queue_result.success else [],
         recent_events=recent_events,
         config=config,
         queue_breakdown=breakdown,
         queue_result=queue_result,
+        queue_skip_summary=skip_summary,
         config_error=config_error,
+        queue_error=queue_result.error if not queue_result.success else None,
     )

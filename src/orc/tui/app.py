@@ -13,7 +13,12 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header
 
 from orc.config import OrchestratorConfig
-from orc.queue import BdIssue, QueueBreakdown, get_issue_status
+from orc.queue import (
+    QueueResult,
+    compute_queue_breakdown,
+    get_issue_status,
+    summarize_skipped_issues,
+)
 from orc.state import OrchestratorMode, StateStore, RequestQueue
 from orc.tui.snapshot import (
     DashboardSnapshot,
@@ -213,8 +218,9 @@ class OrchestratorApp(App):
         self._last_successful_refresh: datetime | None = None
         self._last_queue_refresh: datetime | None = None
         self._last_refresh_error: str | None = None
-        self._last_good_queue_issues: list[BdIssue] | None = None
-        self._last_good_queue_breakdown: QueueBreakdown | None = None
+        self._last_queue_error: str | None = None
+        self._last_config_error: str | None = None
+        self._last_good_queue_result: QueueResult | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -262,7 +268,8 @@ class OrchestratorApp(App):
 
             self._config = load_config(self._repo_root)
         except Exception as exc:
-            self._last_refresh_error = f"Config load failed: {exc}"
+            self._config = OrchestratorConfig()
+            self._last_config_error = str(exc)
             self.notify(
                 f"Config load failed: {exc}", severity="warning"
             )
@@ -274,8 +281,7 @@ class OrchestratorApp(App):
             return
         try:
             snap = load_snapshot_fast(self._state_dir, self._config)
-            self.call_from_thread(self._mark_refresh_success, False, False)
-            self.call_from_thread(self._apply_fast_snapshot, snap)
+            self.call_from_thread(self._apply_loaded_fast_snapshot, snap)
         except Exception as exc:
             self.call_from_thread(self._mark_refresh_error, str(exc))
 
@@ -304,37 +310,38 @@ class OrchestratorApp(App):
     def _mark_refresh_success(
         self,
         includes_queue: bool = False,
-        clear_error: bool = True,
     ) -> None:
         """Record a successful refresh and update the status display."""
         now = datetime.now(timezone.utc)
         self._last_successful_refresh = now
+        self._last_refresh_error = None
         status_panel = self.query_one(StatusPanel)
         status_panel.update_last_refreshed(now)
-        if clear_error:
-            self._last_refresh_error = None
-            status_panel.hide_refresh_error()
         if includes_queue:
             self._last_queue_refresh = now
             status_panel.update_queue_last_refreshed(now)
-        if self._last_refresh_error is None:
-            self.query_one(StaleBanner).hide()
+        self.query_one(StaleBanner).hide()
 
     def _mark_refresh_error(self, message: str) -> None:
         """Record a failed refresh and show warning in StatusPanel."""
         self._last_refresh_error = message
-        self.query_one(StatusPanel).show_refresh_error(message)
+        self._update_refresh_error_display()
 
-    def _snapshot_refresh_error(self, snap: DashboardSnapshot) -> str | None:
-        """Return a user-visible refresh error for partial snapshot failures."""
+    def _update_refresh_error_display(self) -> None:
+        """Render queue/config warnings without marking the dashboard stale."""
         messages: list[str] = []
-        if snap.config_error:
-            messages.append(f"Config: {snap.config_error}")
-        if snap.queue_result is not None and not snap.queue_result.success:
-            messages.append(f"Queue: {snap.queue_result.error or 'refresh failed'}")
-        if not messages:
-            return None
-        return " | ".join(messages)
+        if self._last_refresh_error:
+            messages.append(self._last_refresh_error)
+        if self._last_queue_error:
+            messages.append(f"Queue: {self._last_queue_error}")
+        if self._last_config_error:
+            messages.append(f"Config: {self._last_config_error}")
+
+        status_panel = self.query_one(StatusPanel)
+        if messages:
+            status_panel.show_refresh_error(" | ".join(messages))
+        else:
+            status_panel.hide_refresh_error()
 
     def _remember_queue_snapshot(self, snap: DashboardSnapshot) -> None:
         """Cache the last successful queue payload for transient queue failures."""
@@ -344,39 +351,49 @@ class OrchestratorApp(App):
             or snap.queue_breakdown is None
         ):
             return
-        self._last_good_queue_issues = list(snap.ready_issues)
-        self._last_good_queue_breakdown = snap.queue_breakdown
+        self._last_good_queue_result = snap.queue_result
 
     def _snapshot_for_display(self, snap: DashboardSnapshot) -> DashboardSnapshot:
         """Reuse the last good queue view when the latest queue refresh failed."""
         if (
             snap.queue_result is None
             or snap.queue_result.success
-            or self._last_good_queue_issues is None
-            or self._last_good_queue_breakdown is None
+            or self._last_good_queue_result is None
         ):
             return snap
         return replace(
             snap,
-            ready_issues=list(self._last_good_queue_issues),
-            queue_breakdown=self._last_good_queue_breakdown,
+            ready_issues=list(self._last_good_queue_result.issues),
+            queue_result=self._last_good_queue_result,
+            queue_breakdown=compute_queue_breakdown(
+                self._last_good_queue_result,
+                snap.state.issue_failures,
+            ),
+            queue_skip_summary=(
+                summarize_skipped_issues(self._last_good_queue_result.skipped)
+                if self._last_good_queue_result.skipped
+                else None
+            ),
         )
+
+    def _apply_loaded_fast_snapshot(self, snap: DashboardSnapshot) -> None:
+        """Apply a fast snapshot and preserve queue/config warnings."""
+        self._mark_refresh_success()
+        self._apply_fast_snapshot(snap)
+        self._update_refresh_error_display()
 
     def _apply_loaded_snapshot(self, snap: DashboardSnapshot) -> None:
         """Apply a full snapshot while preserving queue failure semantics."""
         queue_refresh_ok = snap.queue_result is None or snap.queue_result.success
-        refresh_error = self._snapshot_refresh_error(snap)
+        self._last_queue_error = None if queue_refresh_ok else snap.queue_error
+        self._last_config_error = snap.config_error
 
         if queue_refresh_ok:
             self._remember_queue_snapshot(snap)
 
-        self._mark_refresh_success(
-            includes_queue=queue_refresh_ok,
-            clear_error=refresh_error is None,
-        )
+        self._mark_refresh_success(includes_queue=queue_refresh_ok)
         self._apply_snapshot(self._snapshot_for_display(snap))
-        if refresh_error is not None:
-            self._mark_refresh_error(refresh_error)
+        self._update_refresh_error_display()
 
     def _check_staleness(self) -> None:
         """Show/hide the stale banner based on time since last successful refresh."""

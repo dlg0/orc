@@ -7,10 +7,11 @@ from unittest.mock import patch
 
 import pytest
 
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Label
 
 from orc.config import OrchestratorConfig
-from orc.queue import BdIssue
+from orc.dispatch_policy import DispatchSkip
+from orc.queue import BdIssue, QueueBreakdown, QueueResult, compute_queue_breakdown
 from orc.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage
 from orc.tui.app import OrchestratorApp
 from orc.tui.snapshot import DashboardSnapshot
@@ -115,6 +116,151 @@ async def test_apply_snapshot_preserves_frontier_order_and_marks_held_rows() -> 
             "[bold green]Runnable[/]",
             "1",
             "Runnable second",
+            "2026-01-01",
+        ]
+
+
+@pytest.mark.asyncio
+async def test_apply_snapshot_surfaces_dispatch_diagnostics() -> None:
+    app = OrchestratorApp()
+    async with app.run_test() as pilot:
+        held_issue = BdIssue(
+            id="bz3",
+            title="Held but first in Beads order",
+            priority=4,
+            created="2026-01-02",
+        )
+        runnable_issue = BdIssue(
+            id="bz2",
+            title="Runnable second",
+            priority=1,
+            created="2026-01-01",
+        )
+        queue_result = QueueResult(
+            issues=[held_issue, runnable_issue],
+            raw_issues=[
+                BdIssue(id="epic-1", title="Epic container", priority=0, created="2026-01-03"),
+                held_issue,
+                runnable_issue,
+            ],
+            skipped=[
+                DispatchSkip(
+                    issue_id="epic-1",
+                    issue_type="epic",
+                    status="open",
+                    category="container/control",
+                    reason="container/control issue; Orc does not dispatch containers directly",
+                )
+            ],
+        )
+        state = OrchestratorState(
+            issue_failures={
+                "bz3": {
+                    "category": "issue_needs_rework",
+                    "action": "hold_until_backlog_changes",
+                    "summary": "Needs follow-up",
+                }
+            }
+        )
+        snap = _make_snap(
+            state=state,
+            ready_issues=queue_result.issues,
+            queue_result=queue_result,
+            queue_skip_summary={"container/control": 1},
+            queue_breakdown=compute_queue_breakdown(queue_result, state.issue_failures),
+        )
+
+        app._apply_snapshot(snap)
+        await pilot.pause()
+
+        counts_summary = app.query_one("#counts-summary", Label).render().plain
+        assert "Skipped: 1" in counts_summary
+        assert "Held (ready): 1" in counts_summary
+
+        diagnostics = app.query_one("#queue-diagnostics", Label).render().plain
+        assert "Policy skips: container/control: 1" in diagnostics
+        assert "Held-ready: bz3" in diagnostics
+
+
+@pytest.mark.asyncio
+async def test_apply_snapshot_distinguishes_no_runnable_from_empty_queue() -> None:
+    app = OrchestratorApp()
+    async with app.run_test() as pilot:
+        queue_result = QueueResult(
+            issues=[],
+            raw_issues=[
+                BdIssue(id="epic-1", title="Epic container", priority=0, created="2026-01-03")
+            ],
+            skipped=[
+                DispatchSkip(
+                    issue_id="epic-1",
+                    issue_type="epic",
+                    status="open",
+                    category="container/control",
+                    reason="container/control issue; Orc does not dispatch containers directly",
+                )
+            ],
+        )
+        snap = _make_snap(
+            queue_result=queue_result,
+            queue_skip_summary={"container/control": 1},
+            queue_breakdown=compute_queue_breakdown(queue_result, {}),
+        )
+
+        app._apply_snapshot(snap)
+        await pilot.pause()
+
+        diagnostics = app.query_one("#queue-diagnostics", Label).render().plain
+        assert "No runnable issues — 1 skipped by dispatch policy." in diagnostics
+        assert "Policy skips: container/control: 1" in diagnostics
+
+        queue_table = app.query_one("#queue-datatable", DataTable)
+        assert queue_table.get_row_at(0) == [
+            "-",
+            "-",
+            "-",
+            "[italic]No runnable issues — see dispatch diagnostics above[/]",
+            "-",
+        ]
+
+
+@pytest.mark.asyncio
+async def test_apply_loaded_snapshot_keeps_last_good_queue_on_queue_failure() -> None:
+    app = OrchestratorApp()
+    async with app.run_test() as pilot:
+        issue = BdIssue(id="bz2", title="Cached queue issue", priority=2, created="2026-01-01")
+        good_result = QueueResult(issues=[issue])
+        good_snap = _make_snap(
+            ready_issues=[issue],
+            queue_result=good_result,
+            queue_breakdown=compute_queue_breakdown(good_result, {}),
+        )
+
+        app._apply_loaded_snapshot(good_snap)
+        await pilot.pause()
+        initial_queue_refresh = app._last_queue_refresh
+
+        failed_snap = _make_snap(
+            queue_result=QueueResult(success=False, error="bd list failed"),
+            queue_error="bd list failed",
+        )
+        app._apply_loaded_snapshot(failed_snap)
+        await pilot.pause()
+
+        assert app._last_queue_refresh == initial_queue_refresh
+
+        refresh_error = app.query_one("#refresh-error", Label).render().plain
+        assert "Queue: bd list failed" in refresh_error
+
+        diagnostics = app.query_one("#queue-diagnostics", Label).render().plain
+        assert "showing last good queue view" in diagnostics
+
+        queue_table = app.query_one("#queue-datatable", DataTable)
+        assert queue_table.get_row_at(0) == [
+            "bz2",
+            "[bold green]Runnable[/]",
+            "2",
+            "Cached queue issue",
             "2026-01-01",
         ]
 
@@ -316,6 +462,49 @@ async def test_start_launches_subprocess() -> None:
             mock_launch.assert_called_once_with(
                 "start", Path("/tmp/repo"), Path("/tmp/state")
             )
+
+
+@pytest.mark.asyncio
+async def test_apply_snapshot_policy_skipped_counts() -> None:
+    """StatusPanel should include policy-skipped count after applying snapshot."""
+    app = OrchestratorApp()
+    async with app.run_test() as pilot:
+        snap = _make_snap(
+            state=OrchestratorState(mode=OrchestratorMode.idle),
+            queue_breakdown=QueueBreakdown(
+                beads_ready=5,
+                policy_skipped=3,
+                held_and_ready=0,
+                runnable=2,
+            ),
+            queue_skip_summary={"container_parent": 2, "unsupported_type": 1},
+        )
+        app._apply_snapshot(snap)
+        await pilot.pause()
+
+        status_panel = app.query_one(StatusPanel)
+        assert status_panel._cached_policy_skipped == 3
+
+
+@pytest.mark.asyncio
+async def test_apply_snapshot_empty_frontier_policy_skipped() -> None:
+    """QueueTable should show policy-skipped empty-state message."""
+    app = OrchestratorApp()
+    async with app.run_test() as pilot:
+        snap = _make_snap(
+            state=OrchestratorState(mode=OrchestratorMode.idle),
+            queue_breakdown=QueueBreakdown(
+                beads_ready=3,
+                policy_skipped=3,
+                held_and_ready=0,
+                runnable=0,
+            ),
+        )
+        app._apply_snapshot(snap)
+        await pilot.pause()
+
+        table = app.query_one("#queue-datatable", DataTable)
+        assert table.row_count == 1  # placeholder row
 
 
 @pytest.mark.asyncio

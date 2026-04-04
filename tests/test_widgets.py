@@ -79,7 +79,7 @@ def test_mode_styles_covers_all_modes() -> None:
 def test_status_panel_composes() -> None:
     panel = StatusPanel()
     children = list(panel.compose())
-    assert len(children) == 10  # title, badge, refresh-error, last-refresh, queue-last-refreshed, counts-summary, severity-counts, completed, error, ErrorAlert
+    assert len(children) == 11  # title, badge, refresh-error, last-refresh, queue-last-refreshed, counts-summary, skip-diagnostics, severity-counts, completed, error, ErrorAlert
 
 
 def test_active_issue_panel_composes() -> None:
@@ -158,7 +158,7 @@ def test_controls_panel_has_all_actions() -> None:
 def test_queue_table_composes() -> None:
     panel = QueueTable()
     children = list(panel.compose())
-    assert len(children) == 3  # Label + Input (filter) + DataTable
+    assert len(children) == 5  # panel-title + queue-summary + queue-diagnostics + Input (filter) + DataTable
 
 
 def test_events_log_composes() -> None:
@@ -885,8 +885,8 @@ def test_load_config_swallow_fix(tmp_path: Path) -> None:
     app = OrchestratorApp(repo_root=tmp_path)
     app._load_config()
     # Should have recorded the error (not silently passed)
-    assert app._last_refresh_error is not None
-    assert "Config load failed" in app._last_refresh_error
+    assert app._last_config_error is not None
+    assert "max_workers" in app._last_config_error
 
 
 def test_snapshot_config_error_field() -> None:
@@ -920,3 +920,163 @@ def test_mark_refresh_success_clears_error() -> None:
     # Simulate what _mark_refresh_success does to app state
     app._last_refresh_error = None
     assert app._last_refresh_error is None
+
+
+# --- Dispatch workflow alignment tests (orc-qpu) ---
+
+
+def test_queue_table_default_view_preserves_order_regression() -> None:
+    """Default Beads view must not reorder; reintroducing local sort would break this."""
+    table = QueueTable()
+    assert table._view_mode == "beads"
+    issues = [
+        BdIssue(id="Z-9", title="Last in priority", priority=4, created="2025-01-03"),
+        BdIssue(id="A-1", title="First in Beads", priority=1, created="2025-01-01"),
+        BdIssue(id="M-5", title="Middle item", priority=2, created="2025-01-02"),
+    ]
+    result = table._apply_view(issues)
+    assert [i.id for i in result] == ["Z-9", "A-1", "M-5"]
+
+
+def test_queue_table_no_sort_key_import() -> None:
+    """Verify QueueTable does not import _sort_key (removed from orc.queue)."""
+    import inspect
+    source = inspect.getsource(QueueTable)
+    assert "_sort_key" not in source
+
+
+def test_queue_table_empty_state_policy_skipped() -> None:
+    """When dispatch frontier is empty but items were policy-skipped, show diagnostic."""
+    table = QueueTable()
+    table._policy_skipped = 3
+    table._issues = []
+    assert table._policy_skipped > 0
+
+
+def test_queue_table_empty_state_truly_empty() -> None:
+    """When dispatch frontier is empty and nothing was skipped, show generic empty."""
+    table = QueueTable()
+    table._policy_skipped = 0
+    table._issues = []
+    assert table._policy_skipped == 0
+
+
+def test_snapshot_queue_skip_summary_field() -> None:
+    """DashboardSnapshot should carry queue_skip_summary when policy-skipped items exist."""
+    snap = _snap()
+    assert snap.queue_skip_summary is None
+    snap_with_skips = DashboardSnapshot(
+        state=snap.state,
+        ready_issues=[],
+        recent_events=[],
+        config=OrchestratorConfig(),
+        queue_skip_summary={"container_parent": 2, "unsupported_type": 1},
+    )
+    assert snap_with_skips.queue_skip_summary == {
+        "container_parent": 2,
+        "unsupported_type": 1,
+    }
+
+
+def test_snapshot_queue_result_success_field() -> None:
+    """DashboardSnapshot carries queue_result for refresh failure detection."""
+    from orc.queue import QueueResult
+
+    qr = QueueResult(success=False, error="bd not found")
+    snap = DashboardSnapshot(
+        state=OrchestratorState(),
+        ready_issues=[],
+        recent_events=[],
+        config=OrchestratorConfig(),
+        queue_result=qr,
+    )
+    assert snap.queue_result is not None
+    assert snap.queue_result.success is False
+    assert snap.queue_result.error == "bd not found"
+
+
+def test_status_panel_cached_policy_skipped_initialized() -> None:
+    """StatusPanel should initialize _cached_policy_skipped to 0."""
+    panel = StatusPanel()
+    assert panel._cached_policy_skipped == 0
+
+
+def test_queue_table_policy_skipped_field_initialized() -> None:
+    """QueueTable._policy_skipped should be initialized to 0."""
+    table = QueueTable()
+    assert table._policy_skipped == 0
+
+
+def test_app_queue_error_stored_on_failure() -> None:
+    """Queue fetch failure should set _last_queue_error."""
+    app = OrchestratorApp()
+    assert app._last_queue_error is None
+    app._last_queue_error = "bd ready failed"
+    assert app._last_queue_error == "bd ready failed"
+
+
+def test_app_queue_error_cleared_on_success() -> None:
+    """Queue fetch success should clear _last_queue_error."""
+    app = OrchestratorApp()
+    app._last_queue_error = "old error"
+    app._last_queue_error = None
+    assert app._last_queue_error is None
+
+
+def test_app_remember_queue_snapshot_caches_on_success() -> None:
+    """_remember_queue_snapshot should cache queue data on success."""
+    from orc.queue import QueueBreakdown, QueueResult
+
+    app = OrchestratorApp()
+    issue = BdIssue(id="X-1", title="Test", priority=1, created="2026-01-01")
+    snap = DashboardSnapshot(
+        state=OrchestratorState(),
+        ready_issues=[issue],
+        recent_events=[],
+        config=OrchestratorConfig(),
+        queue_result=QueueResult(issues=[issue], success=True),
+        queue_breakdown=QueueBreakdown(
+            beads_ready=1, policy_skipped=0, held_and_ready=0, runnable=1,
+        ),
+    )
+    app._remember_queue_snapshot(snap)
+    assert app._last_good_queue_result is not None
+    assert len(app._last_good_queue_result.issues) == 1
+
+
+def test_app_remember_queue_snapshot_skips_on_failure() -> None:
+    """_remember_queue_snapshot should not cache on queue failure."""
+    from orc.queue import QueueResult
+
+    app = OrchestratorApp()
+    snap = DashboardSnapshot(
+        state=OrchestratorState(),
+        ready_issues=[],
+        recent_events=[],
+        config=OrchestratorConfig(),
+        queue_result=QueueResult(success=False, error="fail"),
+    )
+    app._remember_queue_snapshot(snap)
+    assert app._last_good_queue_result is None
+
+
+def test_app_snapshot_for_display_preserves_good_queue() -> None:
+    """_snapshot_for_display should reuse last-good queue when current fails."""
+    from orc.queue import QueueResult
+
+    app = OrchestratorApp()
+    good_issue = BdIssue(id="X-1", title="Good", priority=1, created="2026-01-01")
+    good_result = QueueResult(issues=[good_issue], success=True)
+    app._last_good_queue_result = good_result
+
+    failed_snap = DashboardSnapshot(
+        state=OrchestratorState(),
+        ready_issues=[],
+        recent_events=[],
+        config=OrchestratorConfig(),
+        queue_result=QueueResult(success=False, error="bd timeout"),
+    )
+    display_snap = app._snapshot_for_display(failed_snap)
+    assert len(display_snap.ready_issues) == 1
+    assert display_snap.ready_issues[0].id == "X-1"
+    assert display_snap.queue_result is good_result

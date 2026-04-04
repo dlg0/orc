@@ -65,6 +65,7 @@ def test_load_snapshot_preserves_queue_failure(tmp_path: Path) -> None:
     assert snap.queue_result is failed_result
     assert snap.queue_result.success is False
     assert snap.queue_result.error == "bd ready failed"
+    assert snap.queue_error == "bd ready failed"
 
 
 def test_load_snapshot_with_events(tmp_path: Path) -> None:
@@ -172,3 +173,74 @@ def test_load_snapshot_fast_with_events(tmp_path: Path) -> None:
 
     assert len(snap.recent_events) == 1
     assert snap.ready_issues == []
+
+
+# --- Dispatch workflow alignment tests (orc-qpu) ---
+
+
+def test_load_snapshot_skip_summary_populated(tmp_path: Path) -> None:
+    """load_snapshot should compute queue_skip_summary when skipped items exist."""
+    from orc.dispatch_policy import DispatchSkip
+
+    state_dir = tmp_path / ".orc"
+    state_dir.mkdir()
+
+    skipped = [
+        DispatchSkip(
+            issue_id="E-1", issue_type="epic", status="open",
+            category="container_parent", reason="epic has children",
+        ),
+        DispatchSkip(
+            issue_id="E-2", issue_type="epic", status="open",
+            category="container_parent", reason="epic has children",
+        ),
+        DispatchSkip(
+            issue_id="U-1", issue_type="custom", status="open",
+            category="unsupported_type", reason="unknown type",
+        ),
+    ]
+    qr = QueueResult(issues=[], raw_issues=[], skipped=skipped, success=True)
+    with patch("orc.tui.snapshot.get_ready_issues", return_value=qr):
+        snap = load_snapshot(tmp_path, state_dir)
+
+    assert snap.queue_skip_summary is not None
+    assert snap.queue_skip_summary == {"container_parent": 2, "unsupported_type": 1}
+
+
+def test_load_snapshot_skip_summary_none_when_no_skips(tmp_path: Path) -> None:
+    """queue_skip_summary should be None when no items are skipped."""
+    state_dir = tmp_path / ".orc"
+    state_dir.mkdir()
+
+    qr = QueueResult(issues=[], raw_issues=[], skipped=[], success=True)
+    with patch("orc.tui.snapshot.get_ready_issues", return_value=qr):
+        snap = load_snapshot(tmp_path, state_dir)
+
+    assert snap.queue_skip_summary is None
+
+
+def test_load_snapshot_skip_summary_none_on_queue_failure(tmp_path: Path) -> None:
+    """queue_skip_summary should be None when queue fetch fails."""
+    state_dir = tmp_path / ".orc"
+    state_dir.mkdir()
+
+    qr = QueueResult(success=False, error="bd not found")
+    with patch("orc.tui.snapshot.get_ready_issues", return_value=qr):
+        snap = load_snapshot(tmp_path, state_dir)
+
+    assert snap.queue_skip_summary is None
+    assert snap.queue_breakdown is None
+
+
+def test_load_snapshot_queue_breakdown_not_computed_on_failure(tmp_path: Path) -> None:
+    """queue_breakdown should be None when queue fetch fails."""
+    state_dir = tmp_path / ".orc"
+    state_dir.mkdir()
+
+    qr = QueueResult(success=False, error="timeout")
+    with patch("orc.tui.snapshot.get_ready_issues", return_value=qr):
+        snap = load_snapshot(tmp_path, state_dir)
+
+    assert snap.queue_breakdown is None
+    assert snap.queue_result is not None
+    assert snap.queue_result.success is False

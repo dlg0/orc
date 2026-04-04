@@ -88,13 +88,14 @@ def test_apply_loaded_snapshot_preserves_last_good_queue_on_failure() -> None:
 
     displayed_snap = app._apply_snapshot.call_args.args[0]
     assert displayed_snap.ready_issues == [issue]
-    assert displayed_snap.queue_breakdown == breakdown
+    assert displayed_snap.queue_breakdown is not None
+    assert displayed_snap.queue_breakdown.runnable == 1
     assert app._last_queue_refresh == first_queue_refresh
-    status_panel.show_refresh_error.assert_called_once_with("Queue: bd ready failed")
     status_panel.update_queue_last_refreshed.assert_called_once()
 
 
-def test_mark_refresh_success_can_preserve_existing_error() -> None:
+def test_mark_refresh_success_clears_refresh_error() -> None:
+    """_mark_refresh_success always clears _last_refresh_error."""
     app = OrchestratorApp()
     status_panel = Mock()
     banner = Mock()
@@ -107,10 +108,9 @@ def test_mark_refresh_success_can_preserve_existing_error() -> None:
         raise AssertionError(f"Unexpected query_one({widget_type!r})")
 
     app.query_one = Mock(side_effect=fake_query_one)  # type: ignore[method-assign]
-    app._last_refresh_error = "Queue: bd ready failed"
+    app._last_refresh_error = "some error"
 
-    app._mark_refresh_success(clear_error=False)
+    app._mark_refresh_success()
 
-    assert app._last_refresh_error == "Queue: bd ready failed"
-    status_panel.hide_refresh_error.assert_not_called()
-    banner.hide.assert_not_called()
+    assert app._last_refresh_error is None
+    banner.hide.assert_called_once()
