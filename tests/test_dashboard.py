@@ -81,6 +81,45 @@ async def test_apply_snapshot_running() -> None:
 
 
 @pytest.mark.asyncio
+async def test_apply_snapshot_preserves_frontier_order_and_marks_held_rows() -> None:
+    app = OrchestratorApp()
+    async with app.run_test() as pilot:
+        snap = _make_snap(
+            state=OrchestratorState(
+                issue_failures={
+                    "bz3": {
+                        "category": "issue_needs_rework",
+                        "action": "hold_until_backlog_changes",
+                        "summary": "Needs follow-up",
+                    }
+                }
+            ),
+            ready_issues=[
+                BdIssue(id="bz3", title="Held but first in Beads order", priority=4, created="2026-01-02"),
+                BdIssue(id="bz2", title="Runnable second", priority=1, created="2026-01-01"),
+            ],
+        )
+        app._apply_snapshot(snap)
+        await pilot.pause()
+
+        queue_table = app.query_one("#queue-datatable", DataTable)
+        assert queue_table.get_row_at(0) == [
+            "bz3",
+            "[bold bright_yellow]Held (ready)[/]",
+            "4",
+            "Held but first in Beads order",
+            "2026-01-02",
+        ]
+        assert queue_table.get_row_at(1) == [
+            "bz2",
+            "[bold green]Runnable[/]",
+            "1",
+            "Runnable second",
+            "2026-01-01",
+        ]
+
+
+@pytest.mark.asyncio
 async def test_apply_snapshot_with_history() -> None:
     app = OrchestratorApp()
     async with app.run_test() as pilot:

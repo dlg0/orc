@@ -787,7 +787,7 @@ class ControlsPanel(Static):
 
 
 class QueueTable(Static):
-    """Ready queue table with sort and search/filter support."""
+    """Dispatch frontier table with view and search/filter support."""
 
     DEFAULT_CSS = """
     QueueTable {
@@ -810,50 +810,62 @@ class QueueTable(Static):
     BINDINGS = [
         Binding("enter", "inspect", "Inspect", show=True),
         Binding("i", "inspect", "Inspect", show=False),
-        Binding("o", "cycle_sort", "Sort", show=True),
+        Binding("o", "cycle_view", "View", show=True),
         Binding("slash", "toggle_filter", "Filter", show=True),
     ]
 
-    # Sort modes cycle: priority (default) → age-newest → age-oldest
-    _SORT_MODES = ("priority", "age_newest", "age_oldest")
+    # View modes cycle: backend Beads order (default) → newest → oldest
+    _VIEW_MODES = ("beads", "age_newest", "age_oldest")
+    _VIEW_LABELS = {
+        "beads": "Beads order",
+        "age_newest": "Newest first",
+        "age_oldest": "Oldest first",
+    }
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._issues: list[BdIssue] = []
         self._filtered_issues: list[BdIssue] = []
-        self._row_key: list[str] = []
-        self._sort_mode: str = "priority"
+        self._held_issue_ids: set[str] = set()
+        self._render_key: list[tuple[str, str, int, str, bool]] = []
+        self._view_mode: str = "beads"
         self._filter_text: str = ""
 
     def compose(self) -> ComposeResult:
-        yield Label("Ready Queue", classes="panel-title")
-        yield Input(placeholder="Filter by issue ID…", id="queue-filter", classes="filter-bar")
+        yield Label(self._panel_title_text(), classes="panel-title")
+        yield Input(
+            placeholder="Filter frontier by issue ID or title…",
+            id="queue-filter",
+            classes="filter-bar",
+        )
         yield DataTable(id="queue-datatable", cursor_type="row")
 
     def on_mount(self) -> None:
         table = self.query_one("#queue-datatable", DataTable)
-        table.add_columns("Pri", "ID", "Title", "Created")
+        table.add_columns("ID", "State", "Pri", "Title", "Created")
+
+    def _panel_title_text(self) -> str:
+        """Return the queue panel title for the current local view."""
+        return f"Dispatch Frontier [View: {self._VIEW_LABELS[self._view_mode]}]"
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "queue-filter":
             self._filter_text = event.value.strip()
-            self._row_key = []  # force re-render
+            self._render_key = []  # force re-render
             self._rebuild_table()
 
     def show_no_project(self) -> None:
         table = self.query_one("#queue-datatable", DataTable)
         table.clear()
-        table.add_row("-", "-", NO_PROJECT_PLACEHOLDER, "-")
+        table.add_row("-", "-", "-", NO_PROJECT_PLACEHOLDER, "-")
 
-    def _sort_issues(self, issues: list[BdIssue]) -> list[BdIssue]:
-        """Sort issues based on current sort mode."""
-        if self._sort_mode == "age_newest":
+    def _apply_view(self, issues: list[BdIssue]) -> list[BdIssue]:
+        """Apply the selected local view to the incoming dispatch frontier."""
+        if self._view_mode == "age_newest":
             return sorted(issues, key=lambda i: i.created, reverse=True)
-        if self._sort_mode == "age_oldest":
+        if self._view_mode == "age_oldest":
             return sorted(issues, key=lambda i: i.created)
-        # Default: priority (lower number = higher priority, 0 treated as lowest)
-        from orc.queue import _sort_key
-        return sorted(issues, key=_sort_key)
+        return list(issues)
 
     def _apply_filter(self, issues: list[BdIssue]) -> list[BdIssue]:
         """Filter issues by ID or title substring."""
@@ -863,41 +875,66 @@ class QueueTable(Static):
         return [i for i in issues if needle in i.id.lower() or needle in i.title.lower()]
 
     def _rebuild_table(self) -> None:
-        """Re-render the table with current sort and filter settings."""
+        """Re-render the table with current view and filter settings."""
         table = self.query_one("#queue-datatable", DataTable)
         saved_cursor = table.cursor_row
         filtered = self._apply_filter(self._issues)
-        self._filtered_issues = self._sort_issues(filtered)
+        self._filtered_issues = self._apply_view(filtered)
         table.clear()
         if not self._filtered_issues:
             if self._filter_text:
-                table.add_row("-", "-", f"[italic]No matches for '{self._filter_text}'[/]", "-")
+                table.add_row(
+                    "-",
+                    "-",
+                    "-",
+                    f"[italic]No matches for '{self._filter_text}'[/]",
+                    "-",
+                )
             else:
-                table.add_row("-", "-", "[italic]No issues in queue[/]", "-")
+                table.add_row(
+                    "-",
+                    "-",
+                    "-",
+                    "[italic]No issues in dispatch frontier[/]",
+                    "-",
+                )
             return
         for issue in self._filtered_issues:
+            state_label = (
+                "[bold bright_yellow]Held (ready)[/]"
+                if issue.id in self._held_issue_ids
+                else "[bold green]Runnable[/]"
+            )
             pri = str(issue.priority) if issue.priority else "-"
-            table.add_row(pri, issue.id, issue.title, issue.created)
+            table.add_row(issue.id, state_label, pri, issue.title, issue.created)
         if table.row_count > 0:
             table.move_cursor(row=min(saved_cursor, table.row_count - 1))
 
     def update_snapshot(self, snap: DashboardSnapshot) -> None:
-        new_keys = [issue.id for issue in snap.ready_issues]
-        if new_keys == self._row_key:
+        held_issue_ids = set(snap.state.issue_failures)
+        render_key = [
+            (
+                issue.id,
+                issue.title,
+                issue.priority,
+                issue.created,
+                issue.id in held_issue_ids,
+            )
+            for issue in snap.ready_issues
+        ]
+        if render_key == self._render_key:
             return
         self._issues = list(snap.ready_issues)
-        self._row_key = new_keys
+        self._held_issue_ids = held_issue_ids
+        self._render_key = render_key
         self._rebuild_table()
 
-    def action_cycle_sort(self) -> None:
-        """Cycle through sort modes: priority → newest → oldest."""
-        idx = self._SORT_MODES.index(self._sort_mode)
-        self._sort_mode = self._SORT_MODES[(idx + 1) % len(self._SORT_MODES)]
-        sort_labels = {"priority": "Priority", "age_newest": "Newest first", "age_oldest": "Oldest first"}
-        self.query_one(".panel-title", Label).update(
-            f"Ready Queue [Sort: {sort_labels[self._sort_mode]}]"
-        )
-        self._row_key = []  # force re-render
+    def action_cycle_view(self) -> None:
+        """Cycle local views: Beads order → newest → oldest."""
+        idx = self._VIEW_MODES.index(self._view_mode)
+        self._view_mode = self._VIEW_MODES[(idx + 1) % len(self._VIEW_MODES)]
+        self.query_one(".panel-title", Label).update(self._panel_title_text())
+        self._render_key = []  # force re-render
         self._rebuild_table()
 
     def action_toggle_filter(self) -> None:
@@ -909,7 +946,7 @@ class QueueTable(Static):
         else:
             self._filter_text = ""
             filter_input.value = ""
-            self._row_key = []
+            self._render_key = []
             self._rebuild_table()
 
     def action_inspect(self) -> None:
@@ -923,9 +960,11 @@ class QueueTable(Static):
         if row_idx < 0 or row_idx >= len(self._filtered_issues):
             return
         issue = self._filtered_issues[row_idx]
+        state_label = "Held (ready)" if issue.id in self._held_issue_ids else "Runnable"
         title = f"Issue: {issue.id}"
         lines = [
             f"[bold]Title:[/] {issue.title}",
+            f"[bold]Dispatch state:[/] {state_label}",
             f"[bold]Priority:[/] {issue.priority}",
             f"[bold]Created:[/] {issue.created}",
         ]

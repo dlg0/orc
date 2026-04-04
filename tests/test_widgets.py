@@ -550,52 +550,56 @@ def test_category_icons_cover_all_categories() -> None:
         assert cat.value in _CATEGORY_ICONS, f"_CATEGORY_ICONS missing '{cat.value}'"
 
 
-# --- QueueTable sort/filter tests ---
+# --- QueueTable view/filter tests ---
 
 
-def test_queue_table_sort_modes() -> None:
-    """QueueTable should cycle through three sort modes."""
+def test_queue_table_view_modes() -> None:
+    """QueueTable should cycle through three local view modes."""
     table = QueueTable()
-    assert table._sort_mode == "priority"
-    # Simulate cycling
-    modes = QueueTable._SORT_MODES
-    assert modes == ("priority", "age_newest", "age_oldest")
+    assert table._view_mode == "beads"
+    modes = QueueTable._VIEW_MODES
+    assert modes == ("beads", "age_newest", "age_oldest")
 
 
-def test_queue_table_sort_issues_by_priority() -> None:
-    """Default sort should order by priority (lower number first, 0 last)."""
+def test_queue_table_default_view_preserves_frontier_order() -> None:
+    """Default view should preserve the incoming dispatch frontier order."""
     table = QueueTable()
     issues = [
-        BdIssue(id="A-1", title="Low", priority=4, created="2025-01-01"),
-        BdIssue(id="A-2", title="Urgent", priority=1, created="2025-01-02"),
-        BdIssue(id="A-3", title="None", priority=0, created="2025-01-03"),
+        BdIssue(id="A-3", title="Later in Beads order", priority=4, created="2025-01-01"),
+        BdIssue(id="A-1", title="Higher priority but second", priority=1, created="2025-01-03"),
+        BdIssue(id="A-2", title="Middle", priority=2, created="2025-01-02"),
     ]
-    sorted_issues = table._sort_issues(issues)
-    assert [i.id for i in sorted_issues] == ["A-2", "A-1", "A-3"]
+    viewed_issues = table._apply_view(issues)
+    assert [i.id for i in viewed_issues] == ["A-3", "A-1", "A-2"]
 
 
-def test_queue_table_sort_issues_by_age_newest() -> None:
-    """age_newest sort should put newest first."""
+def test_queue_table_view_issues_by_age_newest() -> None:
+    """age_newest view should put newest items first."""
     table = QueueTable()
-    table._sort_mode = "age_newest"
+    table._view_mode = "age_newest"
     issues = [
         BdIssue(id="A-1", title="Old", priority=1, created="2025-01-01"),
         BdIssue(id="A-2", title="New", priority=1, created="2025-06-01"),
     ]
-    sorted_issues = table._sort_issues(issues)
-    assert [i.id for i in sorted_issues] == ["A-2", "A-1"]
+    viewed_issues = table._apply_view(issues)
+    assert [i.id for i in viewed_issues] == ["A-2", "A-1"]
 
 
-def test_queue_table_sort_issues_by_age_oldest() -> None:
-    """age_oldest sort should put oldest first."""
+def test_queue_table_view_issues_by_age_oldest() -> None:
+    """age_oldest view should put oldest items first."""
     table = QueueTable()
-    table._sort_mode = "age_oldest"
+    table._view_mode = "age_oldest"
     issues = [
         BdIssue(id="A-1", title="New", priority=1, created="2025-06-01"),
         BdIssue(id="A-2", title="Old", priority=1, created="2025-01-01"),
     ]
-    sorted_issues = table._sort_issues(issues)
-    assert [i.id for i in sorted_issues] == ["A-2", "A-1"]
+    viewed_issues = table._apply_view(issues)
+    assert [i.id for i in viewed_issues] == ["A-2", "A-1"]
+
+
+def test_queue_table_title_describes_dispatch_frontier_view() -> None:
+    table = QueueTable()
+    assert table._panel_title_text() == "Dispatch Frontier [View: Beads order]"
 
 
 def test_queue_table_filter_by_id() -> None:
@@ -633,8 +637,8 @@ def test_queue_table_empty_filter_returns_all() -> None:
     assert table._apply_filter(issues) == issues
 
 
-def test_queue_table_has_sort_and_filter_bindings() -> None:
-    """QueueTable should have bindings for sort (o) and filter (/)."""
+def test_queue_table_has_view_and_filter_bindings() -> None:
+    """QueueTable should have bindings for view (o) and filter (/)."""
     table = QueueTable()
     binding_keys = [b.key for b in table.BINDINGS]
     assert "o" in binding_keys
