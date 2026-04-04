@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
@@ -12,7 +13,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header
 
 from orc.config import OrchestratorConfig
-from orc.queue import get_issue_status
+from orc.queue import BdIssue, QueueBreakdown, get_issue_status
 from orc.state import OrchestratorMode, StateStore, RequestQueue
 from orc.tui.snapshot import (
     DashboardSnapshot,
@@ -212,6 +213,8 @@ class OrchestratorApp(App):
         self._last_successful_refresh: datetime | None = None
         self._last_queue_refresh: datetime | None = None
         self._last_refresh_error: str | None = None
+        self._last_good_queue_issues: list[BdIssue] | None = None
+        self._last_good_queue_breakdown: QueueBreakdown | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -271,7 +274,7 @@ class OrchestratorApp(App):
             return
         try:
             snap = load_snapshot_fast(self._state_dir, self._config)
-            self.call_from_thread(self._mark_refresh_success)
+            self.call_from_thread(self._mark_refresh_success, False, False)
             self.call_from_thread(self._apply_fast_snapshot, snap)
         except Exception as exc:
             self.call_from_thread(self._mark_refresh_error, str(exc))
@@ -283,8 +286,7 @@ class OrchestratorApp(App):
             return
         try:
             snap = load_snapshot(self._repo_root, self._state_dir)
-            self.call_from_thread(self._mark_refresh_success, True)
-            self.call_from_thread(self._apply_snapshot, snap)
+            self.call_from_thread(self._apply_loaded_snapshot, snap)
         except Exception as exc:
             self.call_from_thread(self._mark_refresh_error, str(exc))
 
@@ -295,28 +297,86 @@ class OrchestratorApp(App):
             return
         try:
             snap = load_snapshot(self._repo_root, self._state_dir)
-            self.call_from_thread(self._mark_refresh_success, True)
-            self.call_from_thread(self._apply_snapshot, snap)
+            self.call_from_thread(self._apply_loaded_snapshot, snap)
         except Exception as exc:
             self.call_from_thread(self._mark_refresh_error, str(exc))
 
-    def _mark_refresh_success(self, includes_queue: bool = False) -> None:
+    def _mark_refresh_success(
+        self,
+        includes_queue: bool = False,
+        clear_error: bool = True,
+    ) -> None:
         """Record a successful refresh and update the status display."""
         now = datetime.now(timezone.utc)
         self._last_successful_refresh = now
-        self._last_refresh_error = None
         status_panel = self.query_one(StatusPanel)
         status_panel.update_last_refreshed(now)
-        status_panel.hide_refresh_error()
+        if clear_error:
+            self._last_refresh_error = None
+            status_panel.hide_refresh_error()
         if includes_queue:
             self._last_queue_refresh = now
             status_panel.update_queue_last_refreshed(now)
-        self.query_one(StaleBanner).hide()
+        if self._last_refresh_error is None:
+            self.query_one(StaleBanner).hide()
 
     def _mark_refresh_error(self, message: str) -> None:
         """Record a failed refresh and show warning in StatusPanel."""
         self._last_refresh_error = message
         self.query_one(StatusPanel).show_refresh_error(message)
+
+    def _snapshot_refresh_error(self, snap: DashboardSnapshot) -> str | None:
+        """Return a user-visible refresh error for partial snapshot failures."""
+        messages: list[str] = []
+        if snap.config_error:
+            messages.append(f"Config: {snap.config_error}")
+        if snap.queue_result is not None and not snap.queue_result.success:
+            messages.append(f"Queue: {snap.queue_result.error or 'refresh failed'}")
+        if not messages:
+            return None
+        return " | ".join(messages)
+
+    def _remember_queue_snapshot(self, snap: DashboardSnapshot) -> None:
+        """Cache the last successful queue payload for transient queue failures."""
+        if (
+            snap.queue_result is None
+            or not snap.queue_result.success
+            or snap.queue_breakdown is None
+        ):
+            return
+        self._last_good_queue_issues = list(snap.ready_issues)
+        self._last_good_queue_breakdown = snap.queue_breakdown
+
+    def _snapshot_for_display(self, snap: DashboardSnapshot) -> DashboardSnapshot:
+        """Reuse the last good queue view when the latest queue refresh failed."""
+        if (
+            snap.queue_result is None
+            or snap.queue_result.success
+            or self._last_good_queue_issues is None
+            or self._last_good_queue_breakdown is None
+        ):
+            return snap
+        return replace(
+            snap,
+            ready_issues=list(self._last_good_queue_issues),
+            queue_breakdown=self._last_good_queue_breakdown,
+        )
+
+    def _apply_loaded_snapshot(self, snap: DashboardSnapshot) -> None:
+        """Apply a full snapshot while preserving queue failure semantics."""
+        queue_refresh_ok = snap.queue_result is None or snap.queue_result.success
+        refresh_error = self._snapshot_refresh_error(snap)
+
+        if queue_refresh_ok:
+            self._remember_queue_snapshot(snap)
+
+        self._mark_refresh_success(
+            includes_queue=queue_refresh_ok,
+            clear_error=refresh_error is None,
+        )
+        self._apply_snapshot(self._snapshot_for_display(snap))
+        if refresh_error is not None:
+            self._mark_refresh_error(refresh_error)
 
     def _check_staleness(self) -> None:
         """Show/hide the stale banner based on time since last successful refresh."""
@@ -409,10 +469,6 @@ class OrchestratorApp(App):
         suppress = self._check_pending_action(snap)
         if not suppress:
             self.query_one(StatusPanel).update_snapshot(snap)
-        if snap.config_error:
-            self.query_one(StatusPanel).show_refresh_error(
-                f"Config: {snap.config_error}"
-            )
         self.query_one(ActiveIssuePanel).update_snapshot(snap)
         self.query_one(ConfigPanel).update_snapshot(snap)
         self.query_one(QueueTable).update_snapshot(snap)

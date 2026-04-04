@@ -6,7 +6,14 @@ from pathlib import Path
 
 from orc.config import OrchestratorConfig, load_config
 from orc.events import EventLog
-from orc.queue import BdIssue, QueueBreakdown, compute_queue_breakdown, get_ready_issues, reconcile_issue_failures
+from orc.queue import (
+    BdIssue,
+    QueueBreakdown,
+    QueueResult,
+    compute_queue_breakdown,
+    get_ready_issues,
+    reconcile_issue_failures,
+)
 from orc.state import OrchestratorState, StateStore
 
 
@@ -17,6 +24,7 @@ class DashboardSnapshot:
     recent_events: list[dict]
     config: OrchestratorConfig
     queue_breakdown: QueueBreakdown | None = None
+    queue_result: QueueResult | None = None
     is_fast: bool = False
     config_error: str | None = None
 
@@ -56,7 +64,9 @@ def load_snapshot(repo_root: Path, state_dir: Path) -> DashboardSnapshot:
 
     queue_result = get_ready_issues(repo_root)
     recent_events = EventLog(state_dir).recent(100)
-    breakdown = compute_queue_breakdown(queue_result, state.issue_failures)
+    breakdown = None
+    if queue_result.success:
+        breakdown = compute_queue_breakdown(queue_result, state.issue_failures)
 
     return DashboardSnapshot(
         state=state,
@@ -64,5 +74,6 @@ def load_snapshot(repo_root: Path, state_dir: Path) -> DashboardSnapshot:
         recent_events=recent_events,
         config=config,
         queue_breakdown=breakdown,
+        queue_result=queue_result,
         config_error=config_error,
     )

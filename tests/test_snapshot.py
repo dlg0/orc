@@ -47,6 +47,24 @@ def test_load_snapshot_with_state(tmp_path: Path) -> None:
     assert snap.state.active_issue_title == "Fix bug"
     assert len(snap.ready_issues) == 1
     assert snap.ready_issues[0].id == "X-2"
+    assert snap.queue_result is not None
+    assert snap.queue_result.success is True
+
+
+def test_load_snapshot_preserves_queue_failure(tmp_path: Path) -> None:
+    """Queue fetch failures should remain distinguishable from an empty queue."""
+    state_dir = tmp_path / ".orc"
+    state_dir.mkdir()
+
+    failed_result = QueueResult(success=False, error="bd ready failed")
+    with patch("orc.tui.snapshot.get_ready_issues", return_value=failed_result):
+        snap = load_snapshot(tmp_path, state_dir)
+
+    assert snap.ready_issues == []
+    assert snap.queue_breakdown is None
+    assert snap.queue_result is failed_result
+    assert snap.queue_result.success is False
+    assert snap.queue_result.error == "bd ready failed"
 
 
 def test_load_snapshot_with_events(tmp_path: Path) -> None:
