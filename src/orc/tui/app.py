@@ -479,6 +479,7 @@ class OrchestratorApp(App):
         self.query_one(HeldIssuesTable).update_snapshot(snap)
         self.query_one(EventsLog).update_snapshot(snap)
         self.query_one(HistoryTable).update_snapshot(snap)
+        self._refresh_open_issue_inspector(snap)
 
     def _apply_snapshot(self, snap: DashboardSnapshot) -> None:
         """Update all panels."""
@@ -492,6 +493,18 @@ class OrchestratorApp(App):
         self.query_one(HeldIssuesTable).update_snapshot(snap)
         self.query_one(EventsLog).update_snapshot(snap)
         self.query_one(HistoryTable).update_snapshot(snap)
+        self._refresh_open_issue_inspector(snap)
+
+    def _refresh_open_issue_inspector(self, snap: DashboardSnapshot) -> None:
+        """Keep an open active issue inspector in sync with the latest snapshot."""
+        if not self._state_dir:
+            return
+
+        from orc.tui.issue_inspect import IssueInspectScreen
+
+        screen = self.screen
+        if isinstance(screen, IssueInspectScreen):
+            screen.refresh_active_run(snap.state, self._state_dir)
 
     # -- Control actions -------------------------------------------------------
 

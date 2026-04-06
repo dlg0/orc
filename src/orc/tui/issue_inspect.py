@@ -563,6 +563,14 @@ class IssueInspectScreen(Screen[None]):
         super().__init__(**kwargs)
         self._model = model
 
+    @property
+    def issue_id(self) -> str:
+        return self._model.issue_id
+
+    @property
+    def source(self) -> str:
+        return self._model.source
+
     def compose(self) -> ComposeResult:
         m = self._model
         with Vertical(id="ii-root"):
@@ -590,7 +598,11 @@ class IssueInspectScreen(Screen[None]):
                     with VerticalScroll(id="ii-content-scroll"):
                         # Overview (always)
                         yield Label("Overview", classes="ii-section-title")
-                        yield Static(self._render_overview(), classes="ii-section-body")
+                        yield Static(
+                            self._render_overview(),
+                            id="ii-overview-body",
+                            classes="ii-section-body",
+                        )
 
                         # Issue Details (if description or AC available)
                         if m.description or m.acceptance_criteria:
@@ -617,8 +629,8 @@ class IssueInspectScreen(Screen[None]):
                             yield Label("Merge", classes="ii-section-title")
                             yield Static(self._render_merge_details(), classes="ii-section-body")
 
-                    # Events table (if events exist)
-                    if m.events:
+                    # Active inspectors refresh in place, so keep the table mounted.
+                    if m.source == "active" or m.events:
                         yield DataTable(id="ii-events-table", cursor_type="row")
 
             yield Static(self._render_hints(), id="ii-hints")
@@ -634,41 +646,89 @@ class IssueInspectScreen(Screen[None]):
                 pass
             else:
                 timeline_table.add_columns("", "Step", "Phase")
-                for step in m.workflow_steps:
-                    glyph = _STATUS_GLYPHS.get(step.status, "?")
-                    phase_color = _PHASE_COLORS.get(step.phase, "white")
-                    label = step.label
-                    if step.has_log and step.status == "active":
-                        label += " [dim](a=log)[/]"
-                    timeline_table.add_row(glyph, f"[{phase_color}]{label}[/]", step.phase)
+                self._refresh_timeline_table()
 
         # Populate events table
-        if m.events:
-            try:
-                events_table = self.query_one("#ii-events-table", DataTable)
-            except Exception:
-                pass
-            else:
-                events_table.add_columns("Time", "Sev", "Phase", "Type", "Message")
-                for event in m.events:
-                    ts = event.get("timestamp", "")
-                    if "T" in ts:
-                        ts = ts.split("T")[1].split(".")[0] if "." in ts.split("T")[1] else ts.split("T")[1].split("+")[0]
-                    event_type = event.get("event_type", "")
-                    sev = _event_severity(event_type)
-                    sev_style = _SEVERITY_STYLE.get(sev, "bright_white")
-                    color = EVENT_COLORS.get(event_type, "white")
-                    phase_str = phase_label(event.get("phase"))
-                    message = _human_message(event_type, event.get("data"))
-                    if len(message) > 100:
-                        message = message[:97] + "…"
-                    events_table.add_row(
-                        ts,
-                        f"[{sev_style}]{sev}[/]",
-                        phase_str,
-                        f"[{color}]{event_type}[/]",
-                        message,
-                    )
+        try:
+            events_table = self.query_one("#ii-events-table", DataTable)
+        except Exception:
+            pass
+        else:
+            events_table.add_columns("Time", "Sev", "Phase", "Type", "Message")
+            self._refresh_events_table()
+
+    def refresh_active_run(self, state: OrchestratorState, state_dir: Path) -> None:
+        """Refresh an open active-run inspector from the latest dashboard state."""
+        if self._model.source != "active" or state.active_issue_id != self._model.issue_id:
+            return
+
+        model = build_from_active(state, state_dir)
+        if model is None or model.issue_id != self._model.issue_id:
+            return
+
+        self._model = model
+        self.query_one("#ii-header-title", Label).update(
+            f"[{model.status_tone}]{model.state_label}[/]: {model.issue_id}"
+        )
+        self.query_one("#ii-header-meta", Label).update(self._build_header_meta())
+        self.query_one("#ii-overview-body", Static).update(self._render_overview())
+        self.query_one("#ii-links", Static).update(self._render_links())
+        self.query_one("#ii-hints", Static).update(self._render_hints())
+        self._refresh_timeline_table()
+        self._refresh_events_table()
+
+    def _refresh_timeline_table(self) -> None:
+        if self._model.source != "active":
+            return
+
+        timeline_table = self.query_one("#ii-timeline-table", DataTable)
+        saved_cursor = timeline_table.cursor_row
+        timeline_table.clear()
+        for step in self._model.workflow_steps:
+            glyph = _STATUS_GLYPHS.get(step.status, "?")
+            phase_color = _PHASE_COLORS.get(step.phase, "white")
+            label = step.label
+            if step.has_log and step.status == "active":
+                label += " [dim](a=log)[/]"
+            timeline_table.add_row(glyph, f"[{phase_color}]{label}[/]", step.phase)
+        if timeline_table.row_count > 0:
+            timeline_table.move_cursor(row=min(saved_cursor, timeline_table.row_count - 1))
+
+    def _refresh_events_table(self) -> None:
+        events_table = self.query_one("#ii-events-table", DataTable)
+        saved_cursor = events_table.cursor_row
+        events_table.clear()
+
+        if not self._model.events:
+            events_table.display = False
+            return
+
+        events_table.display = True
+        for event in self._model.events:
+            ts = event.get("timestamp", "")
+            if "T" in ts:
+                ts = (
+                    ts.split("T")[1].split(".")[0]
+                    if "." in ts.split("T")[1]
+                    else ts.split("T")[1].split("+")[0]
+                )
+            event_type = event.get("event_type", "")
+            sev = _event_severity(event_type)
+            sev_style = _SEVERITY_STYLE.get(sev, "bright_white")
+            color = EVENT_COLORS.get(event_type, "white")
+            phase_str = phase_label(event.get("phase"))
+            message = _human_message(event_type, event.get("data"))
+            if len(message) > 100:
+                message = message[:97] + "…"
+            events_table.add_row(
+                ts,
+                f"[{sev_style}]{sev}[/]",
+                phase_str,
+                f"[{color}]{event_type}[/]",
+                message,
+            )
+        if events_table.row_count > 0:
+            events_table.move_cursor(row=min(saved_cursor, events_table.row_count - 1))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Open log when a timeline step with a log is selected."""

@@ -11,6 +11,7 @@ from textual.widgets import DataTable, Label
 
 from orc.config import OrchestratorConfig
 from orc.dispatch_policy import DispatchSkip
+from orc.events import EventLog, EventType
 from orc.queue import BdIssue, QueueBreakdown, QueueResult, compute_queue_breakdown
 from orc.state import OrchestratorMode, OrchestratorState, RunCheckpoint, RunStage
 from orc.tui.app import OrchestratorApp
@@ -349,6 +350,77 @@ async def test_inspect_queue_item() -> None:
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, IssueInspectScreen)
+
+
+@pytest.mark.asyncio
+async def test_active_issue_inspector_refreshes_while_issue_runs(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    event_log = EventLog(state_dir)
+    event_log.record(EventType.issue_selected, {"issue_id": "bz1"}, phase=RunStage.preflight)
+
+    initial_checkpoint = RunCheckpoint(
+        issue_id="bz1",
+        issue_title="Fix widget",
+        stage=RunStage.preflight,
+        preflight_log_path="/tmp/preflight.log",
+        updated_at="2026-01-01T10:00:00Z",
+    )
+
+    app = OrchestratorApp(state_dir=state_dir)
+    async with app.run_test() as pilot:
+        app._apply_fast_snapshot(
+            _make_snap(
+                state=OrchestratorState(
+                    mode=OrchestratorMode.running,
+                    active_run=initial_checkpoint.to_dict(),
+                ),
+                recent_events=event_log.recent(100),
+            )
+        )
+        await pilot.pause()
+
+        active_panel = app.query_one(ActiveIssuePanel)
+        active_panel.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        from orc.tui.issue_inspect import IssueInspectScreen
+
+        assert isinstance(app.screen, IssueInspectScreen)
+        assert app.screen._model.current_phase == RunStage.preflight.value
+
+        event_log.record(EventType.amp_started, {"issue_id": "bz1"}, phase=RunStage.amp_running)
+        updated_checkpoint = RunCheckpoint(
+            issue_id="bz1",
+            issue_title="Fix widget",
+            branch="amp/bz1",
+            worktree_path="/tmp/wt",
+            stage=RunStage.amp_running,
+            amp_log_path="/tmp/amp.log",
+            preflight_log_path="/tmp/preflight.log",
+            updated_at="2026-01-01T10:01:00Z",
+        )
+        app._apply_fast_snapshot(
+            _make_snap(
+                state=OrchestratorState(
+                    mode=OrchestratorMode.running,
+                    active_run=updated_checkpoint.to_dict(),
+                ),
+                recent_events=event_log.recent(100),
+            )
+        )
+        await pilot.pause()
+
+        assert isinstance(app.screen, IssueInspectScreen)
+        assert app.screen._model.current_phase == RunStage.amp_running.value
+        assert app.screen._model.amp_log_path == "/tmp/amp.log"
+
+        header_meta = app.screen.query_one("#ii-header-meta", Label).render().plain
+        assert "Agent running" in header_meta
+
+        events_table = app.screen.query_one("#ii-events-table", DataTable)
+        assert events_table.row_count == 2
 
 
 @pytest.mark.asyncio
