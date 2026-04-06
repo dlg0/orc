@@ -38,6 +38,7 @@ class RunCheckpoint:
     eval_result: dict | None = None
     preserve_worktree: bool = False
     amp_log_path: str | None = None
+    preflight_log_path: str | None = None
     resume_attempts: int = 0
     updated_at: str = ""
 
@@ -55,6 +56,7 @@ class RunCheckpoint:
             "eval_result": self.eval_result,
             "preserve_worktree": self.preserve_worktree,
             "amp_log_path": self.amp_log_path,
+            "preflight_log_path": self.preflight_log_path,
             "resume_attempts": self.resume_attempts,
             "updated_at": self.updated_at,
         }
@@ -75,6 +77,7 @@ class RunCheckpoint:
             eval_result=data.get("eval_result"),
             preserve_worktree=data.get("preserve_worktree", False),
             amp_log_path=data.get("amp_log_path"),
+            preflight_log_path=data.get("preflight_log_path"),
             resume_attempts=data.get("resume_attempts", 0),
             updated_at=data.get("updated_at", ""),
         )
@@ -83,8 +86,13 @@ class RunCheckpoint:
 class FailureCategory(Enum):
     transient_external = "transient_external"
     stale_or_conflicted = "stale_or_conflicted"
-    issue_needs_rework = "issue_needs_rework"
+    awaiting_subtasks = "awaiting_subtasks"
     blocked_by_dependency = "blocked_by_dependency"
+    agent_failed = "agent_failed"
+    agent_crashed = "agent_crashed"
+    merge_exhausted = "merge_exhausted"
+    resume_failed = "resume_failed"
+    sync_failed = "sync_failed"
     fatal_run_error = "fatal_run_error"
 
 
@@ -99,8 +107,13 @@ def _default_failure_action(category: FailureCategory) -> FailureAction:
     return {
         FailureCategory.transient_external: FailureAction.auto_retry,
         FailureCategory.stale_or_conflicted: FailureAction.hold_for_retry,
-        FailureCategory.issue_needs_rework: FailureAction.hold_until_backlog_changes,
+        FailureCategory.awaiting_subtasks: FailureAction.hold_until_backlog_changes,
         FailureCategory.blocked_by_dependency: FailureAction.hold_until_backlog_changes,
+        FailureCategory.agent_failed: FailureAction.pause_orchestrator,
+        FailureCategory.agent_crashed: FailureAction.pause_orchestrator,
+        FailureCategory.merge_exhausted: FailureAction.pause_orchestrator,
+        FailureCategory.resume_failed: FailureAction.pause_orchestrator,
+        FailureCategory.sync_failed: FailureAction.pause_orchestrator,
         FailureCategory.fatal_run_error: FailureAction.pause_orchestrator,
     }[category]
 
@@ -113,7 +126,12 @@ def _normalize_issue_failure(info: object) -> dict:
     else:
         normalized = {"summary": str(info)}
 
-    category = normalized.get("category") or FailureCategory.issue_needs_rework.value
+    category = normalized.get("category") or FailureCategory.agent_failed.value
+    # Migrate legacy category names from old state files
+    _LEGACY_CATEGORY_MAP = {
+        "issue_needs_rework": FailureCategory.agent_failed.value,
+    }
+    category = _LEGACY_CATEGORY_MAP.get(category, category)
     normalized["category"] = category
 
     try:

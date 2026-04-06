@@ -41,6 +41,7 @@ class ActiveIssueModel:
     worktree_path: str | None
     current_phase: str | None
     amp_log_path: str | None
+    preflight_log_path: str | None
     thread_id: str | None
     events: list[dict] = field(default_factory=list)
     timeline: list[ActiveWorkflowStep] = field(default_factory=list)
@@ -79,7 +80,8 @@ def build_active_model(
                     break
 
     amp_log_path = run.get("amp_log_path")
-    timeline = _build_active_timeline(current_phase, amp_log_path)
+    preflight_log_path = run.get("preflight_log_path")
+    timeline = _build_active_timeline(current_phase, amp_log_path, preflight_log_path)
 
     return ActiveIssueModel(
         issue_id=issue_id,
@@ -89,6 +91,7 @@ def build_active_model(
         worktree_path=run.get("worktree_path"),
         current_phase=current_phase,
         amp_log_path=amp_log_path,
+        preflight_log_path=preflight_log_path,
         thread_id=thread_id,
         events=events,
         timeline=timeline,
@@ -98,6 +101,7 @@ def build_active_model(
 def _build_active_timeline(
     current_phase: str | None,
     amp_log_path: str | None,
+    preflight_log_path: str | None = None,
 ) -> list[ActiveWorkflowStep]:
     """Build the workflow step timeline for an active issue."""
     phase_keys = [p.value for p in PHASE_ORDER]
@@ -133,7 +137,10 @@ def _build_active_timeline(
         if status == "skipped":
             continue
 
-        has_log = key == "amp_running" and amp_log_path is not None
+        has_log = (
+            (key == "amp_running" and amp_log_path is not None)
+            or (key == "already_implemented_check" and preflight_log_path is not None)
+        )
 
         steps.append(ActiveWorkflowStep(
             phase=key,
@@ -330,15 +337,18 @@ class ActiveIssueInspectScreen(Screen[None]):
             events_table.add_row("-", "-", "-", "-", "[italic]No events yet[/]")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Open amp log when the amp_running step is selected in the timeline."""
+        """Open amp log when a step with a log is selected in the timeline."""
         table = event.data_table
         if table.id != "ai-timeline-table":
             return
         row_idx = table.cursor_row
         if 0 <= row_idx < len(self._model.timeline):
             step = self._model.timeline[row_idx]
-            if step.has_amp_log and self._model.amp_log_path:
-                self._open_amp_log()
+            if step.has_amp_log:
+                if step.phase == "already_implemented_check" and self._model.preflight_log_path:
+                    self._open_log(self._model.preflight_log_path, f"Preflight: {self._model.issue_id}")
+                elif self._model.amp_log_path:
+                    self._open_amp_log()
 
     def _render_links(self) -> str:
         m = self._model
@@ -350,6 +360,8 @@ class ActiveIssueInspectScreen(Screen[None]):
         if m.thread_id:
             lines.append(f"[bold]Thread:[/] {m.thread_id}")
             lines.append(f"[bold]URL:[/] {_THREAD_URL_PREFIX}{m.thread_id}")
+        if m.preflight_log_path:
+            lines.append(f"[bold]Preflight log:[/] {m.preflight_log_path}")
         if m.amp_log_path:
             lines.append(f"[bold]Amp log:[/] {m.amp_log_path}")
         return "\n".join(lines) if lines else "[dim]No links yet[/]"
@@ -369,6 +381,22 @@ class ActiveIssueInspectScreen(Screen[None]):
         return "  ".join(parts)
 
     # -- Actions ---------------------------------------------------------------
+
+    def _open_log(self, log_path: str, title: str) -> None:
+        """Open any JSONL log file in the AmpStreamModal."""
+        if not Path(log_path).exists():
+            self.app.notify("Log file not found on disk", severity="warning")
+            return
+        header_lines = [f"Issue: {self._model.issue_id}"]
+        if self._model.current_phase:
+            header_lines.append(f"Phase: {phase_label(self._model.current_phase)}")
+        self.app.push_screen(
+            AmpStreamModal(
+                title=title,
+                log_path=log_path,
+                header_lines=header_lines,
+            )
+        )
 
     def _open_amp_log(self) -> None:
         if not self._model.amp_log_path:

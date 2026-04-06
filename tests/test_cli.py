@@ -211,7 +211,7 @@ def test_unhold_clears_failure(tmp_path: Path) -> None:
     state = OrchestratorState(
         mode=OrchestratorMode.idle,
         issue_failures={"bz5": {
-            "category": "issue_needs_rework",
+            "category": "agent_failed",
             "action": "hold_for_retry",
             "stage": "evaluation",
             "summary": "Missing tests",
@@ -295,7 +295,7 @@ def test_status_shows_held_issues(tmp_path: Path) -> None:
         mode=OrchestratorMode.idle,
         issue_failures={
             "bz7": {
-                "category": "issue_needs_rework",
+                "category": "agent_failed",
                 "action": "hold_for_retry",
                 "stage": "evaluation",
                 "summary": "Tests failing",
@@ -312,7 +312,7 @@ def test_status_shows_held_issues(tmp_path: Path) -> None:
             result = runner.invoke(main, ["status"])
             assert result.exit_code == 0
             assert "Held issues: 1" in result.output
-            assert "[issue_needs_rework]" in result.output
+            assert "[agent_failed]" in result.output
             assert "bz7: Tests failing" in result.output
 
 
@@ -375,7 +375,7 @@ def test_status_normalizes_legacy_held_issues(tmp_path: Path) -> None:
             runner = CliRunner()
             result = runner.invoke(main, ["status"])
             assert result.exit_code == 0
-            assert "[issue_needs_rework]" in result.output
+            assert "[agent_failed]" in result.output
             assert "[unknown]" not in result.output
 
 
@@ -438,7 +438,7 @@ def test_unhold_resolves_suffix_id(tmp_path: Path) -> None:
     state = OrchestratorState(
         mode=OrchestratorMode.idle,
         issue_failures={"proj-abc": {
-            "category": "issue_needs_rework",
+            "category": "agent_failed",
             "action": "hold_for_retry",
             "stage": "evaluation",
             "summary": "Missing tests",

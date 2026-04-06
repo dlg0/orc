@@ -114,8 +114,8 @@ def test_issue_failures_round_trip(tmp_path) -> None:
     loaded = store.load()
     assert loaded.issue_failures == {
         "ISSUE-10": {
-            "category": "issue_needs_rework",
-            "action": "hold_until_backlog_changes",
+            "category": "agent_failed",
+            "action": "pause_orchestrator",
             "stage": "legacy",
             "summary": "Missing tests",
             "timestamp": "2026-01-01T00:00:00+00:00",
@@ -148,8 +148,8 @@ def test_load_backward_compat_needs_rework_migrated(tmp_path) -> None:
     state = store.load()
     assert state.issue_failures == {
         "ISSUE-5": {
-            "category": "issue_needs_rework",
-            "action": "hold_until_backlog_changes",
+            "category": "agent_failed",
+            "action": "pause_orchestrator",
             "stage": "legacy",
             "summary": "Bad output",
             "timestamp": "2026-01-01T00:00:00+00:00",
@@ -180,13 +180,13 @@ def test_load_normalizes_legacy_issue_failures(tmp_path) -> None:
     store = StateStore(tmp_path)
     state = store.load()
 
-    assert state.issue_failures["ISSUE-5"]["category"] == "issue_needs_rework"
-    assert state.issue_failures["ISSUE-5"]["action"] == "hold_until_backlog_changes"
+    assert state.issue_failures["ISSUE-5"]["category"] == "agent_failed"
+    assert state.issue_failures["ISSUE-5"]["action"] == "pause_orchestrator"
     assert state.issue_failures["ISSUE-5"]["stage"] == "legacy"
     assert state.issue_failures["ISSUE-5"]["summary"] == "Bad output"
 
-    assert state.issue_failures["ISSUE-6"]["category"] == "issue_needs_rework"
-    assert state.issue_failures["ISSUE-6"]["action"] == "hold_until_backlog_changes"
+    assert state.issue_failures["ISSUE-6"]["category"] == "agent_failed"
+    assert state.issue_failures["ISSUE-6"]["action"] == "pause_orchestrator"
     assert state.issue_failures["ISSUE-6"]["stage"] == "legacy"
     assert state.issue_failures["ISSUE-6"]["summary"] == "Needs another pass"
     assert state.issue_failures["ISSUE-6"]["timestamp"] == ""
@@ -214,7 +214,7 @@ def test_clear_issue_hold_removes_failure_entry() -> None:
     state = OrchestratorState(
         issue_failures={
             "X-3": {
-                "category": "issue_needs_rework",
+                "category": "agent_failed",
                 "action": "hold_for_retry",
                 "stage": "evaluation",
                 "summary": "tests failing",
@@ -248,8 +248,8 @@ def test_active_issue_title_round_trip(tmp_path) -> None:
 
 def test_issue_failure_to_dict_from_dict_round_trip() -> None:
     failure = IssueFailure(
-        category=FailureCategory.issue_needs_rework,
-        action=FailureAction.hold_until_backlog_changes,
+        category=FailureCategory.agent_failed,
+        action=FailureAction.pause_orchestrator,
         stage="eval",
         summary="Missing tests",
         timestamp="2026-01-01T00:00:00+00:00",
@@ -260,8 +260,8 @@ def test_issue_failure_to_dict_from_dict_round_trip() -> None:
         extra={"key": "value"},
     )
     d = failure.to_dict()
-    assert d["category"] == "issue_needs_rework"
-    assert d["action"] == "hold_until_backlog_changes"
+    assert d["category"] == "agent_failed"
+    assert d["action"] == "pause_orchestrator"
     assert d["stage"] == "eval"
     assert d["summary"] == "Missing tests"
     assert d["attempts"] == 2
@@ -270,8 +270,8 @@ def test_issue_failure_to_dict_from_dict_round_trip() -> None:
     assert d["extra"] == {"key": "value"}
 
     restored = IssueFailure.from_dict(d)
-    assert restored.category is FailureCategory.issue_needs_rework
-    assert restored.action is FailureAction.hold_until_backlog_changes
+    assert restored.category is FailureCategory.agent_failed
+    assert restored.action is FailureAction.pause_orchestrator
     assert restored.stage == "eval"
     assert restored.summary == "Missing tests"
     assert restored.timestamp == "2026-01-01T00:00:00+00:00"
@@ -436,8 +436,13 @@ def test_failure_category_values() -> None:
     expected = {
         "transient_external",
         "stale_or_conflicted",
-        "issue_needs_rework",
+        "awaiting_subtasks",
         "blocked_by_dependency",
+        "agent_failed",
+        "agent_crashed",
+        "merge_exhausted",
+        "resume_failed",
+        "sync_failed",
         "fatal_run_error",
     }
     assert {c.value for c in FailureCategory} == expected

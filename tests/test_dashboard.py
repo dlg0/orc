@@ -89,8 +89,8 @@ async def test_apply_snapshot_preserves_frontier_order_and_marks_held_rows() -> 
             state=OrchestratorState(
                 issue_failures={
                     "bz3": {
-                        "category": "issue_needs_rework",
-                        "action": "hold_until_backlog_changes",
+                        "category": "agent_failed",
+                        "action": "pause_orchestrator",
                         "summary": "Needs follow-up",
                     }
                 }
@@ -156,8 +156,8 @@ async def test_apply_snapshot_surfaces_dispatch_diagnostics() -> None:
         state = OrchestratorState(
             issue_failures={
                 "bz3": {
-                    "category": "issue_needs_rework",
-                    "action": "hold_until_backlog_changes",
+                    "category": "agent_failed",
+                    "action": "pause_orchestrator",
                     "summary": "Needs follow-up",
                 }
             }

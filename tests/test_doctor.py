@@ -220,8 +220,8 @@ class TestHeldIssues:
         state = OrchestratorState(
             issue_failures={
                 "ISSUE-10": {
-                    "category": "issue_needs_rework",
-                    "action": "hold_until_backlog_changes",
+                    "category": "agent_failed",
+                    "action": "pause_orchestrator",
                     "stage": "amp",
                     "summary": "test",
                     "timestamp": "2026-03-01T00:00:00+00:00",
@@ -243,8 +243,8 @@ class TestHeldIssues:
         state = OrchestratorState(
             issue_failures={
                 "ISSUE-10": {
-                    "category": "issue_needs_rework",
-                    "action": "hold_until_backlog_changes",
+                    "category": "agent_failed",
+                    "action": "pause_orchestrator",
                     "stage": "amp",
                     "summary": "test",
                     "timestamp": "2026-03-01T00:00:00+00:00",
@@ -289,8 +289,8 @@ class TestHeldIssues:
         state = OrchestratorState(
             issue_failures={
                 "ISSUE-12": {
-                    "category": "issue_needs_rework",
-                    "action": "hold_until_backlog_changes",
+                    "category": "agent_failed",
+                    "action": "pause_orchestrator",
                     "stage": "amp",
                     "summary": "old failure",
                     "timestamp": old_ts,
@@ -311,8 +311,8 @@ class TestHeldIssues:
         state = OrchestratorState(
             issue_failures={
                 "ISSUE-13": {
-                    "category": "issue_needs_rework",
-                    "action": "hold_until_backlog_changes",
+                    "category": "agent_failed",
+                    "action": "pause_orchestrator",
                     "stage": "amp",
                     "summary": "repeated failure",
                     "timestamp": datetime.now(timezone.utc).isoformat(),

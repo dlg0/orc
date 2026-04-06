@@ -295,8 +295,13 @@ def _action_for_category(category: FailureCategory) -> FailureAction:
     return {
         FailureCategory.transient_external: FailureAction.auto_retry,
         FailureCategory.stale_or_conflicted: FailureAction.hold_for_retry,
-        FailureCategory.issue_needs_rework: FailureAction.hold_until_backlog_changes,
+        FailureCategory.awaiting_subtasks: FailureAction.hold_until_backlog_changes,
         FailureCategory.blocked_by_dependency: FailureAction.hold_until_backlog_changes,
+        FailureCategory.agent_failed: FailureAction.pause_orchestrator,
+        FailureCategory.agent_crashed: FailureAction.pause_orchestrator,
+        FailureCategory.merge_exhausted: FailureAction.pause_orchestrator,
+        FailureCategory.resume_failed: FailureAction.pause_orchestrator,
+        FailureCategory.sync_failed: FailureAction.pause_orchestrator,
         FailureCategory.fatal_run_error: FailureAction.pause_orchestrator,
     }[category]
 
@@ -434,7 +439,7 @@ def _attempt_resume(
         except Exception as exc:
             click.echo(f"[RESUME] {issue_id} amp failed during recovery: {exc}")
             _record_failure(
-                store, state_dir, state, issue_id, FailureCategory.issue_needs_rework, WorkflowPhase.amp_running.value,
+                store, state_dir, state, issue_id, FailureCategory.resume_failed, WorkflowPhase.amp_running.value,
                 str(exc), branch, wt_path_str,
             )
             _unclaim_active(state, events, repo_root)
@@ -451,7 +456,7 @@ def _attempt_resume(
         if not result.merge_ready or result.result != ResultType.completed:
             click.echo(f"[RESUME] {issue_id} not merge-ready after recovery — marking needs_human")
             _record_failure(
-                store, state_dir, state, issue_id, FailureCategory.issue_needs_rework, WorkflowPhase.amp_running.value,
+                store, state_dir, state, issue_id, FailureCategory.resume_failed, WorkflowPhase.amp_running.value,
                 result.summary, branch, wt_path_str,
             )
             _unclaim_active(state, events, repo_root)
@@ -495,7 +500,7 @@ def _attempt_resume(
     if not sync_ok:
         click.echo(f"[SYNC] {issue_id} sync failed: {sync_error}")
         _record_failure(
-            store, state_dir, state, issue_id, FailureCategory.issue_needs_rework,
+            store, state_dir, state, issue_id, FailureCategory.sync_failed,
             WorkflowPhase.post_merge_eval.value,
             f"repo sync failed: {sync_error}", branch, wt_path_str,
         )
@@ -751,14 +756,22 @@ def run_loop(
 
         # Already-implemented preflight check
         if already_implemented_checker is not None:
+            # Create a dedicated log file for the preflight amp call
+            preflight_logs_dir = state_dir / "amp-runs"
+            preflight_logs_dir.mkdir(parents=True, exist_ok=True)
+            preflight_ts = _now_iso().replace(":", "-").replace("+", "p")
+            preflight_log_path = preflight_logs_dir / f"{preflight_ts}-{issue.id}-preflight.jsonl"
+            state.active_run["preflight_log_path"] = str(preflight_log_path)
             _update_checkpoint(store, state_dir, state, RunStage.already_implemented_check, events=events)
             click.echo(f"[PREFLIGHT] {issue.id} checking if already implemented (mode=rush) ...")
+            click.echo(f"[PREFLIGHT] {issue.id} log={preflight_log_path}")
             ai_result = already_implemented_checker.check(
                 issue_id=issue.id,
                 title=issue.title,
                 description=issue.description,
                 acceptance_criteria=issue.acceptance_criteria,
                 cwd=repo_root,
+                log_path=preflight_log_path,
             )
             if ai_result.should_skip:
                 click.echo(
@@ -770,13 +783,9 @@ def run_loop(
                     "summary": ai_result.summary,
                     "evidence": ai_result.evidence,
                 })
+                close_issue(issue.id, cwd=repo_root)
+                click.echo(f"[PREFLIGHT] {issue.id} closed (already implemented)")
                 _clear_active(store, state_dir, state)
-                _record_failure(
-                    store, state_dir, state, issue.id,
-                    FailureCategory.issue_needs_rework,
-                    WorkflowPhase.already_implemented_check.value,
-                    f"Already implemented ({ai_result.confidence.value}): {ai_result.summary}",
-                )
                 _record_run(
                     store, state_dir, state, issue.id,
                     "skipped_already_implemented",
@@ -866,7 +875,7 @@ def run_loop(
             click.echo(f"[AMP] {issue.id} FAILED: {exc}")
             events.record(EventType.error, {"issue_id": issue.id, "stage": "amp", "error": str(exc)})
             _record_failure(
-                store, state_dir, state, issue.id, FailureCategory.issue_needs_rework, WorkflowPhase.amp_running.value,
+                store, state_dir, state, issue.id, FailureCategory.agent_crashed, WorkflowPhase.amp_running.value,
                 str(exc), wt_info.branch_name, str(wt_info.worktree_path),
                 extra={"amp_log_path": str(amp_log_path)} if amp_log_path.exists() else None,
             )
@@ -956,7 +965,7 @@ def run_loop(
                 click.echo(f"[AMP] {issue.id} WARNING: failed to rewrite parent as integration issue")
                 events.record(EventType.error, {"issue_id": issue.id, "stage": "decomposition_rewrite", "error": "rewrite_parent_as_integration_issue failed"})
             _record_failure(
-                store, state_dir, state, issue.id, FailureCategory.blocked_by_dependency, WorkflowPhase.amp_finished.value,
+                store, state_dir, state, issue.id, FailureCategory.awaiting_subtasks, WorkflowPhase.amp_finished.value,
                 result.summary, wt_info.branch_name, wt_path,
                 extra=ctx_extra or None,
             )
@@ -992,7 +1001,7 @@ def run_loop(
         if result.result in (ResultType.failed, ResultType.needs_human):
             click.echo(f"[AMP] {issue.id} {result.result.value} -- moving on")
             _record_failure(
-                store, state_dir, state, issue.id, FailureCategory.issue_needs_rework, WorkflowPhase.amp_finished.value,
+                store, state_dir, state, issue.id, FailureCategory.agent_failed, WorkflowPhase.amp_finished.value,
                 result.summary, wt_info.branch_name, wt_path,
                 extra=ctx_extra or None,
             )
@@ -1051,7 +1060,7 @@ def run_loop(
                 reopen_issue(issue.id, cwd=repo_root)
                 click.echo(f"[MERGE-RECOVERY] {issue.id} reopened — stopping orchestrator")
                 _record_failure(
-                    store, state_dir, state, issue.id, FailureCategory.issue_needs_rework,
+                    store, state_dir, state, issue.id, FailureCategory.merge_exhausted,
                     WorkflowPhase.merge_recovery.value,
                     f"merge recovery exhausted: {sync_error}", wt_info.branch_name, wt_path,
                     extra=ctx_extra or None,

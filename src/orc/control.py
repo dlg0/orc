@@ -12,6 +12,7 @@ import click
 
 logger = logging.getLogger(__name__)
 
+from orc.already_implemented import AmpAlreadyImplementedChecker
 from orc.amp_runner import RealAmpRunner
 from orc.config import OrchestratorConfig, load_config
 from orc.evaluator import AmpEvaluatorRunner
@@ -148,7 +149,8 @@ def start_orchestrator(
             mode=config.evaluation_mode or config.amp_mode,
             timeout=config.evaluation_timeout,
         ) if config.enable_evaluation else None
-        run_loop(repo_root, state_dir, config, runner, evaluator=evaluator, fail_fast=fail_fast, only_issue=only_issue)
+        ai_checker = AmpAlreadyImplementedChecker() if config.use_already_implemented_preflight else None
+        run_loop(repo_root, state_dir, config, runner, evaluator=evaluator, already_implemented_checker=ai_checker, fail_fast=fail_fast, only_issue=only_issue)
     except Exception:
         # Ensure state goes back to error on unexpected failure
         try:
@@ -225,7 +227,8 @@ def resume_orchestrator(repo_root: Path, state_dir: Path, *, fail_fast: bool = F
             mode=config.evaluation_mode or config.amp_mode,
             timeout=config.evaluation_timeout,
         ) if config.enable_evaluation else None
-        run_loop(repo_root, state_dir, config, runner, evaluator=evaluator, fail_fast=fail_fast)
+        ai_checker = AmpAlreadyImplementedChecker() if config.use_already_implemented_preflight else None
+        run_loop(repo_root, state_dir, config, runner, evaluator=evaluator, already_implemented_checker=ai_checker, fail_fast=fail_fast)
     except Exception:
         try:
             store = StateStore(state_dir)

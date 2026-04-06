@@ -266,7 +266,7 @@ def test_retry_held_issue_notifies_when_issue_is_closed(tmp_path: Path) -> None:
         OrchestratorState(
             issue_failures={
                 "orc-qyy": {
-                    "category": "issue_needs_rework",
+                    "category": "agent_failed",
                     "action": "hold_for_retry",
                     "stage": "evaluation",
                     "summary": "Needs retry",
@@ -306,7 +306,7 @@ def test_retry_held_issue_keeps_requeue_message_for_open_issue(tmp_path: Path) -
         OrchestratorState(
             issue_failures={
                 "orc-qyy": {
-                    "category": "issue_needs_rework",
+                    "category": "agent_failed",
                     "action": "hold_for_retry",
                     "stage": "evaluation",
                     "summary": "Needs retry",
@@ -829,8 +829,8 @@ def test_held_issues_table_stores_held_items() -> None:
             "attempts": 2,
         },
         "TEST-2": {
-            "category": "issue_needs_rework",
-            "action": "hold_until_backlog_changes",
+            "category": "agent_failed",
+            "action": "pause_orchestrator",
             "stage": "evaluation",
             "summary": "tests failed",
             "timestamp": "2025-01-01T00:01:00Z",

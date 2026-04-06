@@ -601,7 +601,7 @@ def test_worktree_failure_non_oserror_records_fatal(repo_root: Path, state_dir: 
     assert state.issue_failures["test-1"]["category"] == "fatal_run_error"
 
 
-def test_amp_crash_records_issue_needs_rework(repo_root: Path, state_dir: Path) -> None:
+def test_amp_crash_records_agent_crashed(repo_root: Path, state_dir: Path) -> None:
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     issue = _make_issue()
@@ -632,7 +632,7 @@ def test_amp_crash_records_issue_needs_rework(repo_root: Path, state_dir: Path) 
 
     state = StateStore(state_dir).load()
     assert "test-1" in state.issue_failures
-    assert state.issue_failures["test-1"]["category"] == "issue_needs_rework"
+    assert state.issue_failures["test-1"]["category"] == "agent_crashed"
     assert state.issue_failures["test-1"]["stage"] == "amp_running"
 
 
@@ -697,7 +697,7 @@ def test_decomposed_records_blocked_by_dependency(repo_root: Path, state_dir: Pa
 
     state = StateStore(state_dir).load()
     assert "test-1" in state.issue_failures
-    assert state.issue_failures["test-1"]["category"] == "blocked_by_dependency"
+    assert state.issue_failures["test-1"]["category"] == "awaiting_subtasks"
 
 
 def test_decomposed_rewrites_parent_as_integration(repo_root: Path, state_dir: Path) -> None:
@@ -774,7 +774,7 @@ def test_sync_failure_triggers_merge_recovery_then_stops(repo_root: Path, state_
     state = StateStore(state_dir).load()
     assert "test-1" in state.issue_failures
     failure = state.issue_failures["test-1"]
-    assert failure["category"] == "issue_needs_rework"
+    assert failure["category"] == "merge_exhausted"
     assert failure["stage"] == "merge_recovery"
 
     # Orc should have stopped (idle)
@@ -792,8 +792,8 @@ def test_successful_completion_clears_failure(repo_root: Path, state_dir: Path) 
         mode=OrchestratorMode.running,
         issue_failures={
             "old-1": IssueFailure(
-                category=FailureCategory.issue_needs_rework,
-                action=FailureAction.hold_until_backlog_changes,
+                category=FailureCategory.agent_failed,
+                action=FailureAction.pause_orchestrator,
                 stage="evaluation",
                 summary="old failure",
                 timestamp="2026-01-01T00:00:00+00:00",
@@ -903,8 +903,8 @@ def test_failure_increments_attempts(repo_root: Path, state_dir: Path) -> None:
     """If an issue already has a failure record, attempts count is incremented."""
     store = StateStore(state_dir)
     initial_failure = IssueFailure(
-        category=FailureCategory.issue_needs_rework,
-        action=FailureAction.hold_until_backlog_changes,
+        category=FailureCategory.agent_failed,
+        action=FailureAction.pause_orchestrator,
         stage="amp",
         summary="first failure",
         timestamp="2026-01-01T00:00:00+00:00",
@@ -950,8 +950,8 @@ def test_failure_increments_attempts(repo_root: Path, state_dir: Path) -> None:
     assert "test-1" in state.issue_failures
 
 
-def test_failed_and_needs_human_record_issue_needs_rework(repo_root: Path, state_dir: Path) -> None:
-    """Both failed and needs_human result types record issue_needs_rework."""
+def test_failed_and_needs_human_record_agent_failed(repo_root: Path, state_dir: Path) -> None:
+    """Both failed and needs_human result types record agent_failed."""
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     runner = StubAmpRunner.needs_human()
@@ -980,7 +980,7 @@ def test_failed_and_needs_human_record_issue_needs_rework(repo_root: Path, state
 
     state = StateStore(state_dir).load()
     assert "test-1" in state.issue_failures
-    assert state.issue_failures["test-1"]["category"] == "issue_needs_rework"
+    assert state.issue_failures["test-1"]["category"] == "agent_failed"
 
 
 def test_completed_no_merge_ready_still_syncs_and_completes(repo_root: Path, state_dir: Path) -> None:
@@ -1537,7 +1537,7 @@ def test_closed_children_clear_parent_failure_record(repo_root: Path, state_dir:
     store = StateStore(state_dir)
     state = OrchestratorState(
         mode=OrchestratorMode.running,
-        issue_failures={"parent-1": {"category": "issue_needs_rework", "action": "hold_until_backlog_changes",
+        issue_failures={"parent-1": {"category": "agent_failed", "action": "pause_orchestrator",
                                       "stage": "amp", "summary": "old failure", "timestamp": "t", "attempts": 1}},
     )
     store.save(state)

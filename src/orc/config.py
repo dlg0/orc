@@ -26,6 +26,7 @@ class OrchestratorConfig:
     max_workers: int = 1
     verification_commands: list[str] = field(default_factory=list)
     amp_mode: str = "smart"
+    use_already_implemented_preflight: bool = True
     use_decomposition_preflight: bool = True
     enable_evaluation: bool = True
     evaluation_mode: str | None = None
@@ -108,6 +109,7 @@ def create_default_config(repo_root: Path) -> Path:
         "max_workers": config.max_workers,
         "verification_commands": config.verification_commands,
         "amp_mode": config.amp_mode,
+        "use_already_implemented_preflight": config.use_already_implemented_preflight,
         "use_decomposition_preflight": config.use_decomposition_preflight,
         "enable_evaluation": config.enable_evaluation,
         "evaluation_mode": config.evaluation_mode,

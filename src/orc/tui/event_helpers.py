@@ -59,7 +59,11 @@ def _human_message(event_type: str, data: dict | None) -> str:
             title = d.get("title", "")
             return f"Selected issue {iid}" + (f": {title}" if title else "")
         case "amp_started":
-            return f"Agent started on {iid}" if iid else "Agent started"
+            mode = d.get("mode", "")
+            msg = f"Agent started on {iid}" if iid else "Agent started"
+            if mode:
+                msg += f" (mode={mode})"
+            return msg
         case "amp_finished":
             result = d.get("result", "")
             summary = d.get("summary", "")
@@ -106,7 +110,11 @@ def _human_message(event_type: str, data: dict | None) -> str:
                 msg += f": {err}"
             return msg
         case "evaluation_started":
-            return f"Evaluation started for {iid}" if iid else "Evaluation started"
+            mode = d.get("mode", "")
+            msg = f"Evaluation started for {iid}" if iid else "Evaluation started"
+            if mode:
+                msg += f" (mode={mode})"
+            return msg
         case "evaluation_finished":
             return f"Evaluation finished for {iid}" if iid else "Evaluation finished"
         case "issue_needs_rework":
@@ -133,8 +141,13 @@ def _human_message(event_type: str, data: dict | None) -> str:
 _CATEGORY_ICONS: dict[str, str] = {
     "transient_external": "↻",
     "stale_or_conflicted": "⚡",
-    "issue_needs_rework": "✎",
+    "awaiting_subtasks": "⏳",
     "blocked_by_dependency": "⛔",
+    "agent_failed": "✖",
+    "agent_crashed": "💥",
+    "merge_exhausted": "🔀",
+    "resume_failed": "⟳",
+    "sync_failed": "⇄",
     "fatal_run_error": "☠",
 }
 
@@ -142,7 +155,12 @@ _CATEGORY_ICONS: dict[str, str] = {
 _CATEGORY_LABELS: dict[str, str] = {
     "transient_external": "Transient error",
     "stale_or_conflicted": "Conflict/stale branch",
-    "issue_needs_rework": "Needs rework",
+    "awaiting_subtasks": "Awaiting subtasks",
     "blocked_by_dependency": "Dependency blocked",
+    "agent_failed": "Agent failed",
+    "agent_crashed": "Agent crashed",
+    "merge_exhausted": "Merge exhausted",
+    "resume_failed": "Resume failed",
+    "sync_failed": "Sync failed",
     "fatal_run_error": "Fatal run error",
 }

@@ -512,8 +512,13 @@ class HeldIssuesTable(Static):
             category_colors = {
                 "transient_external": "bright_yellow",
                 "stale_or_conflicted": "bold bright_yellow",
-                "issue_needs_rework": "bold red",
+                "awaiting_subtasks": "orchid1",
                 "blocked_by_dependency": "orchid1",
+                "agent_failed": "bold red",
+                "agent_crashed": "bold red",
+                "merge_exhausted": "bold red",
+                "resume_failed": "bold red",
+                "sync_failed": "bold red",
                 "fatal_run_error": "bold red",
             }
             cc = category_colors.get(cat, "white")
@@ -1259,7 +1264,10 @@ class HistoryTable(Static):
         issue_id = run.get("issue_id", "")
         failure_info = snap.state.issue_failures.get(issue_id)
         if failure_info and isinstance(failure_info, dict):
-            return failure_info.get("category", "") == "issue_needs_rework"
+            return failure_info.get("category", "") in (
+                "agent_failed", "agent_crashed", "merge_exhausted",
+                "resume_failed", "sync_failed", "fatal_run_error",
+            )
         return False
 
     def _rebuild_table(self) -> None:
@@ -1294,8 +1302,13 @@ class HistoryTable(Static):
                 category_colors = {
                     "transient_external": "bright_yellow",
                     "stale_or_conflicted": "bold bright_yellow",
-                    "issue_needs_rework": "bold red",
+                    "awaiting_subtasks": "orchid1",
                     "blocked_by_dependency": "orchid1",
+                    "agent_failed": "bold red",
+                    "agent_crashed": "bold red",
+                    "merge_exhausted": "bold red",
+                    "resume_failed": "bold red",
+                    "sync_failed": "bold red",
                     "fatal_run_error": "bold red",
                 }
                 rc = category_colors.get(cat, rc)
