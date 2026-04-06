@@ -668,7 +668,8 @@ def test_blocked_result_records_blocked_by_dependency(repo_root: Path, state_dir
     assert state.issue_failures["test-1"]["category"] == "blocked_by_dependency"
 
 
-def test_decomposed_records_blocked_by_dependency(repo_root: Path, state_dir: Path) -> None:
+def test_decomposed_does_not_hold_parent(repo_root: Path, state_dir: Path) -> None:
+    """Inline decomposition: decomposed parent must NOT go into issue_failures."""
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     runner = StubAmpRunner.decomposed()
@@ -696,8 +697,8 @@ def test_decomposed_records_blocked_by_dependency(repo_root: Path, state_dir: Pa
         run_loop(repo_root, state_dir, config, runner)
 
     state = StateStore(state_dir).load()
-    assert "test-1" in state.issue_failures
-    assert state.issue_failures["test-1"]["category"] == "awaiting_subtasks"
+    assert "test-1" not in state.issue_failures
+    assert state.run_history[0]["result"] == "decomposed"
 
 
 def test_decomposed_rewrites_parent_as_integration(repo_root: Path, state_dir: Path) -> None:
@@ -1402,14 +1403,13 @@ def test_resume_candidate_missing_issue_discards(repo_root: Path, state_dir: Pat
 # --- parent promotion tests ---
 
 
-def test_closed_children_do_not_force_parent_dispatch(repo_root: Path, state_dir: Path) -> None:
-    """Containers stay non-dispatchable even after the last child closes."""
+def test_parent_auto_closed_when_all_children_done(repo_root: Path, state_dir: Path) -> None:
+    """After the last child closes, the parent is automatically closed."""
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     runner = StubAmpRunner.completed()
 
     child = _make_issue("child-1", "Child issue")
-    parent = _make_issue("parent-1", "Parent issue")
 
     call_count = 0
 
@@ -1418,20 +1418,6 @@ def test_closed_children_do_not_force_parent_dispatch(repo_root: Path, state_dir
         call_count += 1
         if call_count == 1:
             return QueueResult(issues=[child])
-        if call_count == 2:
-            return QueueResult(
-                issues=[],
-                raw_issues=[parent],
-                skipped=[
-                    DispatchSkip(
-                        issue_id="parent-1",
-                        issue_type="epic",
-                        status="open",
-                        category="container/control",
-                        reason="container/control issue",
-                    )
-                ],
-            )
         return QueueResult()
 
     mock_worktree_mgr = MagicMock()
@@ -1445,16 +1431,22 @@ def test_closed_children_do_not_force_parent_dispatch(repo_root: Path, state_dir
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
         patch("orc.scheduler.get_issue_parent", return_value="parent-1"),
         patch("orc.scheduler.get_children_all_closed", return_value=True),
+        patch("orc.scheduler.get_issue_status", return_value="open"),
+        patch("orc.scheduler.close_issue", return_value=True) as mock_close,
     ):
         run_loop(repo_root, state_dir, config, runner)
 
-    state = StateStore(state_dir).load()
-    assert len(state.run_history) == 1
-    assert state.run_history[0]["issue_id"] == "child-1"
+    # Parent should have been auto-closed
+    mock_close.assert_any_call("parent-1", cwd=repo_root)
 
     events = EventLog(state_dir).all()
-    event_types = [e["event_type"] for e in events]
-    assert "parent_promoted" not in event_types
+    closed_events = [
+        e for e in events
+        if e["event_type"] == "issue_closed"
+        and (e.get("data") or {}).get("auto_closed")
+    ]
+    assert len(closed_events) == 1
+    assert closed_events[0]["data"]["issue_id"] == "parent-1"
 
 
 def test_no_promotion_when_siblings_still_open(repo_root: Path, state_dir: Path) -> None:

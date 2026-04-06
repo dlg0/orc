@@ -964,11 +964,9 @@ def run_loop(
             else:
                 click.echo(f"[AMP] {issue.id} WARNING: failed to rewrite parent as integration issue")
                 events.record(EventType.error, {"issue_id": issue.id, "stage": "decomposition_rewrite", "error": "rewrite_parent_as_integration_issue failed"})
-            _record_failure(
-                store, state_dir, state, issue.id, FailureCategory.awaiting_subtasks, WorkflowPhase.amp_finished.value,
-                result.summary, wt_info.branch_name, wt_path,
-                extra=ctx_extra or None,
-            )
+            # Inline decomposition: don't hold the parent in issue_failures.
+            # The parent stays in the queue; _check_parent_promotion will
+            # auto-close it once all children complete.
             _unclaim_active(state, events, repo_root)
             _clear_active(store, state_dir, state)
             _record_run(store, state_dir, state, issue.id, "decomposed", result.summary, wt_info.branch_name, wt_path, amp_mode=config.amp_mode, extra=ctx_extra or None)
@@ -1192,22 +1190,36 @@ def _check_parent_promotion(
     state: OrchestratorState,
     events: EventLog,
 ) -> None:
-    """After closing *issue_id*, clear stale local holds on its parent.
+    """After closing *issue_id*, auto-close its parent if all children are done.
 
-    Orc no longer reorders queue selection around parent promotion; Beads owns
-    readiness and ordering. When all children are closed we only clear any
-    local hold record on the parent so future Beads-ready appearances are not
-    blocked by stale orchestrator state.
+    When all children of a decomposed parent are closed, the parent is
+    automatically closed and any stale local holds are cleared.  This
+    implements inline decomposition: the parent stays in the queue behind
+    its children and is resolved without a separate held/blocked list.
     """
     parent_id = get_issue_parent(issue_id, cwd=repo_root)
     if not parent_id:
         return
 
     all_closed = get_children_all_closed(parent_id, cwd=repo_root)
-    if all_closed and parent_id in state.issue_failures:
-        click.echo(f"[PARENT] {parent_id} all children closed — clearing local hold")
+    if not all_closed:
+        return
+
+    # Clear any stale local hold (may exist from legacy state).
+    if parent_id in state.issue_failures:
         state.issue_failures.pop(parent_id, None)
-        _save_with_requests(store, state, state_dir)
+
+    # Auto-close the parent now that all children are done.
+    parent_status = get_issue_status(parent_id, cwd=repo_root)
+    if parent_status != "closed":
+        if close_issue(parent_id, cwd=repo_root):
+            click.echo(f"[PARENT] {parent_id} all children closed — auto-closed")
+            events.record(EventType.issue_closed, {"issue_id": parent_id, "auto_closed": True})
+        else:
+            click.echo(f"[PARENT] {parent_id} all children closed — close failed")
+            events.record(EventType.error, {"issue_id": parent_id, "stage": "parent_auto_close", "error": "bd close failed"})
+
+    _save_with_requests(store, state, state_dir)
 
 
 def _clear_active(store: StateStore, state_dir: Path, state: OrchestratorState) -> None:
