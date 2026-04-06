@@ -392,10 +392,28 @@ def _format_elapsed(started_at: str) -> str:
 
 
 _STAGE_STYLES: dict[str, tuple[str, str]] = {
+    # Legacy display names
     "claiming": ("cyan", "⏳ Claiming"),
     "running agent": ("dodger_blue2", "🤖 Running Agent"),
     "evaluating": ("orchid1", "🔍 Evaluating"),
     "merging": ("green", "🔀 Merging"),
+    # WorkflowPhase values
+    "preflight": ("bright_yellow", "🔎 Preflight"),
+    "already_implemented_check": ("bright_yellow", "🔎 Already-implemented check"),
+    "worktree_created": ("cyan", "📁 Worktree setup"),
+    "claimed": ("cyan", "⏳ Claiming"),
+    "amp_running": ("dodger_blue2", "🤖 Running Agent"),
+    "amp_finished": ("dodger_blue2", "✓ Agent finished"),
+    "summary_extraction": ("orchid1", "📝 Summary extraction"),
+    "post_merge_eval": ("orchid1", "🔍 Post-merge eval"),
+    "dirty_worktree_check": ("bright_yellow", "🧹 Dirty worktree check"),
+    "evaluation_running": ("orchid1", "🔍 Evaluating"),
+    "ready_to_merge": ("green", "✓ Ready to merge"),
+    "merge_running": ("green", "🔀 Merging"),
+    "merge_recovery": ("bright_yellow", "🔀 Merge recovery"),
+    "conflict_resolution": ("bright_yellow", "⚡ Conflict resolution"),
+    "parent_promotion": ("green", "📤 Parent promotion"),
+    "claim_release_pending": ("dim", "🔓 Releasing claim"),
 }
 
 # Result icons for the run history table — provide non-color cues.
@@ -615,64 +633,27 @@ class ActiveIssuePanel(Static):
         if not state or not state.active_issue_id:
             return
 
-        # If there's an active AMP log file, open the live stream modal
-        amp_log_path = state.active_amp_log_path
-        if amp_log_path and state.active_stage == "amp_running":
-            from pathlib import Path
+        state_dir = getattr(self.app, "_state_dir", None)
+        if not state_dir:
+            return
 
-            if Path(amp_log_path).exists() or state.active_stage == "amp_running":
-                header_lines = []
-                if state.active_issue_title:
-                    header_lines.append(f"Title: {state.active_issue_title}")
-                if state.active_stage:
-                    color, label = _STAGE_STYLES.get(
-                        state.active_stage,
-                        ("yellow", state.active_stage),
-                    )
-                    elapsed = ""
-                    if state.active_started_at:
-                        elapsed = f" ({_format_elapsed(state.active_started_at)})"
-                    header_lines.append(f"Stage: {label}{elapsed}")
-                if state.active_branch:
-                    header_lines.append(f"Branch: {state.active_branch}")
-                from orc.tui.modals import AmpStreamModal
+        from orc.tui.active_inspect import ActiveIssueInspectScreen, build_active_model
 
-                self.app.push_screen(
-                    AmpStreamModal(
-                        title=f"Live: {state.active_issue_id}",
-                        log_path=amp_log_path,
-                        header_lines=header_lines,
-                    )
-                )
-                return
+        model = build_active_model(state, state_dir)
+        if model:
+            self.app.push_screen(ActiveIssueInspectScreen(model))
+            return
+
+        # Fallback: simple inspect modal if model build fails
+        from orc.tui.modals import CopyableField, InspectModal
 
         title = f"Active Issue: {state.active_issue_id}"
         lines = [f"[bold]Issue ID:[/] {state.active_issue_id}"]
         if state.active_issue_title:
             lines.append(f"[bold]Title:[/] {state.active_issue_title}")
-        if state.active_stage:
-            color, label = _STAGE_STYLES.get(
-                state.active_stage,
-                ("yellow", state.active_stage),
-            )
-            elapsed = ""
-            if state.active_started_at:
-                elapsed = f" ({_format_elapsed(state.active_started_at)})"
-            lines.append(f"[bold]Stage:[/] [{color}]{label}[/]{elapsed}")
-        if state.active_started_at:
-            lines.append(f"[bold]Started At:[/] {state.active_started_at}")
-        if state.active_branch:
-            lines.append(f"[bold]Branch:[/] {state.active_branch}")
-        if state.active_worktree_path:
-            lines.append(f"[bold]Worktree:[/] {state.active_worktree_path}")
-        from orc.tui.modals import CopyableField, InspectModal
-
         copyable: list[CopyableField] = []
         if state.active_branch:
             copyable.append(CopyableField(label="Branch", value=state.active_branch, key="b"))
-        if state.active_worktree_path:
-            copyable.append(CopyableField(label="Worktree", value=state.active_worktree_path, key="w"))
-
         self.app.push_screen(
             InspectModal(title=title, body="\n".join(lines), copyable_fields=copyable)
         )

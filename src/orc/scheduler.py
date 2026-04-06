@@ -426,8 +426,8 @@ def _attempt_resume(
             repo_root=repo_root,
             base_branch=config.base_branch,
         )
-        events.record(EventType.amp_started, {"issue_id": issue_id, "recovery": True})
-        click.echo(f"[AMP] {issue_id} running (recovery) ...")
+        events.record(EventType.amp_started, {"issue_id": issue_id, "recovery": True, "mode": config.amp_mode})
+        click.echo(f"[AMP] {issue_id} running (recovery, mode={config.amp_mode}) ...")
 
         try:
             result = runner.run(ctx)
@@ -507,8 +507,9 @@ def _attempt_resume(
     # Post-merge evaluation
     if evaluator is not None:
         _update_checkpoint(store, state_dir, state, RunStage.post_merge_eval, events=events)
-        events.record(EventType.evaluation_started, {"issue_id": issue_id, "recovery": True})
-        click.echo(f"[EVAL] {issue_id} running post-merge evaluation ...")
+        _eval_mode = config.evaluation_mode or config.amp_mode
+        events.record(EventType.evaluation_started, {"issue_id": issue_id, "recovery": True, "mode": _eval_mode})
+        click.echo(f"[EVAL] {issue_id} running post-merge evaluation (mode={_eval_mode}) ...")
 
         ctx_for_eval = IssueContext(
             issue_id=issue_id,
@@ -736,10 +737,22 @@ def run_loop(
         click.echo(f"[SELECT] #{issue_num} {issue.id} -- {issue.title}")
         click.echo(_ISSUE_DIVIDER)
 
+        # Set active_run immediately so the TUI shows the issue during preflight
+        preflight_checkpoint = RunCheckpoint(
+            issue_id=issue.id,
+            issue_title=issue.title,
+            issue_description=issue.description,
+            issue_acceptance_criteria=issue.acceptance_criteria,
+            stage=RunStage.preflight,
+            updated_at=_now_iso(),
+        )
+        state.active_run = preflight_checkpoint.to_dict()
+        _save_with_requests(store, state, state_dir)
+
         # Already-implemented preflight check
         if already_implemented_checker is not None:
-            events.set_phase(WorkflowPhase.already_implemented_check)
-            click.echo(f"[PREFLIGHT] {issue.id} checking if already implemented ...")
+            _update_checkpoint(store, state_dir, state, RunStage.already_implemented_check, events=events)
+            click.echo(f"[PREFLIGHT] {issue.id} checking if already implemented (mode=rush) ...")
             ai_result = already_implemented_checker.check(
                 issue_id=issue.id,
                 title=issue.title,
@@ -757,6 +770,7 @@ def run_loop(
                     "summary": ai_result.summary,
                     "evidence": ai_result.evidence,
                 })
+                _clear_active(store, state_dir, state)
                 _record_failure(
                     store, state_dir, state, issue.id,
                     FailureCategory.issue_needs_rework,
@@ -782,6 +796,7 @@ def run_loop(
             click.echo(f"[PREFLIGHT] {issue.id} not already implemented — proceeding")
 
         # Create worktree
+        _update_checkpoint(store, state_dir, state, RunStage.worktree_created, events=events)
         click.echo(f"[WORKTREE] {issue.id} creating worktree ...")
         try:
             wt_info = worktree_mgr.create_worktree(issue.id, issue.title)
@@ -789,6 +804,7 @@ def run_loop(
             click.echo(f"[WORKTREE] {issue.id} FAILED: {exc}")
             events.record(EventType.error, {"issue_id": issue.id, "stage": "worktree", "error": str(exc)})
             wt_category = FailureCategory.transient_external if isinstance(exc, OSError) else FailureCategory.fatal_run_error
+            _clear_active(store, state_dir, state)
             _record_failure(store, state_dir, state, issue.id, wt_category, WorkflowPhase.worktree_created.value, str(exc))
             _record_run(store, state_dir, state, issue.id, "failed", str(exc), amp_mode=config.amp_mode)
             if fail_fast:
@@ -807,19 +823,10 @@ def run_loop(
         ts_slug = _now_iso().replace(":", "-").replace("+", "p")
         amp_log_path = amp_logs_dir / f"{ts_slug}-{issue.id}.jsonl"
 
-        # Update state with active run checkpoint
-        checkpoint = RunCheckpoint(
-            issue_id=issue.id,
-            issue_title=issue.title,
-            issue_description=issue.description,
-            issue_acceptance_criteria=issue.acceptance_criteria,
-            branch=wt_info.branch_name,
-            worktree_path=str(wt_info.worktree_path),
-            stage=RunStage.worktree_created,
-            amp_log_path=str(amp_log_path),
-            updated_at=_now_iso(),
-        )
-        state.active_run = checkpoint.to_dict()
+        # Update checkpoint with worktree details
+        state.active_run["branch"] = wt_info.branch_name
+        state.active_run["worktree_path"] = str(wt_info.worktree_path)
+        state.active_run["amp_log_path"] = str(amp_log_path)
         _save_with_requests(store, state, state_dir)
 
         # Claim the issue in bd so it shows as in-progress
@@ -838,7 +845,7 @@ def run_loop(
             return
 
         # Invoke Amp
-        click.echo(f"[AMP] {issue.id} spawning agent ...")
+        click.echo(f"[AMP] {issue.id} spawning agent (mode={config.amp_mode}) ...")
         _update_checkpoint(store, state_dir, state, RunStage.amp_running, events=events)
         ctx = IssueContext(
             issue_id=issue.id,
@@ -849,8 +856,8 @@ def run_loop(
             repo_root=repo_root,
             base_branch=config.base_branch,
         )
-        events.record(EventType.amp_started, {"issue_id": issue.id})
-        click.echo(f"[AMP] {issue.id} running ...")
+        events.record(EventType.amp_started, {"issue_id": issue.id, "mode": config.amp_mode})
+        click.echo(f"[AMP] {issue.id} running (mode={config.amp_mode}) ...")
         click.echo(f"[AMP] {issue.id} log={amp_log_path}")
 
         try:
@@ -908,7 +915,7 @@ def run_loop(
             from orc.amp_runner import RealAmpRunner
 
             events.set_phase(WorkflowPhase.summary_extraction)
-            click.echo(f"[SUMMARY] {issue.id} extracting rush summary ...")
+            click.echo(f"[SUMMARY] {issue.id} extracting rush summary (mode={config.summary_amp_mode}) ...")
             rush_summary = RealAmpRunner.extract_rush_summary(
                 thread_id=result.thread_id,
                 cwd=wt_info.worktree_path,
@@ -1015,7 +1022,7 @@ def run_loop(
             })
 
             # --- Merge recovery: launch a rush-mode agent to land the work ---
-            click.echo(f"[MERGE-RECOVERY] {issue.id} launching rush agent to land work ...")
+            click.echo(f"[MERGE-RECOVERY] {issue.id} launching agent to land work (mode=rush) ...")
             _update_checkpoint(store, state_dir, state, RunStage.merge_recovery, events=events)
             events.record(EventType.merge_recovery_started, {"issue_id": issue.id})
 
@@ -1070,8 +1077,9 @@ def run_loop(
         # Post-merge evaluation on main
         if evaluator is not None:
             _update_checkpoint(store, state_dir, state, RunStage.post_merge_eval, events=events)
-            events.record(EventType.evaluation_started, {"issue_id": issue.id})
-            click.echo(f"[EVAL] {issue.id} running post-merge evaluation on {config.base_branch} ...")
+            _eval_mode = config.evaluation_mode or config.amp_mode
+            events.record(EventType.evaluation_started, {"issue_id": issue.id, "mode": _eval_mode})
+            click.echo(f"[EVAL] {issue.id} running post-merge evaluation on {config.base_branch} (mode={_eval_mode}) ...")
 
             try:
                 eval_result = evaluator.evaluate(
