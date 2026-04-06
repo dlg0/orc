@@ -72,7 +72,7 @@ def test_create_default_config_writes_file(tmp_path: Path) -> None:
     data = yaml.safe_load(path.read_text())
     assert data["base_branch"] == "main"
     assert data["max_workers"] == 1
-    assert data["amp_mode"] == "smart"
+    assert data["amp_mode"] == "deep"
 
 
 def test_context_window_warn_threshold_default(tmp_path: Path) -> None:
