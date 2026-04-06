@@ -146,7 +146,7 @@ def start_orchestrator(
         config = load_config(repo_root)
         runner = RealAmpRunner(mode=config.amp_mode)
         evaluator = AmpEvaluatorRunner(
-            mode=config.evaluation_mode,
+            mode=config.effective_evaluation_mode,
             timeout=config.evaluation_timeout,
         ) if config.enable_evaluation else None
         ai_checker = AmpAlreadyImplementedChecker() if config.use_already_implemented_preflight else None
@@ -224,7 +224,7 @@ def resume_orchestrator(repo_root: Path, state_dir: Path, *, fail_fast: bool = F
         config = load_config(repo_root)
         runner = RealAmpRunner(mode=config.amp_mode)
         evaluator = AmpEvaluatorRunner(
-            mode=config.evaluation_mode,
+            mode=config.effective_evaluation_mode,
             timeout=config.evaluation_timeout,
         ) if config.enable_evaluation else None
         ai_checker = AmpAlreadyImplementedChecker() if config.use_already_implemented_preflight else None

@@ -9,6 +9,28 @@ import click
 import yaml
 
 
+def _normalize_mode(value: object, *, field_name: str, fallback: str) -> str:
+    if value is None:
+        return fallback
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name} must not be empty")
+    return normalized
+
+
+def _normalize_timeout(value: object, *, field_name: str, fallback: int) -> int:
+    if value is None:
+        return fallback
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field_name} must be an integer")
+    if value <= 0:
+        raise ValueError(f"{field_name} must be greater than 0")
+    return value
+
+
 @dataclass
 class ProjectContext:
     """Detected project context."""
@@ -35,6 +57,27 @@ class OrchestratorConfig:
     summary_mode: str = "self-report"  # "self-report" | "rush-extract" | "stream-json"
     summary_amp_mode: str = "rush"
     fail_fast: bool = False
+
+    def __post_init__(self) -> None:
+        self.amp_mode = _normalize_mode(
+            self.amp_mode,
+            field_name="amp_mode",
+            fallback="deep",
+        )
+        self.evaluation_mode = _normalize_mode(
+            self.evaluation_mode,
+            field_name="evaluation_mode",
+            fallback=self.amp_mode,
+        )
+        self.evaluation_timeout = _normalize_timeout(
+            self.evaluation_timeout,
+            field_name="evaluation_timeout",
+            fallback=900,
+        )
+
+    @property
+    def effective_evaluation_mode(self) -> str:
+        return self.evaluation_mode or self.amp_mode
 
 
 CONFIG_DIR = ".orc"
@@ -81,9 +124,16 @@ def load_config(repo_root: Path) -> OrchestratorConfig:
     if config_path.exists():
         with open(config_path) as f:
             data = yaml.safe_load(f) or {}
-        config = OrchestratorConfig(**{
-            k: v for k, v in data.items() if k in OrchestratorConfig.__dataclass_fields__
-        })
+        if not isinstance(data, dict):
+            raise click.ClickException(
+                f"Invalid config in {config_path}: top-level YAML must be a mapping"
+            )
+        try:
+            config = OrchestratorConfig(**{
+                k: v for k, v in data.items() if k in OrchestratorConfig.__dataclass_fields__
+            })
+        except (TypeError, ValueError) as exc:
+            raise click.ClickException(f"Invalid config in {config_path}: {exc}") from exc
     else:
         config = OrchestratorConfig()
 

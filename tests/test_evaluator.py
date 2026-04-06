@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from orc.evaluator import (
     AmpEvaluatorRunner,
+    EvaluationClassification,
     EvaluationResult,
     EvaluationVerdict,
     StubEvaluator,
@@ -35,6 +36,14 @@ def test_fail_creates_failed_result() -> None:
     result = EvaluationResult.fail("something broke")
     assert result.verdict is EvaluationVerdict.failed
     assert result.summary == "something broke"
+
+
+def test_infrastructure_error_creates_failed_result_with_classification() -> None:
+    result = EvaluationResult.infrastructure_error("amp missing")
+    assert result.verdict is EvaluationVerdict.failed
+    assert result.infrastructure_failure is True
+    assert result.requires_rework is False
+    assert result.classification is EvaluationClassification.infrastructure_error
 
 
 def test_passed_property_true_for_passed_verdict() -> None:
@@ -65,6 +74,7 @@ def test_to_dict_round_trip() -> None:
         "gaps": ["edge case"],
         "task_too_large_signal": True,
         "context_window_usage_pct": None,
+        "classification": "verdict",
     }
 
 
@@ -104,6 +114,13 @@ def test_stub_failed_classmethod() -> None:
     result = stub.evaluate(_make_context(), "main", [])
     assert result.passed is False
     assert result.summary == "no good"
+
+
+def test_stub_infrastructure_error_classmethod() -> None:
+    stub = StubEvaluator.infrastructure_error(summary="eval crashed")
+    result = stub.evaluate(_make_context(), "main", [])
+    assert result.infrastructure_failure is True
+    assert result.summary == "eval crashed"
 
 
 def test_stub_evaluate_returns_configured_result() -> None:
@@ -193,6 +210,11 @@ def test_json_to_result_fail_verdict() -> None:
 def test_json_to_result_invalid_verdict_defaults_to_failed() -> None:
     result = AmpEvaluatorRunner._json_to_result({"verdict": "maybe", "summary": "idk"})
     assert result.verdict is EvaluationVerdict.failed
+
+
+def test_json_to_result_defaults_classification_to_verdict() -> None:
+    result = AmpEvaluatorRunner._json_to_result({"verdict": "fail", "summary": "bad"})
+    assert result.classification is EvaluationClassification.verdict
 
 
 def test_json_to_result_parses_context_window_usage_pct() -> None:
@@ -294,6 +316,7 @@ def test_parse_output_nonzero_exit_code() -> None:
     proc = _make_proc(returncode=1)
     result = runner._parse_output(proc)
     assert result.passed is False
+    assert result.infrastructure_failure is True
     assert "code 1" in result.summary
 
 
@@ -335,6 +358,7 @@ def test_parse_output_no_structured_output() -> None:
     )
     result = runner._parse_output(_make_proc(stdout=stdout))
     assert result.passed is False
+    assert result.infrastructure_failure is True
     assert "no structured result" in result.summary.lower()
 
 
@@ -343,6 +367,7 @@ def test_parse_output_stream_error() -> None:
     stdout = _stream_result(is_error=True, error="context window exhausted") + "\n"
     result = runner._parse_output(_make_proc(stdout=stdout))
     assert result.passed is False
+    assert result.infrastructure_failure is True
     assert "context window exhausted" in result.summary
 
 
@@ -358,6 +383,20 @@ def test_parse_output_context_usage_from_stream() -> None:
     result = runner._parse_output(_make_proc(stdout=stdout))
     assert result.passed is True
     assert result.context_window_usage_pct == 40.0
+
+
+def test_evaluator_runner_normalizes_none_mode_and_timeout() -> None:
+    runner = AmpEvaluatorRunner(mode=None, timeout=None)
+    assert runner._mode == "smart"
+    assert runner._timeout == 900
+
+
+@patch("orc.evaluator.shutil.which", return_value=None)
+def test_evaluator_missing_amp_returns_infrastructure_error(mock_which) -> None:
+    runner = AmpEvaluatorRunner()
+    result = runner.evaluate(_make_context(), "main", [])
+    assert result.infrastructure_failure is True
+    assert "amp cli not found" in result.summary.lower()
 
 
 # --- AmpEvaluatorRunner passes worktree env ---

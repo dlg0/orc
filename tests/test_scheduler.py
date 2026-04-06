@@ -302,7 +302,7 @@ def test_evaluation_fail_creates_followup(repo_root: Path, state_dir: Path) -> N
     assert state.run_history[0]["result"] == "completed_with_followup"
 
 
-def test_evaluation_crash_treated_as_fail(repo_root: Path, state_dir: Path) -> None:
+def test_evaluation_crash_pauses_with_resume_candidate(repo_root: Path, state_dir: Path) -> None:
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()
     runner = StubAmpRunner.completed()
@@ -329,12 +329,23 @@ def test_evaluation_crash_treated_as_fail(repo_root: Path, state_dir: Path) -> N
     with (
         patch("orc.scheduler.get_ready_issues", side_effect=fake_ready),
         patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
-        patch("orc.scheduler._create_followup_issue", return_value="followup-1"),
+        patch("orc.scheduler._create_followup_issue") as mock_followup,
     ):
         run_loop(repo_root, state_dir, config, runner, evaluator=crash_evaluator)
 
     state = StateStore(state_dir).load()
-    assert state.run_history[0]["result"] == "completed_with_followup"
+    assert state.mode == OrchestratorMode.paused
+    assert state.run_history[0]["result"] == "evaluation_infra_failed"
+    assert state.resume_candidate is not None
+    assert state.resume_candidate["issue_id"] == "test-1"
+    assert state.resume_candidate["stage"] == "amp_finished"
+    mock_followup.assert_not_called()
+
+    events = EventLog(state_dir).all()
+    event_types = [e["event_type"] for e in events]
+    assert "issue_needs_rework" not in event_types
+    finished_events = [e for e in events if e["event_type"] == "evaluation_finished"]
+    assert finished_events[-1]["data"]["classification"] == "infrastructure_error"
 
 
 def test_no_evaluator_skips_evaluation(repo_root: Path, state_dir: Path) -> None:

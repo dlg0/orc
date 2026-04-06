@@ -15,7 +15,7 @@ from orc.already_implemented import (
 )
 from orc.amp_runner import AmpRunner, IssueContext, ResultType
 from orc.config import OrchestratorConfig
-from orc.evaluator import IssueEvaluator
+from orc.evaluator import EvaluationResult, IssueEvaluator
 from orc.events import EventLog, EventType
 from orc.queue import (
     IssueState,
@@ -199,6 +199,98 @@ def _save_with_requests(store: StateStore, state: OrchestratorState, state_dir: 
     """
     apply_requests(state, state_dir)
     store.save(state)
+
+
+def _run_post_merge_evaluation(
+    evaluator: IssueEvaluator,
+    context: IssueContext,
+    base_branch: str,
+    verification_commands: list[str],
+) -> EvaluationResult:
+    try:
+        return evaluator.evaluate(
+            context=context,
+            base_branch=base_branch,
+            verification_commands=verification_commands,
+        )
+    except Exception as exc:
+        logger.exception("Evaluator crashed for %s", context.issue_id)
+        return EvaluationResult.infrastructure_error(f"Evaluator crashed: {exc}")
+
+
+def _record_evaluation_finished(
+    events: EventLog,
+    issue_id: str,
+    eval_result: EvaluationResult,
+    *,
+    recovery: bool = False,
+) -> None:
+    payload: dict = {
+        "issue_id": issue_id,
+        "verdict": eval_result.verdict.value,
+        "summary": eval_result.summary,
+        "classification": eval_result.classification.value,
+        "task_too_large_signal": eval_result.task_too_large_signal,
+    }
+    if recovery:
+        payload["recovery"] = True
+    if eval_result.context_window_usage_pct is not None:
+        payload["context_window_usage_pct"] = eval_result.context_window_usage_pct
+    events.record(EventType.evaluation_finished, payload)
+
+
+def _pause_for_evaluation_infrastructure_failure(
+    *,
+    store: StateStore,
+    state_dir: Path,
+    state: OrchestratorState,
+    events: EventLog,
+    repo_root: Path,
+    issue_id: str,
+    eval_result: EvaluationResult,
+    branch: str,
+    worktree_path: str,
+    amp_mode: str,
+    extra: dict | None = None,
+) -> None:
+    resume_candidate = dict(state.active_run) if state.active_run is not None else None
+    events.record(EventType.error, {
+        "issue_id": issue_id,
+        "stage": "evaluation",
+        "error": eval_result.summary,
+        "classification": eval_result.classification.value,
+    })
+    _unclaim_active(state, events, repo_root)
+
+    if resume_candidate is not None:
+        resume_candidate["stage"] = RunStage.amp_finished.value
+        resume_candidate["updated_at"] = _now_iso()
+        resume_candidate["bd_claimed"] = False
+        resume_candidate["eval_result"] = eval_result.to_dict()
+        state.resume_candidate = resume_candidate
+
+    state.last_error = eval_result.summary
+    state.active_run = None
+    _save_with_requests(store, state, state_dir)
+    _record_run(
+        store,
+        state_dir,
+        state,
+        issue_id,
+        "evaluation_infra_failed",
+        eval_result.summary,
+        branch,
+        worktree_path,
+        amp_mode=amp_mode,
+        extra={**(extra or {}), "evaluation": eval_result.to_dict()},
+    )
+    store.transition(state, OrchestratorMode.pause_requested)
+    store.transition(state, OrchestratorMode.paused)
+    events.record(EventType.state_changed, {
+        "to": "paused",
+        "reason": "evaluation_infrastructure_failed",
+        "issue_id": issue_id,
+    })
 
 
 def _check_stop_at_safe_point(
@@ -512,7 +604,7 @@ def _attempt_resume(
     # Post-merge evaluation
     if evaluator is not None:
         _update_checkpoint(store, state_dir, state, RunStage.post_merge_eval, events=events)
-        _eval_mode = config.evaluation_mode or config.amp_mode
+        _eval_mode = config.effective_evaluation_mode
         events.record(EventType.evaluation_started, {"issue_id": issue_id, "recovery": True, "mode": _eval_mode})
         click.echo(f"[EVAL] {issue_id} running post-merge evaluation (mode={_eval_mode}) ...")
 
@@ -525,23 +617,36 @@ def _attempt_resume(
             repo_root=repo_root,
             base_branch=config.base_branch,
         )
-        try:
-            eval_result = evaluator.evaluate(
-                context=ctx_for_eval,
-                base_branch=config.base_branch,
-                verification_commands=config.verification_commands,
-            )
-        except Exception as exc:
-            from orc.evaluator import EvaluationResult
-            eval_result = EvaluationResult.fail(f"Evaluator crashed: {exc}")
+        eval_result = _run_post_merge_evaluation(
+            evaluator,
+            ctx_for_eval,
+            config.base_branch,
+            config.verification_commands,
+        )
 
-        events.record(EventType.evaluation_finished, {
-            "issue_id": issue_id, "verdict": eval_result.verdict.value,
-            "summary": eval_result.summary, "recovery": True,
-        })
+        _record_evaluation_finished(events, issue_id, eval_result, recovery=True)
 
         if eval_result.passed:
             click.echo(f"[EVAL] {issue_id} PASSED: {eval_result.summary}")
+        elif eval_result.infrastructure_failure:
+            click.echo(f"[EVAL] {issue_id} INFRASTRUCTURE FAILURE: {eval_result.summary}")
+            _pause_for_evaluation_infrastructure_failure(
+                store=store,
+                state_dir=state_dir,
+                state=state,
+                events=events,
+                repo_root=repo_root,
+                issue_id=issue_id,
+                eval_result=eval_result,
+                branch=branch,
+                worktree_path=wt_path_str,
+                amp_mode=config.amp_mode,
+            )
+            events.record(EventType.resume_failed, {
+                "issue_id": issue_id,
+                "reason": "evaluation_infrastructure_failed",
+            })
+            return True
         else:
             click.echo(f"[EVAL] {issue_id} FAILED: {eval_result.summary}")
             followup_id = _create_followup_issue(
@@ -1117,32 +1222,37 @@ def run_loop(
         # Post-merge evaluation on main
         if evaluator is not None:
             _update_checkpoint(store, state_dir, state, RunStage.post_merge_eval, events=events)
-            _eval_mode = config.evaluation_mode or config.amp_mode
+            _eval_mode = config.effective_evaluation_mode
             events.record(EventType.evaluation_started, {"issue_id": issue.id, "mode": _eval_mode})
             click.echo(f"[EVAL] {issue.id} running post-merge evaluation on {config.base_branch} (mode={_eval_mode}) ...")
 
-            try:
-                eval_result = evaluator.evaluate(
-                    context=ctx,
-                    base_branch=config.base_branch,
-                    verification_commands=config.verification_commands,
-                )
-            except Exception as exc:
-                from orc.evaluator import EvaluationResult
-                eval_result = EvaluationResult.fail(f"Evaluator crashed: {exc}")
+            eval_result = _run_post_merge_evaluation(
+                evaluator,
+                ctx,
+                config.base_branch,
+                config.verification_commands,
+            )
 
-            eval_finished_data: dict = {
-                "issue_id": issue.id,
-                "verdict": eval_result.verdict.value,
-                "summary": eval_result.summary,
-                "task_too_large_signal": eval_result.task_too_large_signal,
-            }
-            if eval_result.context_window_usage_pct is not None:
-                eval_finished_data["context_window_usage_pct"] = eval_result.context_window_usage_pct
-            events.record(EventType.evaluation_finished, eval_finished_data)
+            _record_evaluation_finished(events, issue.id, eval_result)
 
             if eval_result.passed:
                 click.echo(f"[EVAL] {issue.id} PASSED: {eval_result.summary}")
+            elif eval_result.infrastructure_failure:
+                click.echo(f"[EVAL] {issue.id} INFRASTRUCTURE FAILURE: {eval_result.summary}")
+                _pause_for_evaluation_infrastructure_failure(
+                    store=store,
+                    state_dir=state_dir,
+                    state=state,
+                    events=events,
+                    repo_root=repo_root,
+                    issue_id=issue.id,
+                    eval_result=eval_result,
+                    branch=wt_info.branch_name,
+                    worktree_path=wt_path,
+                    amp_mode=config.amp_mode,
+                    extra=ctx_extra or None,
+                )
+                return
             else:
                 click.echo(f"[EVAL] {issue.id} FAILED: {eval_result.summary}")
                 events.record(EventType.issue_needs_rework, {

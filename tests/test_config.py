@@ -65,6 +65,18 @@ def test_load_config_reads_existing_config(tmp_path: Path) -> None:
     assert config.max_workers == 1
 
 
+def test_load_config_null_evaluation_mode_falls_back_to_amp_mode(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.yaml").write_text(
+        yaml.dump({"amp_mode": "smart", "evaluation_mode": None})
+    )
+
+    config = load_config(tmp_path)
+    assert config.evaluation_mode == "smart"
+    assert config.effective_evaluation_mode == "smart"
+
+
 def test_create_default_config_writes_file(tmp_path: Path) -> None:
     path = create_default_config(tmp_path)
 

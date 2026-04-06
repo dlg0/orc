@@ -22,6 +22,11 @@ class EvaluationVerdict(str, Enum):
     failed = "fail"
 
 
+class EvaluationClassification(str, Enum):
+    verdict = "verdict"
+    infrastructure_error = "infrastructure_error"
+
+
 @dataclass
 class EvaluationResult:
     verdict: EvaluationVerdict
@@ -31,14 +36,31 @@ class EvaluationResult:
     gaps: list[str] = field(default_factory=list)
     task_too_large_signal: bool = False
     context_window_usage_pct: float | None = None
+    classification: EvaluationClassification = EvaluationClassification.verdict
 
     @property
     def passed(self) -> bool:
         return self.verdict == EvaluationVerdict.passed
 
+    @property
+    def infrastructure_failure(self) -> bool:
+        return self.classification == EvaluationClassification.infrastructure_error
+
+    @property
+    def requires_rework(self) -> bool:
+        return not self.passed and not self.infrastructure_failure
+
     @classmethod
     def fail(cls, summary: str) -> EvaluationResult:
         return cls(verdict=EvaluationVerdict.failed, summary=summary)
+
+    @classmethod
+    def infrastructure_error(cls, summary: str) -> EvaluationResult:
+        return cls(
+            verdict=EvaluationVerdict.failed,
+            summary=summary,
+            classification=EvaluationClassification.infrastructure_error,
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -49,6 +71,7 @@ class EvaluationResult:
             "gaps": self.gaps,
             "task_too_large_signal": self.task_too_large_signal,
             "context_window_usage_pct": self.context_window_usage_pct,
+            "classification": self.classification.value,
         }
 
 
@@ -86,6 +109,10 @@ class StubEvaluator:
     def failed(cls, summary: str = "Evaluation failed") -> StubEvaluator:
         return cls(EvaluationResult(verdict=EvaluationVerdict.failed, summary=summary))
 
+    @classmethod
+    def infrastructure_error(cls, summary: str = "Evaluation infrastructure failed") -> StubEvaluator:
+        return cls(EvaluationResult.infrastructure_error(summary))
+
 
 _DEFAULT_TIMEOUT = 900  # 15 minutes
 
@@ -94,8 +121,8 @@ class AmpEvaluatorRunner:
     """Invokes the ``amp`` CLI to independently evaluate worker output."""
 
     def __init__(self, mode: str = "smart", timeout: int = _DEFAULT_TIMEOUT) -> None:
-        self._mode = mode
-        self._timeout = timeout
+        self._mode = self._normalize_mode(mode)
+        self._timeout = self._normalize_timeout(timeout)
 
     # ------------------------------------------------------------------
     # Public interface (satisfies IssueEvaluator protocol)
@@ -109,7 +136,7 @@ class AmpEvaluatorRunner:
     ) -> EvaluationResult:
         amp_path = shutil.which("amp")
         if amp_path is None:
-            raise RuntimeError(
+            return EvaluationResult.infrastructure_error(
                 "amp CLI not found in PATH. Install it or ensure it is on the PATH."
             )
 
@@ -140,8 +167,13 @@ class AmpEvaluatorRunner:
             )
         except subprocess.TimeoutExpired:
             logger.error("Evaluator timed out after %d seconds", self._timeout)
-            return EvaluationResult.fail(
+            return EvaluationResult.infrastructure_error(
                 f"Evaluator timed out after {self._timeout}s",
+            )
+        except Exception as exc:
+            logger.exception("Evaluator invocation failed")
+            return EvaluationResult.infrastructure_error(
+                f"Evaluator invocation failed: {exc}",
             )
 
         logger.info("Evaluator exited with code %d", proc.returncode)
@@ -155,6 +187,28 @@ class AmpEvaluatorRunner:
     # ------------------------------------------------------------------
     # Prompt construction
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_mode(mode: object) -> str:
+        if mode is None:
+            return "smart"
+        if not isinstance(mode, str):
+            raise ValueError("Evaluator mode must be a non-empty string")
+
+        normalized = mode.strip()
+        if not normalized:
+            raise ValueError("Evaluator mode must be a non-empty string")
+        return normalized
+
+    @staticmethod
+    def _normalize_timeout(timeout: object) -> int:
+        if timeout is None:
+            return _DEFAULT_TIMEOUT
+        if isinstance(timeout, bool) or not isinstance(timeout, int):
+            raise ValueError("Evaluator timeout must be a positive integer")
+        if timeout <= 0:
+            raise ValueError("Evaluator timeout must be a positive integer")
+        return timeout
 
     @staticmethod
     def _build_prompt(
@@ -278,10 +332,10 @@ class AmpEvaluatorRunner:
         # Check for error
         if result_msg and result_msg.get("is_error"):
             error_text = result_msg.get("error", "Unknown error")
-            return EvaluationResult.fail(error_text)
+            return EvaluationResult.infrastructure_error(error_text)
 
         if proc.returncode != 0:
-            return EvaluationResult.fail(
+            return EvaluationResult.infrastructure_error(
                 f"Evaluator exited with code {proc.returncode}",
             )
 
@@ -305,7 +359,7 @@ class AmpEvaluatorRunner:
                         continue
 
         if result is None:
-            return EvaluationResult.fail(
+            return EvaluationResult.infrastructure_error(
                 "Evaluator produced no structured result",
             )
 
@@ -336,6 +390,12 @@ class AmpEvaluatorRunner:
         except ValueError:
             verdict = EvaluationVerdict.failed
 
+        classification_raw = data.get("classification", EvaluationClassification.verdict.value)
+        try:
+            classification = EvaluationClassification(classification_raw)
+        except ValueError:
+            classification = EvaluationClassification.verdict
+
         return EvaluationResult(
             verdict=verdict,
             summary=data.get("summary", ""),
@@ -346,4 +406,5 @@ class AmpEvaluatorRunner:
             if isinstance((raw := data.get("task_too_large_signal", False)), bool)
             else False,
             context_window_usage_pct=data.get("context_window_usage_pct"),
+            classification=classification,
         )
