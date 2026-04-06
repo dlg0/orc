@@ -496,10 +496,10 @@ class RealAmpRunner:
         worktree_path: Path,
         repo_root: Path,
         base_branch: str = "main",
-        mode: str = "rush",
+        mode: str = "smart",
         timeout: int = 600,
     ) -> tuple[bool, str]:
-        """Launch a rush-mode agent to attempt merge recovery.
+        """Launch a smart-mode agent to attempt merge recovery.
 
         The agent is given the original thread context and tasked solely
         with rebasing, merging to the base branch, and pushing.

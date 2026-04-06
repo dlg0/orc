@@ -25,11 +25,11 @@ class OrchestratorConfig:
     base_branch: str = "main"
     max_workers: int = 1
     verification_commands: list[str] = field(default_factory=list)
-    amp_mode: str = "smart"
+    amp_mode: str = "deep"
     use_already_implemented_preflight: bool = True
     use_decomposition_preflight: bool = True
     enable_evaluation: bool = True
-    evaluation_mode: str | None = None
+    evaluation_mode: str = "rush"
     evaluation_timeout: int = 900
     context_window_warn_threshold: float = 0.85
     summary_mode: str = "self-report"  # "self-report" | "rush-extract" | "stream-json"
