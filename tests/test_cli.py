@@ -137,6 +137,28 @@ def test_start_runs_and_goes_idle(tmp_path: Path) -> None:
         assert result.exit_code == 0
 
 
+def test_start_passes_max_issues(tmp_path: Path) -> None:
+    _make_project(tmp_path)
+
+    from orc.config import ProjectContext
+
+    with (
+        patch("orc.cli.detect_project", return_value=ProjectContext(repo_root=tmp_path, has_git=True, has_beads=True)),
+        patch("orc.cli.start_orchestrator") as mock_start,
+    ):
+        runner = CliRunner()
+        result = runner.invoke(main, ["start", "--max-issues", "3"])
+
+    assert result.exit_code == 0
+    mock_start.assert_called_once_with(
+        tmp_path,
+        tmp_path / ".orc",
+        fail_fast=False,
+        max_issues=3,
+        only_issue=None,
+    )
+
+
 def test_start_refuses_when_locked(tmp_path: Path) -> None:
     _make_project(tmp_path)
     state_dir = tmp_path / ".orc"

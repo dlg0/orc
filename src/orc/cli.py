@@ -130,8 +130,9 @@ def status() -> None:
 
 @main.command()
 @click.option("--fail-fast", is_flag=True, default=False, help="Stop on the first issue failure instead of continuing.")
+@click.option("--max-issues", type=click.IntRange(1), default=None, help="Process at most this many runnable issues, then stop.")
 @click.option("--only", "only_issue", default=None, help="Process only this issue ID, then stop.")
-def start(fail_fast: bool, only_issue: str | None) -> None:
+def start(fail_fast: bool, max_issues: int | None, only_issue: str | None) -> None:
     """Begin processing ready issues.
 
     When post-merge evaluation is enabled and fails, Orc creates a follow-up
@@ -147,7 +148,13 @@ def start(fail_fast: bool, only_issue: str | None) -> None:
             only_issue = resolve_issue_id(only_issue, cwd=repo_root)
         except ValueError as exc:
             raise click.ClickException(str(exc))
-    start_orchestrator(repo_root, state_dir, fail_fast=fail_fast, only_issue=only_issue)
+    start_orchestrator(
+        repo_root,
+        state_dir,
+        fail_fast=fail_fast,
+        max_issues=max_issues,
+        only_issue=only_issue,
+    )
 
 
 @main.command()

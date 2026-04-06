@@ -126,6 +126,39 @@ def test_processes_issue_with_stub(repo_root: Path, state_dir: Path) -> None:
     assert state.run_history[0]["result"] == "completed"
 
 
+def test_max_issues_stops_after_requested_count(repo_root: Path, state_dir: Path) -> None:
+    _set_state(state_dir, OrchestratorMode.running)
+    config = OrchestratorConfig()
+    issue1 = _make_issue("test-1", "First issue")
+    issue2 = _make_issue("test-2", "Second issue")
+
+    runner = MagicMock()
+    runner.run.return_value = AmpResult(result=ResultType.completed, summary="done", merge_ready=True)
+
+    def fake_ready(cwd=None):
+        return QueueResult(issues=[issue1, issue2])
+
+    mock_worktree_mgr = MagicMock()
+    mock_wt_info = MagicMock()
+    mock_wt_info.worktree_path = repo_root / ".worktrees" / "test-1"
+    mock_wt_info.branch_name = "amp/test-1-first-issue"
+    mock_worktree_mgr.return_value.create_worktree.return_value = mock_wt_info
+
+    with (
+        patch("orc.scheduler.get_ready_issues", side_effect=fake_ready) as mock_ready,
+        patch("orc.scheduler.WorktreeManager", mock_worktree_mgr),
+    ):
+        run_loop(repo_root, state_dir, config, runner, max_issues=1)
+
+    state = StateStore(state_dir).load()
+    assert state.mode == OrchestratorMode.idle
+    assert state.last_completed_issue == "test-1"
+    assert len(state.run_history) == 1
+    assert state.run_history[0]["issue_id"] == "test-1"
+    assert runner.run.call_count == 1
+    assert mock_ready.call_count == 1
+
+
 def test_decomposed_issue_skips_merge(repo_root: Path, state_dir: Path) -> None:
     _set_state(state_dir, OrchestratorMode.running)
     config = OrchestratorConfig()

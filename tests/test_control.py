@@ -77,6 +77,17 @@ def test_start_acquires_lock_and_runs(tmp_path: Path) -> None:
         start_orchestrator(tmp_path, state_dir)
 
 
+def test_start_passes_max_issues_to_run_loop(tmp_path: Path) -> None:
+    state_dir = _setup(tmp_path, OrchestratorMode.idle)
+    with (
+        patch("orc.control.load_config", return_value=OrchestratorConfig()),
+        patch("orc.control.run_loop") as mock_run_loop,
+    ):
+        start_orchestrator(tmp_path, state_dir, max_issues=2)
+
+    assert mock_run_loop.call_args.kwargs["max_issues"] == 2
+
+
 def test_stop_from_pause_requested(tmp_path: Path) -> None:
     state_dir = _setup(tmp_path, OrchestratorMode.pause_requested)
     stop_orchestrator(state_dir)

@@ -843,6 +843,7 @@ def run_loop(
     evaluator: IssueEvaluator | None = None,
     already_implemented_checker: AlreadyImplementedChecker | None = None,
     fail_fast: bool = False,
+    max_issues: int | None = None,
     only_issue: str | None = None,
 ) -> None:
     """Run the main scheduler loop until the queue is empty or stopped.
@@ -850,7 +851,8 @@ def run_loop(
     When *only_issue* is set the loop processes **at most one issue** and then
     transitions to idle.  If a ``resume_candidate`` exists but belongs to a
     different issue, the loop exits with an error message instead of silently
-    running the wrong issue.
+    running the wrong issue.  When *max_issues* is set, the loop stops after
+    that many issues have been processed.
     """
     store = StateStore(state_dir)
     events = EventLog(state_dir)
@@ -862,6 +864,8 @@ def run_loop(
 
     if only_issue:
         click.echo(f"[SCHEDULER] Single-issue mode: {only_issue}")
+    if max_issues is not None:
+        click.echo(f"[SCHEDULER] Issue limit: {max_issues}")
     click.echo(f"[SCHEDULER] Entering run loop (fail_fast={fail_fast})")
 
     while True:
@@ -882,6 +886,15 @@ def run_loop(
             return
 
         if state.mode != OrchestratorMode.running:
+            return
+
+        if max_issues is not None and issue_num >= max_issues:
+            click.echo(f"[SCHEDULER] --max-issues {max_issues} reached — stopping")
+            store.transition(state, OrchestratorMode.idle)
+            events.record(
+                EventType.state_changed,
+                {"to": "idle", "reason": "max_issues_reached", "processed": issue_num},
+            )
             return
 
         # Check for resume candidate before queue selection

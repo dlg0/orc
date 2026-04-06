@@ -29,6 +29,7 @@ def start_orchestrator(
     state_dir: Path,
     *,
     fail_fast: bool = False,
+    max_issues: int | None = None,
     only_issue: str | None = None,
 ) -> None:
     """Begin processing ready issues.
@@ -151,7 +152,17 @@ def start_orchestrator(
             timeout=config.evaluation_timeout,
         ) if config.enable_evaluation else None
         ai_checker = AmpAlreadyImplementedChecker() if config.use_already_implemented_preflight else None
-        run_loop(repo_root, state_dir, config, runner, evaluator=evaluator, already_implemented_checker=ai_checker, fail_fast=fail_fast, only_issue=only_issue)
+        run_loop(
+            repo_root,
+            state_dir,
+            config,
+            runner,
+            evaluator=evaluator,
+            already_implemented_checker=ai_checker,
+            fail_fast=fail_fast,
+            max_issues=max_issues,
+            only_issue=only_issue,
+        )
     except Exception:
         # Ensure state goes back to error on unexpected failure
         try:
