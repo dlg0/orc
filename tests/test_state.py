@@ -12,6 +12,7 @@ from orc.state import (
     IssueFailure,
     OrchestratorMode,
     OrchestratorState,
+    clear_last_error,
     clear_issue_hold,
     RunCheckpoint,
     RunStage,
@@ -228,6 +229,15 @@ def test_clear_issue_hold_removes_failure_entry() -> None:
     assert message == "Removed hold for X-3 — eligible for normal scheduling on next run"
     assert "X-3" not in state.issue_failures
     assert state.resume_candidate is None
+
+
+def test_clear_last_error_clears_message() -> None:
+    state = OrchestratorState(last_error="merge failed")
+
+    changed = clear_last_error(state)
+
+    assert changed is True
+    assert state.last_error is None
 
 
 def test_active_issue_title_round_trip(tmp_path) -> None:
@@ -535,6 +545,17 @@ def test_apply_requests_stop_idempotent_when_idle(tmp_path) -> None:
 def test_apply_requests_empty_returns_false(tmp_path) -> None:
     state = OrchestratorState()
     assert apply_requests(state, tmp_path) is False
+
+
+def test_apply_requests_clear_last_error(tmp_path) -> None:
+    state = OrchestratorState(last_error="merge failed")
+    rq = RequestQueue(tmp_path)
+    rq.enqueue("clear_last_error")
+
+    changed = apply_requests(state, tmp_path)
+
+    assert changed is True
+    assert state.last_error is None
 
 
 def test_apply_requests_retry(tmp_path) -> None:

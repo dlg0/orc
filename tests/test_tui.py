@@ -15,13 +15,14 @@ from orc.tui.widgets import StaleBanner, StatusPanel
 
 def _snapshot(
     *,
+    state: OrchestratorState | None = None,
     ready_issues: list[BdIssue] | None = None,
     queue_breakdown: QueueBreakdown | None = None,
     queue_result: QueueResult | None = None,
     config_error: str | None = None,
 ) -> DashboardSnapshot:
     return DashboardSnapshot(
-        state=OrchestratorState(),
+        state=state or OrchestratorState(),
         ready_issues=ready_issues or [],
         recent_events=[],
         config=OrchestratorConfig(),
@@ -114,3 +115,27 @@ def test_mark_refresh_success_clears_refresh_error() -> None:
 
     assert app._last_refresh_error is None
     banner.hide.assert_called_once()
+
+
+def test_apply_loaded_snapshot_hides_dismissed_last_error() -> None:
+    app = OrchestratorApp()
+    status_panel = Mock()
+    banner = Mock()
+
+    def fake_query_one(widget_type):
+        if widget_type is StatusPanel:
+            return status_panel
+        if widget_type is StaleBanner:
+            return banner
+        raise AssertionError(f"Unexpected query_one({widget_type!r})")
+
+    app.query_one = Mock(side_effect=fake_query_one)  # type: ignore[method-assign]
+    app._apply_snapshot = Mock()
+    app._dismissed_last_error = "merge failed"
+
+    snap = _snapshot(state=OrchestratorState(last_error="merge failed"))
+    app._apply_loaded_snapshot(snap)
+
+    displayed_snap = app._apply_snapshot.call_args.args[0]
+    assert displayed_snap.state.last_error is None
+    assert app._dismissed_last_error == "merge failed"

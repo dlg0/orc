@@ -26,6 +26,7 @@ from orc.lock import OrchestratorLock
 from orc.state import (
     OrchestratorMode,
     StateStore,
+    clear_last_error,
     clear_issue_hold,
     RequestQueue,
 )
@@ -171,6 +172,27 @@ def stop() -> None:
     """Stop after the current issue reaches a safe checkpoint."""
     state_dir = _get_state_dir()
     stop_orchestrator(state_dir)
+
+
+@main.command("clear-error")
+def clear_error() -> None:
+    """Clear the persisted last error message."""
+    state_dir = _get_state_dir()
+    store = StateStore(state_dir)
+    state = store.load()
+
+    if state.last_error is None:
+        click.echo("No last error to clear")
+        return
+
+    if OrchestratorLock(state_dir).is_locked():
+        RequestQueue(state_dir).enqueue("clear_last_error")
+        click.echo("Queued clear of last error — scheduler will apply on next save")
+        return
+
+    clear_last_error(state)
+    store.save(state)
+    click.echo("Cleared last error")
 
 
 @main.command()

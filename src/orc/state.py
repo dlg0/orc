@@ -243,6 +243,14 @@ def clear_issue_hold(state: OrchestratorState, issue_id: str) -> str:
     return f"Removed hold for {issue_id} — eligible for normal scheduling on next run"
 
 
+def clear_last_error(state: OrchestratorState) -> bool:
+    """Clear the persisted last error if one is present."""
+    if state.last_error is None:
+        return False
+    state.last_error = None
+    return True
+
+
 
 @dataclass
 class OrchestratorState:
@@ -437,6 +445,8 @@ def apply_requests(state: OrchestratorState, state_dir: Path) -> bool:
         elif rt == "retry":
             issue_id = req.get("issue_id", "")
             state.issue_failures.pop(issue_id, None)  # idempotent
+        elif rt == "clear_last_error":
+            state.last_error = None
         elif rt == "pause":
             if state.mode == OrchestratorMode.running:
                 state.mode = OrchestratorMode.pause_requested

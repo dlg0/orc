@@ -27,7 +27,7 @@ def test_help_shows_all_commands() -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["--help"])
     assert result.exit_code == 0
-    for cmd in ["status", "start", "pause", "resume", "stop", "inspect", "logs", "init-config", "tui", "unhold", "explore"]:
+    for cmd in ["status", "start", "pause", "resume", "stop", "clear-error", "inspect", "logs", "init-config", "tui", "unhold", "explore"]:
         assert cmd in result.output
 
 
@@ -202,6 +202,59 @@ def test_logs_empty(tmp_path: Path) -> None:
         result = runner.invoke(main, ["logs"])
         assert result.exit_code == 0
         assert "No events" in result.output
+
+
+def test_clear_error_clears_last_error(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".orc"
+    state_dir.mkdir(parents=True)
+    store = StateStore(state_dir)
+    store.save(OrchestratorState(last_error="merge failed"))
+
+    with patch("orc.cli._get_state_dir", return_value=state_dir):
+        runner = CliRunner()
+        result = runner.invoke(main, ["clear-error"])
+
+    assert result.exit_code == 0
+    assert "Cleared last error" in result.output
+    assert store.load().last_error is None
+
+
+def test_clear_error_queues_when_locked(tmp_path: Path) -> None:
+    from orc.lock import OrchestratorLock
+    from orc.state import RequestQueue
+
+    state_dir = tmp_path / ".orc"
+    state_dir.mkdir(parents=True)
+    store = StateStore(state_dir)
+    store.save(OrchestratorState(last_error="merge failed"))
+    lock = OrchestratorLock(state_dir)
+    assert lock.acquire()
+
+    try:
+        with patch("orc.cli._get_state_dir", return_value=state_dir):
+            runner = CliRunner()
+            result = runner.invoke(main, ["clear-error"])
+    finally:
+        lock.release()
+
+    assert result.exit_code == 0
+    assert "Queued clear of last error" in result.output
+    assert store.load().last_error == "merge failed"
+    requests = RequestQueue(state_dir).drain()
+    assert requests == [{"type": "clear_last_error"}]
+
+
+def test_clear_error_noops_when_empty(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".orc"
+    state_dir.mkdir(parents=True)
+    StateStore(state_dir).save(OrchestratorState())
+
+    with patch("orc.cli._get_state_dir", return_value=state_dir):
+        runner = CliRunner()
+        result = runner.invoke(main, ["clear-error"])
+
+    assert result.exit_code == 0
+    assert "No last error to clear" in result.output
 
 
 def test_unhold_clears_failure(tmp_path: Path) -> None:

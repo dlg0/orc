@@ -13,13 +13,14 @@ from textual.containers import Vertical
 from textual.widgets import Footer, Header
 
 from orc.config import OrchestratorConfig
+from orc.lock import OrchestratorLock
 from orc.queue import (
     QueueResult,
     compute_queue_breakdown,
     get_issue_status,
     summarize_skipped_issues,
 )
-from orc.state import OrchestratorMode, StateStore, RequestQueue
+from orc.state import OrchestratorMode, StateStore, RequestQueue, clear_last_error
 from orc.tui.snapshot import (
     DashboardSnapshot,
     load_snapshot,
@@ -173,6 +174,7 @@ class OrchestratorApp(App):
 
     BINDINGS = [
         ("ctrl+c", "ctrl_c", "Quit (×2)"),
+        ("ctrl+l", "clear_error", "Clear Error"),
         ("q", "quit", "Quit"),
         ("r", "refresh", "Refresh"),
         ("f", "freeze", "Freeze"),
@@ -213,6 +215,7 @@ class OrchestratorApp(App):
         self._last_queue_error: str | None = None
         self._last_config_error: str | None = None
         self._last_good_queue_result: QueueResult | None = None
+        self._dismissed_last_error: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -366,10 +369,28 @@ class OrchestratorApp(App):
             ),
         )
 
+    def _with_local_error_overrides(self, snap: DashboardSnapshot) -> DashboardSnapshot:
+        """Hide a just-cleared last_error until the scheduler persists the change."""
+        if self._dismissed_last_error is None:
+            return snap
+
+        current_error = snap.state.last_error
+        if current_error is None:
+            self._dismissed_last_error = None
+            return snap
+        if current_error != self._dismissed_last_error:
+            self._dismissed_last_error = None
+            return snap
+
+        return replace(snap, state=replace(snap.state, last_error=None))
+
+    def _remember_dismissed_last_error(self, error: str) -> None:
+        self._dismissed_last_error = error
+
     def _apply_loaded_fast_snapshot(self, snap: DashboardSnapshot) -> None:
         """Apply a fast snapshot and preserve queue/config warnings."""
         self._mark_refresh_success()
-        self._apply_fast_snapshot(snap)
+        self._apply_fast_snapshot(self._with_local_error_overrides(snap))
         self._update_refresh_error_display()
 
     def _apply_loaded_snapshot(self, snap: DashboardSnapshot) -> None:
@@ -382,7 +403,9 @@ class OrchestratorApp(App):
             self._remember_queue_snapshot(snap)
 
         self._mark_refresh_success(includes_queue=queue_refresh_ok)
-        self._apply_snapshot(self._snapshot_for_display(snap))
+        self._apply_snapshot(
+            self._with_local_error_overrides(self._snapshot_for_display(snap))
+        )
         self._update_refresh_error_display()
 
     def _check_staleness(self) -> None:
@@ -434,6 +457,13 @@ class OrchestratorApp(App):
         from orc.tui.modals import HelpModal
 
         self.push_screen(HelpModal())
+
+    def action_clear_error(self) -> None:
+        """Clear the persisted last error message."""
+        if not self._state_dir:
+            self.notify("No project detected", severity="error")
+            return
+        self._do_clear_error()
 
     _CTRL_C_TIMEOUT = 2.0
 
@@ -558,6 +588,34 @@ class OrchestratorApp(App):
             self.notify("No project detected", severity="error")
             return
         self._do_retry_held_issue(issue_id)
+
+    @work(thread=True)
+    def _do_clear_error(self) -> None:
+        try:
+            store = StateStore(self._state_dir)  # type: ignore[arg-type]
+            state = store.load()
+            if state.last_error is None:
+                self.call_from_thread(
+                    self.notify, "No last error to clear", severity="warning"
+                )
+                return
+
+            error_text = state.last_error
+            if OrchestratorLock(self._state_dir).is_locked():  # type: ignore[arg-type]
+                RequestQueue(self._state_dir).enqueue("clear_last_error")  # type: ignore[arg-type]
+                message = "Queued clear of last error — scheduler will apply on next save"
+            else:
+                clear_last_error(state)
+                store.save(state)
+                message = "Cleared last error"
+
+            self.call_from_thread(self._remember_dismissed_last_error, error_text)
+            self.call_from_thread(self.notify, message)
+            self.call_from_thread(self._do_full_refresh)
+        except Exception as exc:
+            self.call_from_thread(
+                self.notify, f"Clear error failed: {exc}", severity="error"
+            )
 
     @work(thread=True)
     def _do_retry_held_issue(self, issue_id: str) -> None:

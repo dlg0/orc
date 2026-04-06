@@ -9,6 +9,7 @@ import pytest
 
 from orc.config import OrchestratorConfig
 from orc.queue import BdIssue
+from orc.lock import OrchestratorLock
 from orc.state import OrchestratorMode, OrchestratorState, RequestQueue, RunCheckpoint, RunStage, StateStore
 from orc.tui.app import OrchestratorApp
 from orc.tui.snapshot import DashboardSnapshot
@@ -381,6 +382,55 @@ def test_retry_held_issue_unholds_conflict_failure(tmp_path: Path) -> None:
     refresh_mock.assert_called_once_with()
 
 
+def test_clear_error_clears_last_error_and_refreshes(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".orc"
+    state_dir.mkdir()
+    store = StateStore(state_dir)
+    store.save(OrchestratorState(last_error="merge failed"))
+    app = OrchestratorApp(repo_root=tmp_path, state_dir=state_dir)
+
+    with (
+        patch.object(app, "notify", new=Mock()) as notify_mock,
+        patch.object(app, "_do_full_refresh", new=Mock()) as refresh_mock,
+        patch.object(app, "call_from_thread", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs)),
+    ):
+        OrchestratorApp._do_clear_error.__wrapped__(app)
+
+    assert store.load().last_error is None
+    assert app._dismissed_last_error == "merge failed"
+    notify_mock.assert_called_once_with("Cleared last error")
+    refresh_mock.assert_called_once_with()
+
+
+def test_clear_error_queues_when_locked(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".orc"
+    state_dir.mkdir()
+    store = StateStore(state_dir)
+    store.save(OrchestratorState(last_error="merge failed"))
+    app = OrchestratorApp(repo_root=tmp_path, state_dir=state_dir)
+    lock = OrchestratorLock(state_dir)
+    assert lock.acquire()
+
+    try:
+        with (
+            patch.object(app, "notify", new=Mock()) as notify_mock,
+            patch.object(app, "_do_full_refresh", new=Mock()) as refresh_mock,
+            patch.object(app, "call_from_thread", side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs)),
+        ):
+            OrchestratorApp._do_clear_error.__wrapped__(app)
+    finally:
+        lock.release()
+
+    assert store.load().last_error == "merge failed"
+    requests = RequestQueue(state_dir).drain()
+    assert requests == [{"type": "clear_last_error"}]
+    assert app._dismissed_last_error == "merge failed"
+    notify_mock.assert_called_once_with(
+        "Queued clear of last error — scheduler will apply on next save"
+    )
+    refresh_mock.assert_called_once_with()
+
+
 def test_stale_banner_composes() -> None:
     banner = StaleBanner()
     children = list(banner.compose())
@@ -401,6 +451,7 @@ def test_help_modal_has_bindings() -> None:
     bindings = get_help_bindings()
     assert len(bindings) >= 9
     keys = [k for k, _ in bindings]
+    assert "ctrl+l" in keys
     assert "q" in keys
     assert "r" in keys
     assert "?" in keys
