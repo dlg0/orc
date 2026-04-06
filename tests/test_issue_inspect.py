@@ -123,31 +123,31 @@ class TestModelConditionalSections:
         assert model.acceptance_criteria == "ac"
 
 
-class TestPreflightHiddenFromTimeline:
-    """Preflight should never appear in any timeline; first visible step is Already-implemented check."""
+class TestPreflightShownInTimeline:
+    """Preflight should appear as the first visible workflow step."""
 
-    def test_active_timeline_excludes_preflight(self) -> None:
+    def test_active_timeline_includes_preflight(self) -> None:
         steps = _build_active_timeline("amp_running", "/tmp/log")
         phases = [s.phase for s in steps]
-        assert "preflight" not in phases
-        assert steps[0].phase == "already_implemented_check"
+        assert phases[0] == "preflight"
+        assert "preflight" in phases
 
-    def test_held_timeline_excludes_preflight(self) -> None:
+    def test_held_timeline_includes_preflight(self) -> None:
         failure = {"stage": "amp", "summary": "Boom"}
         steps = _build_held_timeline(failure, had_evaluation=False)
         phases = [s.phase for s in steps]
-        assert "preflight" not in phases
-        assert steps[0].phase == "already_implemented_check"
+        assert phases[0] == "preflight"
+        assert "preflight" in phases
 
-    def test_history_timeline_excludes_preflight(self) -> None:
+    def test_history_timeline_includes_preflight(self) -> None:
         steps = _build_history_timeline("merge_running", "completed")
         phases = [s.phase for s in steps]
-        assert "preflight" not in phases
-        assert steps[0].phase == "already_implemented_check"
+        assert phases[0] == "preflight"
+        assert "preflight" in phases
 
-    def test_active_at_preflight_phase_still_works(self) -> None:
-        """Even if internal state is 'preflight', timeline shouldn't break."""
+    def test_active_at_preflight_phase_marks_preflight_active(self) -> None:
         steps = _build_active_timeline("preflight", None)
         phases = [s.phase for s in steps]
-        assert "preflight" not in phases
-        assert all(s.status == "pending" for s in steps)
+        assert phases[0] == "preflight"
+        assert steps[0].status == "active"
+        assert all(s.status == "pending" for s in steps[1:])
