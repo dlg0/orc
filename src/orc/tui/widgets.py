@@ -552,10 +552,10 @@ class HeldIssuesTable(Static):
         if not state_dir or not snap:
             return
 
-        from orc.tui.held_inspect import HeldIssueInspectScreen, build_model
+        from orc.tui.issue_inspect import IssueInspectScreen, build_from_held
 
-        model = build_model(issue_id, info, snap.state, state_dir)
-        self.app.push_screen(HeldIssueInspectScreen(model))
+        model = build_from_held(issue_id, info, snap.state, state_dir)
+        self.app.push_screen(IssueInspectScreen(model))
 
     def action_retry(self) -> None:
         """Clear held status for the selected issue so it gets re-queued."""
@@ -642,11 +642,11 @@ class ActiveIssuePanel(Static):
         if not state_dir:
             return
 
-        from orc.tui.active_inspect import ActiveIssueInspectScreen, build_active_model
+        from orc.tui.issue_inspect import IssueInspectScreen, build_from_active
 
-        model = build_active_model(state, state_dir)
+        model = build_from_active(state, state_dir)
         if model:
-            self.app.push_screen(ActiveIssueInspectScreen(model))
+            self.app.push_screen(IssueInspectScreen(model))
             return
 
         # Fallback: simple inspect modal if model build fails
@@ -1045,22 +1045,11 @@ class QueueTable(Static):
             return
         issue = self._filtered_issues[row_idx]
         state_label = "Held (ready)" if issue.id in self._held_issue_ids else "Runnable"
-        title = f"Issue: {issue.id}"
-        lines = [
-            f"[bold]Title:[/] {issue.title}",
-            f"[bold]Dispatch state:[/] {state_label}",
-            f"[bold]Priority:[/] {issue.priority}",
-            f"[bold]Created:[/] {issue.created}",
-        ]
-        if issue.description:
-            lines.append(f"\n[bold]Description:[/]\n{issue.description}")
-        if issue.acceptance_criteria:
-            lines.append(
-                f"\n[bold]Acceptance Criteria:[/]\n{issue.acceptance_criteria}"
-            )
-        from orc.tui.modals import InspectModal
 
-        self.app.push_screen(InspectModal(title=title, body="\n".join(lines)))
+        from orc.tui.issue_inspect import IssueInspectScreen, build_from_queue
+
+        model = build_from_queue(issue, state_label)
+        self.app.push_screen(IssueInspectScreen(model))
 
 
 class EventsLog(Static):
@@ -1375,56 +1364,8 @@ class HistoryTable(Static):
         if row_idx < 0 or row_idx >= len(self._filtered_runs):
             return
         run = self._filtered_runs[row_idx]
-        title = f"Run: {run.get('issue_id', '?')}"
-        lines = [
-            f"[bold]Issue:[/] {run.get('issue_id', '')}",
-            f"[bold]Result:[/] {run.get('result', '')}",
-            f"[bold]Timestamp:[/] {run.get('timestamp', '')}",
-        ]
-        if run.get("branch"):
-            lines.append(f"[bold]Branch:[/] {run['branch']}")
-        if run.get("worktree_path"):
-            lines.append(f"[bold]Worktree:[/] {run['worktree_path']}")
-        if run.get("thread_id"):
-            from orc.tui.modals import _THREAD_URL_PREFIX
 
-            thread_url = f"{_THREAD_URL_PREFIX}{run['thread_id']}"
-            lines.append(f"[bold]Thread:[/] {run['thread_id']}")
-            lines.append(f"[bold]Thread URL:[/] {thread_url}")
-            from orc.tui.modals import build_thread_continue_cmd
+        from orc.tui.issue_inspect import IssueInspectScreen, build_from_history
 
-            continue_cmd = build_thread_continue_cmd(
-                run["thread_id"], run.get("worktree_path")
-            )
-            lines.append(f"[bold]Debug cmd:[/] {continue_cmd}")
-        if run.get("summary"):
-            lines.append(f"\n[bold]Summary:[/]\n{run['summary']}")
-        from orc.tui.modals import CopyableField, InspectModal, _THREAD_URL_PREFIX
-
-        copyable: list[CopyableField] = []
-        if run.get("thread_id"):
-            copyable.append(CopyableField(label="Thread ID", value=run["thread_id"], key="t"))
-            copyable.append(
-                CopyableField(
-                    label="Thread URL",
-                    value=f"{_THREAD_URL_PREFIX}{run['thread_id']}",
-                    key="u",
-                )
-            )
-            copyable.append(
-                CopyableField(
-                    label="Debug cmd",
-                    value=build_thread_continue_cmd(
-                        run["thread_id"], run.get("worktree_path")
-                    ),
-                    key="d",
-                )
-            )
-        if run.get("branch"):
-            copyable.append(CopyableField(label="Branch", value=run["branch"], key="b"))
-        if run.get("worktree_path"):
-            copyable.append(CopyableField(label="Worktree", value=run["worktree_path"], key="w"))
-
-        self.app.push_screen(
-            InspectModal(title=title, body="\n".join(lines), copyable_fields=copyable)
-        )
+        model = build_from_history(run)
+        self.app.push_screen(IssueInspectScreen(model))

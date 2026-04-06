@@ -342,13 +342,13 @@ async def test_inspect_queue_item() -> None:
         await pilot.press("i")
         await pilot.pause()
 
-        from orc.tui.modals import InspectModal
+        from orc.tui.issue_inspect import IssueInspectScreen
 
-        assert isinstance(app.screen, InspectModal)
+        assert isinstance(app.screen, IssueInspectScreen)
 
         await pilot.press("escape")
         await pilot.pause()
-        assert not isinstance(app.screen, InspectModal)
+        assert not isinstance(app.screen, IssueInspectScreen)
 
 
 @pytest.mark.asyncio
@@ -377,13 +377,13 @@ async def test_inspect_history_item() -> None:
         await pilot.press("enter")
         await pilot.pause()
 
-        from orc.tui.modals import InspectModal
+        from orc.tui.issue_inspect import IssueInspectScreen
 
-        assert isinstance(app.screen, InspectModal)
+        assert isinstance(app.screen, IssueInspectScreen)
 
         await pilot.press("escape")
         await pilot.pause()
-        assert not isinstance(app.screen, InspectModal)
+        assert not isinstance(app.screen, IssueInspectScreen)
 
 
 @pytest.mark.asyncio
