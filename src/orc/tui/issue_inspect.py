@@ -190,6 +190,7 @@ def build_from_held(
         merge_details["diagnostics"] = extra["merge_diagnostics"]
 
     amp_log_path = extra.get("amp_log_path") or latest_run.get("amp_log_path")
+    preflight_log_path = extra.get("preflight_log_path") or latest_run.get("preflight_log_path")
     thread_id = extra.get("thread_id") or latest_run.get("thread_id")
     branch = failure.get("branch") or latest_run.get("branch")
     worktree_path = failure.get("worktree_path") or latest_run.get("worktree_path")
@@ -216,6 +217,7 @@ def build_from_held(
         worktree_path=worktree_path,
         thread_id=thread_id,
         amp_log_path=amp_log_path,
+        preflight_log_path=preflight_log_path,
         preserve_worktree=failure.get("preserve_worktree", False),
         agent_result=amp_result if isinstance(amp_result, dict) else None,
         evaluation_result=eval_result if isinstance(eval_result, dict) else None,
@@ -243,6 +245,7 @@ def build_from_history(run: dict) -> IssueInspectModel:
         worktree_path=run.get("worktree_path"),
         thread_id=run.get("thread_id"),
         amp_log_path=run.get("amp_log_path"),
+        preflight_log_path=run.get("preflight_log_path"),
         agent_result=run.get("amp_result") if isinstance(run.get("amp_result"), dict) else None,
         evaluation_result=run.get("eval_result") if isinstance(run.get("eval_result"), dict) else None,
     )
@@ -470,7 +473,7 @@ class IssueInspectScreen(Screen[None]):
     BINDINGS = [
         Binding("escape", "dismiss", "Close"),
         Binding("q", "dismiss", "Close"),
-        Binding("a", "open_amp_log", "Amp log"),
+        Binding("a", "open_log", "Log"),
         Binding("b", "copy_branch", "Copy branch", show=False),
         Binding("w", "copy_worktree", "Copy worktree", show=False),
         Binding("t", "copy_thread_id", "Copy thread ID", show=False),
@@ -600,7 +603,7 @@ class IssueInspectScreen(Screen[None]):
             step = m.workflow_steps[row_idx]
             if step.has_log:
                 if step.phase == "already_implemented_check" and m.preflight_log_path:
-                    self._open_log(m.preflight_log_path, f"Preflight: {m.issue_id}")
+                    self._open_preflight_log()
                 elif m.amp_log_path:
                     self._open_amp_log()
 
@@ -812,8 +815,8 @@ class IssueInspectScreen(Screen[None]):
     def _render_hints(self) -> str:
         parts: list[str] = ["[bold]q[/]/[bold]Esc[/] close"]
         m = self._model
-        if m.amp_log_path:
-            parts.append("[bold]a[/] amp log")
+        if m.amp_log_path or m.preflight_log_path:
+            parts.append("[bold]a[/] log")
         if m.branch:
             parts.append("[bold]b[/] copy branch")
         if m.worktree_path:
@@ -826,13 +829,9 @@ class IssueInspectScreen(Screen[None]):
 
     # -- Actions ---------------------------------------------------------------
 
-    def _open_log(self, log_path: str, title: str) -> None:
-        if not Path(log_path).exists():
-            self.app.notify("Log file not found on disk", severity="warning")
-            return
+    def _open_log(self, log_path: str, title: str, extra_header_lines: list[str]) -> None:
         header_lines = [f"Issue: {self._model.issue_id}"]
-        if self._model.current_phase:
-            header_lines.append(f"Phase: {phase_label(self._model.current_phase)}")
+        header_lines.extend(extra_header_lines)
         self.app.push_screen(
             AmpStreamModal(
                 title=title,
@@ -841,30 +840,53 @@ class IssueInspectScreen(Screen[None]):
             )
         )
 
+    def _open_preflight_log(self) -> None:
+        if not self._model.preflight_log_path or not Path(self._model.preflight_log_path).exists():
+            self.app.notify("Preflight log not found", severity="warning")
+            return
+        header_lines = []
+        if self._model.current_phase:
+            header_lines.append(f"Phase: {phase_label(self._model.current_phase)}")
+        self._open_log(
+            self._model.preflight_log_path,
+            f"Preflight: {self._model.issue_id}",
+            header_lines,
+        )
+
     def _open_amp_log(self) -> None:
-        if not self._model.amp_log_path:
-            self.app.notify("No amp log available", severity="warning")
+        if not self._model.amp_log_path or not Path(self._model.amp_log_path).exists():
+            self.app.notify("Amp log not found", severity="warning")
             return
-        if not Path(self._model.amp_log_path).exists():
-            self.app.notify("Amp log file not found on disk", severity="warning")
-            return
-        header_lines = [f"Issue: {self._model.issue_id}"]
+        header_lines: list[str] = []
         if self._model.branch:
             header_lines.append(f"Branch: {self._model.branch}")
         if self._model.current_phase:
             header_lines.append(f"Phase: {phase_label(self._model.current_phase)}")
         if self._model.failure_summary:
             header_lines.append(f"Failure: {self._model.failure_summary}")
-        self.app.push_screen(
-            AmpStreamModal(
-                title=f"Amp Log: {self._model.issue_id}",
-                log_path=self._model.amp_log_path,
-                header_lines=header_lines,
-            )
+        self._open_log(
+            self._model.amp_log_path,
+            f"Amp Log: {self._model.issue_id}",
+            header_lines,
         )
 
-    def action_open_amp_log(self) -> None:
-        self._open_amp_log()
+    def action_open_log(self) -> None:
+        if self._model.current_phase == "already_implemented_check":
+            if self._model.preflight_log_path:
+                self._open_preflight_log()
+                return
+            if self._model.amp_log_path:
+                self._open_amp_log()
+                return
+            self.app.notify("Preflight log not found", severity="warning")
+            return
+        if self._model.amp_log_path:
+            self._open_amp_log()
+            return
+        if self._model.preflight_log_path:
+            self._open_preflight_log()
+            return
+        self.app.notify("Amp log not found", severity="warning")
 
     def action_copy_branch(self) -> None:
         if self._model.branch:

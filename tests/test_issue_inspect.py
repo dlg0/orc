@@ -85,6 +85,15 @@ class TestBuildFromHistory:
         model = build_from_history(run)
         assert model.agent_result is None
 
+    def test_preflight_log_preserved(self) -> None:
+        run = {
+            "issue_id": "X-8",
+            "result": "skipped_already_implemented",
+            "preflight_log_path": "/tmp/preflight.jsonl",
+        }
+        model = build_from_history(run)
+        assert model.preflight_log_path == "/tmp/preflight.jsonl"
+
 
 class TestModelConditionalSections:
     """Test that the model has the right data for conditional rendering."""

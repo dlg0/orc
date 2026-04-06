@@ -387,6 +387,46 @@ async def test_inspect_history_item() -> None:
 
 
 @pytest.mark.asyncio
+async def test_inspect_history_item_open_log_prefers_preflight(tmp_path: Path) -> None:
+    log_path = tmp_path / "preflight.jsonl"
+    log_path.write_text('{"type":"session_start"}\n', encoding="utf-8")
+
+    app = OrchestratorApp()
+    async with app.run_test() as pilot:
+        snap = _make_snap(
+            state=OrchestratorState(
+                run_history=[
+                    {
+                        "issue_id": "bz2",
+                        "result": "skipped_already_implemented",
+                        "summary": "already done",
+                        "timestamp": "2026-01-01T10:00:00",
+                        "preflight_log_path": str(log_path),
+                    },
+                ],
+            ),
+        )
+        app._apply_snapshot(snap)
+        await pilot.pause()
+
+        table = app.query_one("#history-datatable", DataTable)
+        table.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        from orc.tui.issue_inspect import IssueInspectScreen
+        from orc.tui.modals import AmpStreamModal
+
+        assert isinstance(app.screen, IssueInspectScreen)
+
+        await pilot.press("a")
+        await pilot.pause()
+
+        assert isinstance(app.screen, AmpStreamModal)
+
+
+@pytest.mark.asyncio
 async def test_quit_binding() -> None:
     app = OrchestratorApp()
     async with app.run_test() as pilot:

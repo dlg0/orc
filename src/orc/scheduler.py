@@ -754,6 +754,8 @@ def run_loop(
         state.active_run = preflight_checkpoint.to_dict()
         _save_with_requests(store, state, state_dir)
 
+        run_log_extra: dict[str, str] = {}
+
         # Already-implemented preflight check
         if already_implemented_checker is not None:
             # Create a dedicated log file for the preflight amp call
@@ -761,6 +763,7 @@ def run_loop(
             preflight_logs_dir.mkdir(parents=True, exist_ok=True)
             preflight_ts = _now_iso().replace(":", "-").replace("+", "p")
             preflight_log_path = preflight_logs_dir / f"{preflight_ts}-{issue.id}-preflight.jsonl"
+            run_log_extra["preflight_log_path"] = str(preflight_log_path)
             state.active_run["preflight_log_path"] = str(preflight_log_path)
             _update_checkpoint(store, state_dir, state, RunStage.already_implemented_check, events=events)
             click.echo(f"[PREFLIGHT] {issue.id} checking if already implemented (mode=rush) ...")
@@ -792,6 +795,7 @@ def run_loop(
                     ai_result.summary,
                     amp_mode=config.amp_mode,
                     extra={
+                        **run_log_extra,
                         "confidence": ai_result.confidence.value,
                         "evidence": ai_result.evidence,
                     },
@@ -815,7 +819,16 @@ def run_loop(
             wt_category = FailureCategory.transient_external if isinstance(exc, OSError) else FailureCategory.fatal_run_error
             _clear_active(store, state_dir, state)
             _record_failure(store, state_dir, state, issue.id, wt_category, WorkflowPhase.worktree_created.value, str(exc))
-            _record_run(store, state_dir, state, issue.id, "failed", str(exc), amp_mode=config.amp_mode)
+            _record_run(
+                store,
+                state_dir,
+                state,
+                issue.id,
+                "failed",
+                str(exc),
+                amp_mode=config.amp_mode,
+                extra=run_log_extra or None,
+            )
             if fail_fast:
                 click.echo("[SCHEDULER] Fail-fast: stopping after worktree failure")
                 store.transition(state, OrchestratorMode.idle)
@@ -874,14 +887,27 @@ def run_loop(
         except Exception as exc:
             click.echo(f"[AMP] {issue.id} FAILED: {exc}")
             events.record(EventType.error, {"issue_id": issue.id, "stage": "amp", "error": str(exc)})
+            failure_log_extra = dict(run_log_extra)
+            if amp_log_path.exists():
+                failure_log_extra["amp_log_path"] = str(amp_log_path)
             _record_failure(
                 store, state_dir, state, issue.id, FailureCategory.agent_crashed, WorkflowPhase.amp_running.value,
                 str(exc), wt_info.branch_name, str(wt_info.worktree_path),
-                extra={"amp_log_path": str(amp_log_path)} if amp_log_path.exists() else None,
+                extra=failure_log_extra or None,
             )
             _unclaim_active(state, events, repo_root)
             _clear_active(store, state_dir, state)
-            _record_run(store, state_dir, state, issue.id, "failed", str(exc), worktree_path=str(wt_info.worktree_path), amp_mode=config.amp_mode)
+            _record_run(
+                store,
+                state_dir,
+                state,
+                issue.id,
+                "failed",
+                str(exc),
+                worktree_path=str(wt_info.worktree_path),
+                amp_mode=config.amp_mode,
+                extra=failure_log_extra or None,
+            )
             _try_cleanup(worktree_mgr, wt_info)
             if fail_fast:
                 click.echo("[SCHEDULER] Fail-fast: stopping after amp failure")
@@ -953,6 +979,7 @@ def run_loop(
             ctx_extra["thread_id"] = result.thread_id
         if amp_log_path.exists():
             ctx_extra["amp_log_path"] = str(amp_log_path)
+        ctx_extra.update(run_log_extra)
 
         # Handle non-merge outcomes
         if result.result == ResultType.decomposed:
