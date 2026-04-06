@@ -411,6 +411,9 @@ async def test_active_issue_inspector_refreshes_while_issue_runs(tmp_path: Path)
         assert isinstance(app.screen, IssueInspectScreen)
         assert app.screen._model.current_phase == RunStage.preflight.value
 
+        inspector_main = app.screen.query_one("#ii-main", Vertical)
+        assert [child.id for child in inspector_main.children] == ["ii-sidebar", "ii-content"]
+
         event_log.record(EventType.amp_started, {"issue_id": "bz1"}, phase=RunStage.amp_running)
         updated_checkpoint = RunCheckpoint(
             issue_id="bz1",

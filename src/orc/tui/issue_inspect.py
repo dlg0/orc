@@ -8,7 +8,7 @@ from typing import Literal
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import DataTable, Label, Static
 
@@ -196,8 +196,6 @@ def build_from_held(
     worktree_path = failure.get("worktree_path") or latest_run.get("worktree_path")
 
     cat = failure.get("category", "unknown")
-    cat_label = _CATEGORY_LABELS.get(cat, cat)
-    cat_icon = _CATEGORY_ICONS.get(cat, "·")
 
     timeline = _build_held_timeline(failure, eval_result is not None)
 
@@ -495,8 +493,8 @@ class IssueInspectScreen(Screen[None]):
         height: 1fr;
     }
     #ii-sidebar {
-        width: 1fr;
-        border-right: solid #263041;
+        height: auto;
+        border-bottom: solid #263041;
         padding: 0 1;
     }
     #ii-timeline-title {
@@ -518,7 +516,7 @@ class IssueInspectScreen(Screen[None]):
         color: #93a4b8;
     }
     #ii-content {
-        width: 1fr;
+        height: 1fr;
         padding: 0 1;
     }
     #ii-content-scroll {
@@ -582,8 +580,8 @@ class IssueInspectScreen(Screen[None]):
                 )
                 yield Label(self._build_header_meta(), id="ii-header-meta")
 
-            # Main area: sidebar + content
-            with Horizontal(id="ii-main"):
+            # Main area: stacked workflow/context followed by details.
+            with Vertical(id="ii-main"):
                 with Vertical(id="ii-sidebar"):
                     yield Label("Workflow Steps", id="ii-timeline-title")
                     if m.source in ("active",):
