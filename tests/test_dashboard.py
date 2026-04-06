@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from textual.containers import Vertical
 from textual.widgets import DataTable, Label
 
 from orc.config import OrchestratorConfig
@@ -20,6 +21,7 @@ from orc.tui.widgets import (
     ActiveIssuePanel,
     ConfigPanel,
     EventsLog,
+    HeldIssuesTable,
     HistoryTable,
     QueueTable,
     StatusPanel,
@@ -47,6 +49,25 @@ async def test_app_has_all_panels() -> None:
         assert app.query_one(QueueTable)
         assert app.query_one(EventsLog)
         assert app.query_one(HistoryTable)
+
+
+@pytest.mark.asyncio
+async def test_app_uses_single_column_dashboard_stack() -> None:
+    app = OrchestratorApp()
+    async with app.run_test():
+        main_area = app.query_one("#main-area", Vertical)
+
+        assert [type(child) for child in main_area.children] == [
+            StatusPanel,
+            ActiveIssuePanel,
+            ConfigPanel,
+            QueueTable,
+            HeldIssuesTable,
+            EventsLog,
+            HistoryTable,
+        ]
+        assert len(app.query("#left-col")) == 0
+        assert len(app.query("#right-col")) == 0
 
 
 @pytest.mark.asyncio

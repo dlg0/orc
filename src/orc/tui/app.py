@@ -9,7 +9,7 @@ from time import monotonic
 
 from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Vertical
 from textual.widgets import Footer, Header
 
 from orc.config import OrchestratorConfig
@@ -65,15 +65,7 @@ class OrchestratorApp(App):
 
     #main-area {
         height: 1fr;
-    }
-
-    #left-col {
-        width: 1fr;
-    }
-
-    #right-col {
-        width: 2fr;
-        margin-left: 1;
+        overflow-y: auto;
     }
 
     /* ── shared panel chrome ── */
@@ -226,16 +218,14 @@ class OrchestratorApp(App):
         yield Header()
         yield NotConnectedBanner()
         yield StaleBanner()
-        with Horizontal(id="main-area"):
-            with Vertical(id="left-col"):
-                yield StatusPanel(classes="dashboard-panel panel-status")
-                yield ActiveIssuePanel(classes="dashboard-panel panel-active")
-                yield ConfigPanel(classes="dashboard-panel panel-config")
-            with Vertical(id="right-col"):
-                yield QueueTable(classes="dashboard-panel panel-queue")
-                yield HeldIssuesTable(classes="dashboard-panel panel-held")
-                yield EventsLog(classes="dashboard-panel panel-events")
-                yield HistoryTable(classes="dashboard-panel panel-history")
+        with Vertical(id="main-area"):
+            yield StatusPanel(classes="dashboard-panel panel-status")
+            yield ActiveIssuePanel(classes="dashboard-panel panel-active")
+            yield ConfigPanel(classes="dashboard-panel panel-config")
+            yield QueueTable(classes="dashboard-panel panel-queue")
+            yield HeldIssuesTable(classes="dashboard-panel panel-held")
+            yield EventsLog(classes="dashboard-panel panel-events")
+            yield HistoryTable(classes="dashboard-panel panel-history")
         yield Footer()
 
     def on_mount(self) -> None:
