@@ -96,6 +96,22 @@ class TestBuildFromHistory:
         model = build_from_history(run)
         assert model.preflight_log_path == "/tmp/preflight.jsonl"
 
+    def test_eval_log_and_result_preserved(self) -> None:
+        run = {
+            "issue_id": "X-9",
+            "result": "completed",
+            "eval_log_path": "/tmp/eval.log",
+            "eval_result": {
+                "verdict": "pass",
+                "summary": "done",
+                "classification": "verdict",
+            },
+        }
+        model = build_from_history(run)
+        assert model.eval_log_path == "/tmp/eval.log"
+        assert model.evaluation_result is not None
+        assert model.evaluation_result["summary"] == "done"
+
 
 class TestModelConditionalSections:
     """Test that the model has the right data for conditional rendering."""
@@ -131,6 +147,11 @@ class TestPreflightShownInTimeline:
         phases = [s.phase for s in steps]
         assert phases[0] == "preflight"
         assert "preflight" in phases
+
+    def test_active_timeline_marks_evaluation_log(self) -> None:
+        steps = _build_active_timeline("evaluation_running", "/tmp/amp.log", None, "/tmp/eval.log")
+        eval_step = next(step for step in steps if step.phase == "evaluation_running")
+        assert eval_step.has_log is True
 
     def test_held_timeline_includes_preflight(self) -> None:
         failure = {"stage": "amp", "summary": "Boom"}

@@ -318,6 +318,7 @@ def test_run_checkpoint_to_dict_from_dict_round_trip() -> None:
         bd_claimed=True,
         amp_result={"result": "completed", "summary": "done"},
         eval_result=None,
+        eval_log_path="/tmp/eval.log",
         preserve_worktree=False,
         resume_attempts=1,
         updated_at="2026-01-01T00:00:00+00:00",
@@ -336,6 +337,7 @@ def test_run_checkpoint_to_dict_from_dict_round_trip() -> None:
     assert restored.bd_claimed is True
     assert restored.amp_result == {"result": "completed", "summary": "done"}
     assert restored.eval_result is None
+    assert restored.eval_log_path == "/tmp/eval.log"
     assert restored.resume_attempts == 1
     assert restored.updated_at == "2026-01-01T00:00:00+00:00"
 

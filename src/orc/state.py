@@ -39,6 +39,7 @@ class RunCheckpoint:
     preserve_worktree: bool = False
     amp_log_path: str | None = None
     preflight_log_path: str | None = None
+    eval_log_path: str | None = None
     resume_attempts: int = 0
     updated_at: str = ""
 
@@ -57,6 +58,7 @@ class RunCheckpoint:
             "preserve_worktree": self.preserve_worktree,
             "amp_log_path": self.amp_log_path,
             "preflight_log_path": self.preflight_log_path,
+            "eval_log_path": self.eval_log_path,
             "resume_attempts": self.resume_attempts,
             "updated_at": self.updated_at,
         }
@@ -74,10 +76,12 @@ class RunCheckpoint:
             stage=RunStage(data["stage"]),
             bd_claimed=data.get("bd_claimed", False),
             amp_result=data.get("amp_result"),
-            eval_result=data.get("eval_result"),
+            eval_result=data.get("eval_result") or data.get("evaluation"),
             preserve_worktree=data.get("preserve_worktree", False),
             amp_log_path=data.get("amp_log_path"),
             preflight_log_path=data.get("preflight_log_path"),
+            eval_log_path=data.get("eval_log_path")
+            or ((data.get("eval_result") or {}).get("log_path")),
             resume_attempts=data.get("resume_attempts", 0),
             updated_at=data.get("updated_at", ""),
         )
@@ -291,6 +295,12 @@ class OrchestratorState:
     def active_amp_log_path(self) -> str | None:
         if self.active_run:
             return self.active_run.get("amp_log_path")
+        return None
+
+    @property
+    def active_eval_log_path(self) -> str | None:
+        if self.active_run:
+            return self.active_run.get("eval_log_path")
         return None
 
     @property

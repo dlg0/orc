@@ -38,8 +38,14 @@ EVENT_SEVERITY: dict[str, str] = {
 # Default severity is "INFO" for any event type not listed above.
 
 
-def _event_severity(event_type: str) -> str:
+def _event_severity(event_type: str, data: dict | None = None) -> str:
     """Return the severity tag for an event type."""
+    if event_type == "evaluation_finished":
+        payload = data or {}
+        if payload.get("classification") == "infrastructure_error":
+            return "ERR"
+        if payload.get("verdict") == "fail":
+            return "WARN"
     return EVENT_SEVERITY.get(event_type, "INFO")
 
 
@@ -54,6 +60,10 @@ def _human_message(event_type: str, data: dict | None) -> str:
     """Convert raw event_type + data into a human-readable message."""
     d = data or {}
     iid = d.get("issue_id", "")
+
+    def _trim(text: str, limit: int = 60) -> str:
+        return text if len(text) <= limit else text[: limit - 1] + "…"
+
     match event_type:
         case "issue_selected":
             title = d.get("title", "")
@@ -110,17 +120,39 @@ def _human_message(event_type: str, data: dict | None) -> str:
             msg = f"Error on {iid}" if iid else "Error"
             if stage:
                 msg += f" [{stage}]"
+            if d.get("outcome_kind"):
+                msg += f" ({d['outcome_kind']})"
+            if d.get("exception_type"):
+                msg += f" {d['exception_type']}"
+            if d.get("returncode") is not None:
+                msg += f" rc={d['returncode']}"
             if err:
                 msg += f": {err}"
+            elif d.get("stderr_tail"):
+                msg += f": {_trim(d['stderr_tail'])}"
             return msg
         case "evaluation_started":
-            mode = d.get("mode", "")
+            requested = d.get("mode_requested") or "default"
+            effective = d.get("mode_effective") or d.get("mode", "")
             msg = f"Evaluation started for {iid}" if iid else "Evaluation started"
-            if mode:
-                msg += f" (mode={mode})"
+            if effective:
+                msg += f" (effective={effective}"
+                if requested:
+                    msg += f", requested={requested}"
+                msg += ")"
             return msg
         case "evaluation_finished":
-            return f"Evaluation finished for {iid}" if iid else "Evaluation finished"
+            verdict = d.get("verdict", "")
+            outcome_kind = d.get("outcome_kind", "")
+            summary = d.get("summary", "")
+            msg = f"Evaluation finished for {iid}" if iid else "Evaluation finished"
+            if verdict:
+                msg += f" ({verdict})"
+            if outcome_kind and outcome_kind != "completed":
+                msg += f" [{outcome_kind}]"
+            if summary:
+                msg += f" — {_trim(summary)}"
+            return msg
         case "issue_needs_rework":
             return f"Issue {iid} needs rework" if iid else "Issue needs rework"
         case "conflict_detected":

@@ -341,10 +341,20 @@ class StatusPanel(Static):
         # Event severity counts
         sev_label = self.query_one("#event-severity-counts", Label)
         err_count = sum(
-            1 for e in snap.recent_events if _event_severity(e.get("event_type", "")) == "ERR"
+            1
+            for e in snap.recent_events
+            if _event_severity(
+                e.get("event_type", ""),
+                e.get("data") if isinstance(e.get("data"), dict) else None,
+            ) == "ERR"
         )
         warn_count = sum(
-            1 for e in snap.recent_events if _event_severity(e.get("event_type", "")) == "WARN"
+            1
+            for e in snap.recent_events
+            if _event_severity(
+                e.get("event_type", ""),
+                e.get("data") if isinstance(e.get("data"), dict) else None,
+            ) == "WARN"
         )
         if err_count or warn_count:
             parts: list[str] = []
@@ -727,7 +737,8 @@ class ConfigPanel(Static):
             f"[bold]Summary amp mode:[/] {cfg.summary_amp_mode}",
             f"[bold]Use decomposition preflight:[/] {cfg.use_decomposition_preflight}",
             f"[bold]Enable evaluation:[/] {cfg.enable_evaluation}",
-            f"[bold]Evaluation mode:[/] {cfg.evaluation_mode or 'default'}",
+            f"[bold]Evaluation mode:[/] {cfg.effective_evaluation_mode}"
+            f" [dim](requested: {cfg.requested_evaluation_mode or 'default'})[/]",
             f"[bold]Evaluation timeout:[/] {cfg.evaluation_timeout}s",
             f"[bold]Context window warn threshold:[/] {cfg.context_window_warn_threshold}",
         ]
@@ -1090,7 +1101,7 @@ class EventsLog(Static):
         etype = entry.get("event_type", "?")
         data = entry.get("data")
         color = EVENT_COLORS.get(etype, "white")
-        severity = _event_severity(etype)
+        severity = _event_severity(etype, data if isinstance(data, dict) else None)
         sev_style = _SEVERITY_STYLE.get(severity, "white")
         message = _human_message(etype, data)
         return f"[italic]{ts}[/] [{sev_style}]\\[{severity}][/] [{color}]{message}[/]"
@@ -1099,7 +1110,14 @@ class EventsLog(Static):
         """Filter events based on current error-only setting."""
         if not self._errors_only:
             return events
-        return [e for e in events if _event_severity(e.get("event_type", "")) == "ERR"]
+        return [
+            e
+            for e in events
+            if _event_severity(
+                e.get("event_type", ""),
+                e.get("data") if isinstance(e.get("data"), dict) else None,
+            ) == "ERR"
+        ]
 
     def compose(self) -> ComposeResult:
         yield Label("Events", classes="panel-title")

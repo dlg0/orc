@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -201,23 +202,6 @@ def _save_with_requests(store: StateStore, state: OrchestratorState, state_dir: 
     store.save(state)
 
 
-def _run_post_merge_evaluation(
-    evaluator: IssueEvaluator,
-    context: IssueContext,
-    base_branch: str,
-    verification_commands: list[str],
-) -> EvaluationResult:
-    try:
-        return evaluator.evaluate(
-            context=context,
-            base_branch=base_branch,
-            verification_commands=verification_commands,
-        )
-    except Exception as exc:
-        logger.exception("Evaluator crashed for %s", context.issue_id)
-        return EvaluationResult.infrastructure_error(f"Evaluator crashed: {exc}")
-
-
 def _record_evaluation_finished(
     events: EventLog,
     issue_id: str,
@@ -225,18 +209,10 @@ def _record_evaluation_finished(
     *,
     recovery: bool = False,
 ) -> None:
-    payload: dict = {
-        "issue_id": issue_id,
-        "verdict": eval_result.verdict.value,
-        "summary": eval_result.summary,
-        "classification": eval_result.classification.value,
-        "task_too_large_signal": eval_result.task_too_large_signal,
-    }
-    if recovery:
-        payload["recovery"] = True
-    if eval_result.context_window_usage_pct is not None:
-        payload["context_window_usage_pct"] = eval_result.context_window_usage_pct
-    events.record(EventType.evaluation_finished, payload)
+    events.record(
+        EventType.evaluation_finished,
+        _evaluation_event_payload(issue_id, eval_result, recovery=recovery),
+    )
 
 
 def _pause_for_evaluation_infrastructure_failure(
@@ -259,6 +235,16 @@ def _pause_for_evaluation_infrastructure_failure(
         "stage": "evaluation",
         "error": eval_result.summary,
         "classification": eval_result.classification.value,
+        "outcome_kind": eval_result.outcome_kind,
+        "mode_requested": eval_result.mode_requested,
+        "mode_effective": eval_result.mode_effective,
+        "timeout_seconds": eval_result.timeout_seconds,
+        "log_path": eval_result.log_path,
+        "returncode": eval_result.returncode,
+        "stderr_tail": eval_result.stderr_tail,
+        "exception_type": eval_result.exception_type,
+        "exception_message": eval_result.exception_message,
+        "duration_ms": eval_result.duration_ms,
     })
     _unclaim_active(state, events, repo_root)
 
@@ -267,6 +253,7 @@ def _pause_for_evaluation_infrastructure_failure(
         resume_candidate["updated_at"] = _now_iso()
         resume_candidate["bd_claimed"] = False
         resume_candidate["eval_result"] = eval_result.to_dict()
+        resume_candidate["eval_log_path"] = eval_result.log_path
         state.resume_candidate = resume_candidate
 
     state.last_error = eval_result.summary
@@ -282,7 +269,11 @@ def _pause_for_evaluation_infrastructure_failure(
         branch,
         worktree_path,
         amp_mode=amp_mode,
-        extra={**(extra or {}), "evaluation": eval_result.to_dict()},
+        extra={
+            **(extra or {}),
+            "eval_result": eval_result.to_dict(),
+            "eval_log_path": eval_result.log_path,
+        },
     )
     store.transition(state, OrchestratorMode.pause_requested)
     store.transition(state, OrchestratorMode.paused)
@@ -423,6 +414,156 @@ def _update_checkpoint(
     _save_with_requests(store, state, state_dir)
     if events is not None:
         events.set_phase(stage)
+
+
+def _create_eval_log_path(state_dir: Path, issue_id: str) -> Path:
+    eval_logs_dir = state_dir / "eval-runs"
+    eval_logs_dir.mkdir(parents=True, exist_ok=True)
+    ts_slug = _now_iso().replace(":", "-").replace("+", "p")
+    return eval_logs_dir / f"{ts_slug}-{issue_id}.log"
+
+
+def _append_scheduler_eval_exception_log(
+    eval_log_path: Path,
+    issue_id: str,
+    exc: Exception,
+) -> None:
+    eval_log_path.parent.mkdir(parents=True, exist_ok=True)
+    with eval_log_path.open("a", encoding="utf-8") as log_fh:
+        log_fh.write("# scheduler evaluation exception\n")
+        log_fh.write(json.dumps({
+            "timestamp": _now_iso(),
+            "issue_id": issue_id,
+            "exception_type": type(exc).__name__,
+            "exception_message": str(exc),
+        }, sort_keys=True) + "\n")
+
+
+def _evaluation_event_payload(
+    issue_id: str,
+    eval_result: EvaluationResult,
+    *,
+    recovery: bool,
+) -> dict:
+    data = {
+        "issue_id": issue_id,
+        "recovery": recovery,
+        "verdict": eval_result.verdict.value,
+        "summary": eval_result.summary,
+        "classification": eval_result.classification.value,
+        "outcome_kind": eval_result.outcome_kind,
+        "mode_requested": eval_result.mode_requested,
+        "mode_effective": eval_result.mode_effective,
+        "timeout_seconds": eval_result.timeout_seconds,
+        "log_path": eval_result.log_path,
+        "task_too_large_signal": eval_result.task_too_large_signal,
+        "returncode": eval_result.returncode,
+        "stderr_tail": eval_result.stderr_tail,
+        "exception_type": eval_result.exception_type,
+        "exception_message": eval_result.exception_message,
+        "duration_ms": eval_result.duration_ms,
+    }
+    if eval_result.context_window_usage_pct is not None:
+        data["context_window_usage_pct"] = eval_result.context_window_usage_pct
+    return data
+
+
+def _run_post_merge_evaluation(
+    *,
+    store: StateStore,
+    state_dir: Path,
+    state: OrchestratorState,
+    config: OrchestratorConfig,
+    evaluator: IssueEvaluator,
+    events: EventLog,
+    ctx: IssueContext,
+    recovery: bool = False,
+) -> EvaluationResult:
+    eval_log_path = _create_eval_log_path(state_dir, ctx.issue_id)
+    eval_log_path_str = str(eval_log_path)
+    requested_mode = config.requested_evaluation_mode or "default"
+
+    if state.active_run is not None:
+        state.active_run["eval_log_path"] = eval_log_path_str
+    _update_checkpoint(store, state_dir, state, RunStage.evaluation_running, events=events)
+
+    events.record(EventType.evaluation_started, {
+        "issue_id": ctx.issue_id,
+        "recovery": recovery,
+        "mode_requested": config.requested_evaluation_mode,
+        "mode_effective": config.effective_evaluation_mode,
+        "timeout_seconds": config.evaluation_timeout,
+        "log_path": eval_log_path_str,
+    })
+    click.echo(
+        f"[EVAL] {ctx.issue_id} running post-merge evaluation on {config.base_branch} "
+        f"(requested={requested_mode}, effective={config.effective_evaluation_mode}) ..."
+    )
+    click.echo(f"[EVAL] {ctx.issue_id} log={eval_log_path}")
+
+    try:
+        eval_result = evaluator.evaluate(
+            context=ctx,
+            base_branch=config.base_branch,
+            verification_commands=config.verification_commands,
+            log_path=eval_log_path,
+        )
+    except Exception as exc:
+        _append_scheduler_eval_exception_log(eval_log_path, ctx.issue_id, exc)
+        eval_result = EvaluationResult.infrastructure_error(
+            f"Evaluator crashed: {exc}",
+            outcome_kind="exception",
+            mode_requested=config.requested_evaluation_mode,
+            mode_effective=config.effective_evaluation_mode,
+            timeout_seconds=config.evaluation_timeout,
+            log_path=eval_log_path_str,
+            exception_type=type(exc).__name__,
+            exception_message=str(exc),
+        )
+
+    if eval_result.mode_requested is None:
+        eval_result.mode_requested = config.requested_evaluation_mode
+    if eval_result.mode_effective is None:
+        eval_result.mode_effective = config.effective_evaluation_mode
+    if eval_result.timeout_seconds is None:
+        eval_result.timeout_seconds = config.evaluation_timeout
+    if eval_result.log_path is None:
+        eval_result.log_path = eval_log_path_str
+
+    eval_result_dict = eval_result.to_dict()
+    _update_checkpoint(
+        store,
+        state_dir,
+        state,
+        RunStage.evaluation_running,
+        eval_result=eval_result_dict,
+        events=events,
+    )
+
+    events.record(
+        EventType.evaluation_finished,
+        _evaluation_event_payload(ctx.issue_id, eval_result, recovery=recovery),
+    )
+    if eval_result.infrastructure_failure:
+        events.record(EventType.error, {
+            "issue_id": ctx.issue_id,
+            "stage": "evaluation",
+            "error": eval_result.summary,
+            "recovery": recovery,
+            "classification": eval_result.classification.value,
+            "outcome_kind": eval_result.outcome_kind,
+            "mode_requested": eval_result.mode_requested,
+            "mode_effective": eval_result.mode_effective,
+            "timeout_seconds": eval_result.timeout_seconds,
+            "log_path": eval_result.log_path,
+            "returncode": eval_result.returncode,
+            "stderr_tail": eval_result.stderr_tail,
+            "exception_type": eval_result.exception_type,
+            "exception_message": eval_result.exception_message,
+            "duration_ms": eval_result.duration_ms,
+        })
+
+    return eval_result
 
 
 def _attempt_resume(
@@ -618,13 +759,19 @@ def _attempt_resume(
             base_branch=config.base_branch,
         )
         eval_result = _run_post_merge_evaluation(
-            evaluator,
-            ctx_for_eval,
-            config.base_branch,
-            config.verification_commands,
+            store=store,
+            state_dir=state_dir,
+            state=state,
+            config=config,
+            evaluator=evaluator,
+            events=events,
+            ctx=ctx_for_eval,
+            recovery=True,
         )
-
-        _record_evaluation_finished(events, issue_id, eval_result, recovery=True)
+        eval_extra = {
+            "eval_result": eval_result.to_dict(),
+            "eval_log_path": eval_result.log_path,
+        }
 
         if eval_result.passed:
             click.echo(f"[EVAL] {issue_id} PASSED: {eval_result.summary}")
@@ -667,7 +814,7 @@ def _attempt_resume(
             _record_run(store, state_dir, state, issue_id,
                         "completed_with_followup" if followup_id else "followup_failed",
                         eval_result.summary, branch, wt_path_str,
-                        amp_mode=config.amp_mode)
+                        amp_mode=config.amp_mode, extra=eval_extra)
             events.record(EventType.resume_succeeded if followup_id else EventType.resume_failed,
                           {"issue_id": issue_id})
             return True
@@ -680,7 +827,8 @@ def _attempt_resume(
     state.issue_failures.pop(issue_id, None)
     _clear_active(store, state_dir, state)
     _record_run(store, state_dir, state, issue_id, "completed", "recovered from interrupted run",
-                branch, wt_path_str, amp_mode=config.amp_mode)
+                branch, wt_path_str, amp_mode=config.amp_mode,
+                extra=eval_extra if evaluator is not None else None)
     _try_cleanup(worktree_mgr, wt_info)
     _check_parent_promotion(issue_id, repo_root, store, state_dir, state, events)
 
@@ -1221,19 +1369,19 @@ def run_loop(
 
         # Post-merge evaluation on main
         if evaluator is not None:
-            _update_checkpoint(store, state_dir, state, RunStage.post_merge_eval, events=events)
-            _eval_mode = config.effective_evaluation_mode
-            events.record(EventType.evaluation_started, {"issue_id": issue.id, "mode": _eval_mode})
-            click.echo(f"[EVAL] {issue.id} running post-merge evaluation on {config.base_branch} (mode={_eval_mode}) ...")
-
             eval_result = _run_post_merge_evaluation(
-                evaluator,
-                ctx,
-                config.base_branch,
-                config.verification_commands,
+                store=store,
+                state_dir=state_dir,
+                state=state,
+                config=config,
+                evaluator=evaluator,
+                events=events,
+                ctx=ctx,
             )
-
-            _record_evaluation_finished(events, issue.id, eval_result)
+            ctx_extra.update({
+                "eval_result": eval_result.to_dict(),
+                "eval_log_path": eval_result.log_path,
+            })
 
             if eval_result.passed:
                 click.echo(f"[EVAL] {issue.id} PASSED: {eval_result.summary}")
@@ -1293,8 +1441,7 @@ def run_loop(
                     store, state_dir, state, issue.id, "completed_with_followup",
                     eval_result.summary, wt_info.branch_name, wt_path,
                     amp_mode=config.amp_mode,
-                    extra={**(ctx_extra or {}), "followup_issue_id": followup_id,
-                           "evaluation": eval_result.to_dict()},
+                    extra={**(ctx_extra or {}), "followup_issue_id": followup_id},
                 )
                 _try_cleanup(worktree_mgr, wt_info)
                 if fail_fast:

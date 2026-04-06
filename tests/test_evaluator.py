@@ -75,6 +75,16 @@ def test_to_dict_round_trip() -> None:
         "task_too_large_signal": True,
         "context_window_usage_pct": None,
         "classification": "verdict",
+        "mode_requested": None,
+        "mode_effective": None,
+        "timeout_seconds": None,
+        "log_path": None,
+        "outcome_kind": "completed",
+        "returncode": None,
+        "stderr_tail": None,
+        "exception_type": None,
+        "exception_message": None,
+        "duration_ms": None,
     }
 
 
@@ -132,6 +142,14 @@ def test_stub_evaluate_returns_configured_result() -> None:
     stub = StubEvaluator(custom)
     result = stub.evaluate(_make_context(), "main", ["make test"])
     assert result is custom
+
+
+def test_stub_evaluate_records_log_path(tmp_path: Path) -> None:
+    log_path = tmp_path / "eval.log"
+    stub = StubEvaluator.passed()
+    result = stub.evaluate(_make_context(), "main", [], log_path=log_path)
+    assert log_path.exists()
+    assert result.log_path == str(log_path)
 
 
 # --- AmpEvaluatorRunner._build_prompt ---
@@ -317,6 +335,7 @@ def test_parse_output_nonzero_exit_code() -> None:
     result = runner._parse_output(proc)
     assert result.passed is False
     assert result.infrastructure_failure is True
+    assert result.outcome_kind == "nonzero_exit"
     assert "code 1" in result.summary
 
 
@@ -421,3 +440,33 @@ def test_evaluator_passes_repo_root_env(mock_which, mock_run, mock_env) -> None:
     _, kwargs = mock_run.call_args
     assert kwargs["env"] is fake_env
     assert kwargs["cwd"] == str(ctx.repo_root)
+
+
+@patch("orc.evaluator.build_worktree_env")
+@patch("orc.evaluator.subprocess.run")
+@patch("orc.evaluator.shutil.which", return_value="/usr/bin/amp")
+def test_evaluator_writes_eval_log(mock_which, mock_run, mock_env, tmp_path: Path) -> None:
+    fake_env = {"PATH": "/usr/bin"}
+    mock_env.return_value = fake_env
+
+    def _fake_run(*args, **kwargs):
+        stdout_fh = kwargs["stdout"]
+        stdout_fh.write(_stream_assistant('```json\n{"verdict": "pass", "summary": "logged"}\n```') + "\n")
+        stdout_fh.write(_stream_result() + "\n")
+        stdout_fh.flush()
+        return subprocess.CompletedProcess(args=["amp"], returncode=0, stdout=None, stderr="stderr line\n")
+
+    mock_run.side_effect = _fake_run
+
+    runner = AmpEvaluatorRunner(mode="rush", requested_mode=None)
+    log_path = tmp_path / "eval.log"
+    result = runner.evaluate(_make_context(), "main", [], log_path=log_path)
+
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "# orc evaluation invocation" in log_text
+    assert "# amp stdout (raw --stream-json)" in log_text
+    assert "# orc evaluation completion" in log_text
+    assert result.log_path == str(log_path)
+    assert result.mode_effective == "rush"
+    assert result.mode_requested is None
+    assert result.stderr_tail == "stderr line"

@@ -80,6 +80,7 @@ class IssueInspectModel:
     thread_id: str | None = None
     amp_log_path: str | None = None
     preflight_log_path: str | None = None
+    eval_log_path: str | None = None
     preserve_worktree: bool = False
 
     # Structured outputs (raw dicts)
@@ -90,6 +91,20 @@ class IssueInspectModel:
     # Derived
     workflow_steps: list[IssueInspectStep] = field(default_factory=list)
     events: list[dict] = field(default_factory=list)
+
+
+def _extract_eval_result(data: dict) -> dict | None:
+    eval_result = data.get("eval_result") or data.get("evaluation")
+    return eval_result if isinstance(eval_result, dict) else None
+
+
+def _extract_eval_log_path(data: dict, eval_result: dict | None) -> str | None:
+    log_path = data.get("eval_log_path")
+    if isinstance(log_path, str) and log_path:
+        return log_path
+    if eval_result and isinstance(eval_result.get("log_path"), str):
+        return eval_result["log_path"]
+    return None
 
 
 # -- Builder Functions ---------------------------------------------------------
@@ -127,7 +142,14 @@ def build_from_active(
 
     amp_log_path = run.get("amp_log_path")
     preflight_log_path = run.get("preflight_log_path")
-    timeline = _build_active_timeline(current_phase, amp_log_path, preflight_log_path)
+    eval_result = _extract_eval_result(run)
+    eval_log_path = _extract_eval_log_path(run, eval_result)
+    timeline = _build_active_timeline(
+        current_phase,
+        amp_log_path,
+        preflight_log_path,
+        eval_log_path,
+    )
 
     return IssueInspectModel(
         issue_id=issue_id,
@@ -144,7 +166,9 @@ def build_from_active(
         thread_id=thread_id,
         amp_log_path=amp_log_path,
         preflight_log_path=preflight_log_path,
+        eval_log_path=eval_log_path,
         agent_result=amp_result if isinstance(amp_result, dict) else None,
+        evaluation_result=eval_result,
         workflow_steps=timeline,
         events=events,
     )
@@ -171,12 +195,7 @@ def build_from_held(
     latest_run = related_runs[0] if related_runs else {}
 
     amp_result = extra.get("amp_result") or latest_run.get("amp_result")
-    eval_result = (
-        extra.get("eval_result")
-        or extra.get("evaluation")
-        or latest_run.get("eval_result")
-        or latest_run.get("evaluation")
-    )
+    eval_result = _extract_eval_result(extra) or _extract_eval_result(latest_run)
     merge_details: dict | None = None
     if extra.get("merge_stage") or extra.get("merge_error"):
         merge_details = {
@@ -191,6 +210,7 @@ def build_from_held(
 
     amp_log_path = extra.get("amp_log_path") or latest_run.get("amp_log_path")
     preflight_log_path = extra.get("preflight_log_path") or latest_run.get("preflight_log_path")
+    eval_log_path = _extract_eval_log_path(extra, eval_result) or _extract_eval_log_path(latest_run, eval_result)
     thread_id = extra.get("thread_id") or latest_run.get("thread_id")
     branch = failure.get("branch") or latest_run.get("branch")
     worktree_path = failure.get("worktree_path") or latest_run.get("worktree_path")
@@ -216,6 +236,7 @@ def build_from_held(
         thread_id=thread_id,
         amp_log_path=amp_log_path,
         preflight_log_path=preflight_log_path,
+        eval_log_path=eval_log_path,
         preserve_worktree=failure.get("preserve_worktree", False),
         agent_result=amp_result if isinstance(amp_result, dict) else None,
         evaluation_result=eval_result if isinstance(eval_result, dict) else None,
@@ -251,7 +272,11 @@ def build_from_history(run: dict) -> IssueInspectModel:
             final_phase,
             raw_result,
             preflight_log_path=run.get("preflight_log_path"),
+            eval_log_path=_extract_eval_log_path(run, _extract_eval_result(run)),
         )
+
+    eval_result = _extract_eval_result(run)
+    eval_log_path = _extract_eval_log_path(run, eval_result)
 
     return IssueInspectModel(
         issue_id=run.get("issue_id", ""),
@@ -267,8 +292,9 @@ def build_from_history(run: dict) -> IssueInspectModel:
         thread_id=run.get("thread_id"),
         amp_log_path=run.get("amp_log_path"),
         preflight_log_path=run.get("preflight_log_path"),
+        eval_log_path=eval_log_path,
         agent_result=run.get("amp_result") if isinstance(run.get("amp_result"), dict) else None,
-        evaluation_result=run.get("eval_result") if isinstance(run.get("eval_result"), dict) else None,
+        evaluation_result=eval_result,
         workflow_steps=workflow_steps,
     )
 
@@ -296,6 +322,7 @@ def _build_active_timeline(
     current_phase: str | None,
     amp_log_path: str | None,
     preflight_log_path: str | None = None,
+    eval_log_path: str | None = None,
 ) -> list[IssueInspectStep]:
     """Build the workflow step timeline for an active issue."""
     # Use full PHASE_ORDER for index lookup so hidden phases still map correctly.
@@ -335,6 +362,7 @@ def _build_active_timeline(
         has_log = (
             (key == "amp_running" and amp_log_path is not None)
             or (key == "already_implemented_check" and preflight_log_path is not None)
+            or (key == "evaluation_running" and eval_log_path is not None)
         )
 
         steps.append(IssueInspectStep(
@@ -391,6 +419,7 @@ def _build_history_timeline(
     final_phase: str,
     result: str,
     preflight_log_path: str | None = None,
+    eval_log_path: str | None = None,
 ) -> list[IssueInspectStep]:
     """Build workflow timeline from a completed history entry.
 
@@ -424,6 +453,10 @@ def _build_history_timeline(
         has_log = (
             key == "already_implemented_check"
             and preflight_log_path is not None
+            and status == "done"
+        ) or (
+            key == "evaluation_running"
+            and eval_log_path is not None
             and status == "done"
         )
 
@@ -550,6 +583,7 @@ class IssueInspectScreen(Screen[None]):
         Binding("escape", "dismiss", "Close"),
         Binding("q", "dismiss", "Close"),
         Binding("a", "open_log", "Log"),
+        Binding("e", "open_eval_log", "Eval Log", show=False),
         Binding("b", "copy_branch", "Copy branch", show=False),
         Binding("w", "copy_worktree", "Copy worktree", show=False),
         Binding("t", "copy_thread_id", "Copy thread ID", show=False),
@@ -711,11 +745,12 @@ class IssueInspectScreen(Screen[None]):
                     else ts.split("T")[1].split("+")[0]
                 )
             event_type = event.get("event_type", "")
-            sev = _event_severity(event_type)
+            event_data = event.get("data") if isinstance(event.get("data"), dict) else None
+            sev = _event_severity(event_type, event_data)
             sev_style = _SEVERITY_STYLE.get(sev, "bright_white")
             color = EVENT_COLORS.get(event_type, "white")
             phase_str = phase_label(event.get("phase"))
-            message = _human_message(event_type, event.get("data"))
+            message = _human_message(event_type, event_data)
             if len(message) > 100:
                 message = message[:97] + "…"
             events_table.add_row(
@@ -740,6 +775,8 @@ class IssueInspectScreen(Screen[None]):
             if step.has_log:
                 if step.phase == "already_implemented_check" and m.preflight_log_path:
                     self._open_preflight_log()
+                elif step.phase == "evaluation_running" and m.eval_log_path:
+                    self._open_eval_log()
                 elif m.amp_log_path:
                     self._open_amp_log()
 
@@ -791,6 +828,8 @@ class IssueInspectScreen(Screen[None]):
             lines.append(f"[bold]URL:[/] {_THREAD_URL_PREFIX}{m.thread_id}")
         if m.preflight_log_path:
             lines.append(f"[bold]Preflight log:[/] {m.preflight_log_path}")
+        if m.eval_log_path:
+            lines.append(f"[bold]Eval log:[/] {m.eval_log_path}")
         if m.amp_log_path:
             lines.append(f"[bold]Amp log:[/] {m.amp_log_path}")
         if m.preserve_worktree:
@@ -885,8 +924,12 @@ class IssueInspectScreen(Screen[None]):
         if er.get("verdict"):
             color = "green" if er["verdict"] == "pass" else "red"
             lines.append(f"[bold]Verdict:[/] [{color}]{er['verdict']}[/]")
+        if er.get("classification") == "infrastructure_error":
+            lines.append("[bold red]Infrastructure failure:[/] evaluator execution failed")
         if er.get("summary"):
             lines.append(f"[bold]Summary:[/] {er['summary']}")
+        if er.get("outcome_kind") and er.get("outcome_kind") != "completed":
+            lines.append(f"[bold]Outcome:[/] {er['outcome_kind']}")
         if er.get("evidence"):
             lines.append("[bold]Evidence:[/]")
             for e in er["evidence"]:
@@ -899,10 +942,32 @@ class IssueInspectScreen(Screen[None]):
                 lines.append(f"  · {g}")
         if er.get("task_too_large_signal"):
             lines.append("[bold bright_yellow]⚠ Task too large signal[/]")
+        if er.get("mode_effective"):
+            requested = er.get("mode_requested") or "default"
+            lines.append(
+                f"[bold]Mode:[/] {er['mode_effective']} [dim](requested: {requested})[/]"
+            )
+        if er.get("timeout_seconds") is not None:
+            lines.append(f"[bold]Timeout:[/] {er['timeout_seconds']}s")
+        if er.get("duration_ms") is not None:
+            lines.append(f"[bold]Duration:[/] {er['duration_ms']}ms")
+        if er.get("returncode") is not None:
+            lines.append(f"[bold]Return code:[/] {er['returncode']}")
+        if er.get("exception_type"):
+            exc_msg = er.get("exception_message")
+            line = f"[bold red]Exception:[/] {er['exception_type']}"
+            if exc_msg:
+                line += f": {exc_msg}"
+            lines.append(line)
+        if er.get("stderr_tail"):
+            lines.append("[bold]Stderr tail:[/]")
+            lines.append(er["stderr_tail"])
         if er.get("context_window_usage_pct") is not None:
             pct = er["context_window_usage_pct"]
             color = "red" if pct >= 80 else "bright_yellow" if pct >= 50 else "green"
             lines.append(f"[bold]Context usage:[/] [{color}]{pct}%[/]")
+        if er.get("log_path"):
+            lines.append(f"[bold]Log path:[/] {er['log_path']}")
         return "\n".join(lines) if lines else "[dim]No evaluation data available[/]"
 
     def _render_merge_details(self) -> str:
@@ -951,8 +1016,10 @@ class IssueInspectScreen(Screen[None]):
     def _render_hints(self) -> str:
         parts: list[str] = ["[bold]q[/]/[bold]Esc[/] close"]
         m = self._model
-        if m.amp_log_path or m.preflight_log_path:
+        if m.amp_log_path or m.preflight_log_path or m.eval_log_path:
             parts.append("[bold]a[/] log")
+        if m.eval_log_path:
+            parts.append("[bold]e[/] eval log")
         if m.branch:
             parts.append("[bold]b[/] copy branch")
         if m.worktree_path:
@@ -1006,23 +1073,56 @@ class IssueInspectScreen(Screen[None]):
             header_lines,
         )
 
+    def _open_eval_log(self) -> None:
+        if not self._model.eval_log_path or not Path(self._model.eval_log_path).exists():
+            self.app.notify("Evaluation log not found", severity="warning")
+            return
+        header_lines: list[str] = []
+        if self._model.current_phase:
+            header_lines.append(f"Phase: {phase_label(self._model.current_phase)}")
+        if self._model.evaluation_result and self._model.evaluation_result.get("summary"):
+            header_lines.append(f"Summary: {self._model.evaluation_result['summary']}")
+        self._open_log(
+            self._model.eval_log_path,
+            f"Evaluation Log: {self._model.issue_id}",
+            header_lines,
+        )
+
     def action_open_log(self) -> None:
         if self._model.current_phase == "already_implemented_check":
             if self._model.preflight_log_path:
                 self._open_preflight_log()
+                return
+            if self._model.eval_log_path:
+                self._open_eval_log()
                 return
             if self._model.amp_log_path:
                 self._open_amp_log()
                 return
             self.app.notify("Preflight log not found", severity="warning")
             return
+        if self._model.current_phase == "evaluation_running" and self._model.eval_log_path:
+            self._open_eval_log()
+            return
+        if self._model.eval_log_path and not self._model.amp_log_path:
+            self._open_eval_log()
+            return
         if self._model.amp_log_path:
             self._open_amp_log()
+            return
+        if self._model.eval_log_path:
+            self._open_eval_log()
             return
         if self._model.preflight_log_path:
             self._open_preflight_log()
             return
         self.app.notify("Amp log not found", severity="warning")
+
+    def action_open_eval_log(self) -> None:
+        if self._model.eval_log_path:
+            self._open_eval_log()
+            return
+        self.app.notify("Evaluation log not found", severity="warning")
 
     def action_copy_branch(self) -> None:
         if self._model.branch:

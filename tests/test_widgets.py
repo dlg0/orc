@@ -480,6 +480,14 @@ def test_event_severity_info_default() -> None:
     assert _event_severity("unknown_type") == "INFO"
 
 
+def test_event_severity_evaluation_outcomes() -> None:
+    assert _event_severity("evaluation_finished", {"verdict": "fail"}) == "WARN"
+    assert _event_severity(
+        "evaluation_finished",
+        {"classification": "infrastructure_error", "verdict": "fail"},
+    ) == "ERR"
+
+
 def test_events_log_format_entry_includes_severity_prefix() -> None:
     entry = {"timestamp": "2025-01-01T12:00:00Z", "event_type": "error", "data": {"error": "fail"}}
     result = EventsLog._format_entry(entry)
@@ -518,8 +526,16 @@ def test_events_log_format_entry_includes_severity_prefix() -> None:
         ("state_changed", {"from": "paused", "to": "running"}, "State paused → running"),
         ("state_changed", {"to": "idle", "reason": "queue_empty"}, "State → idle (queue_empty)"),
         ("error", {"issue_id": "X-7", "stage": "amp", "error": "timeout"}, "Error on X-7 [amp]: timeout"),
-        ("evaluation_started", {"issue_id": "X-8"}, "Evaluation started for X-8"),
-        ("evaluation_finished", {"issue_id": "X-9"}, "Evaluation finished for X-9"),
+        (
+            "evaluation_started",
+            {"issue_id": "X-8", "mode_effective": "rush", "mode_requested": None},
+            "Evaluation started for X-8 (effective=rush, requested=default)",
+        ),
+        (
+            "evaluation_finished",
+            {"issue_id": "X-9", "verdict": "fail", "outcome_kind": "stream_error", "summary": "context exhausted"},
+            "Evaluation finished for X-9 (fail) [stream_error]",
+        ),
         ("issue_needs_rework", {"issue_id": "X-10"}, "Issue X-10 needs rework"),
         ("conflict_detected", {"issue_id": "X-11", "branch": "feat/x"}, "Conflict detected on X-11 (branch: feat/x)"),
         ("conflict_resolution_started", {"issue_id": "X-12"}, "Conflict resolution started for X-12"),

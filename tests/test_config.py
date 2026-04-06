@@ -73,7 +73,7 @@ def test_load_config_null_evaluation_mode_falls_back_to_amp_mode(tmp_path: Path)
     )
 
     config = load_config(tmp_path)
-    assert config.evaluation_mode == "smart"
+    assert config.requested_evaluation_mode is None
     assert config.effective_evaluation_mode == "smart"
 
 

@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from orc.config import OrchestratorConfig
 from orc.control import (
     pause_orchestrator,
     resume_orchestrator,
@@ -40,7 +41,7 @@ def test_pause_from_idle_fails(tmp_path: Path) -> None:
 def test_resume_from_paused(tmp_path: Path) -> None:
     state_dir = _setup(tmp_path, OrchestratorMode.paused)
     with (
-        patch("orc.control.load_config"),
+        patch("orc.control.load_config", return_value=OrchestratorConfig()),
         patch("orc.control.run_loop"),
     ):
         resume_orchestrator(tmp_path, state_dir)
@@ -70,7 +71,7 @@ def test_stop_from_idle_fails(tmp_path: Path) -> None:
 def test_start_acquires_lock_and_runs(tmp_path: Path) -> None:
     state_dir = _setup(tmp_path, OrchestratorMode.idle)
     with (
-        patch("orc.control.load_config"),
+        patch("orc.control.load_config", return_value=OrchestratorConfig()),
         patch("orc.control.run_loop"),
     ):
         start_orchestrator(tmp_path, state_dir)
@@ -104,7 +105,7 @@ def test_start_crash_recovery(tmp_path: Path) -> None:
     store.save(state)
 
     with (
-        patch("orc.control.load_config"),
+        patch("orc.control.load_config", return_value=OrchestratorConfig()),
         patch("orc.control.run_loop"),
     ):
         start_orchestrator(tmp_path, state_dir)
@@ -130,7 +131,7 @@ def test_start_crash_recovery_from_stopping(tmp_path: Path) -> None:
     store.save(state)
 
     with (
-        patch("orc.control.load_config"),
+        patch("orc.control.load_config", return_value=OrchestratorConfig()),
         patch("orc.control.run_loop"),
     ):
         start_orchestrator(tmp_path, state_dir)
@@ -146,7 +147,7 @@ def test_start_crash_recovery_from_stopping_no_active_run(tmp_path: Path) -> Non
     state_dir = _setup(tmp_path, OrchestratorMode.stopping)
 
     with (
-        patch("orc.control.load_config"),
+        patch("orc.control.load_config", return_value=OrchestratorConfig()),
         patch("orc.control.run_loop"),
     ):
         start_orchestrator(tmp_path, state_dir)

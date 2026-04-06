@@ -51,7 +51,7 @@ class OrchestratorConfig:
     use_already_implemented_preflight: bool = True
     use_decomposition_preflight: bool = True
     enable_evaluation: bool = True
-    evaluation_mode: str = "rush"
+    evaluation_mode: str | None = "rush"
     evaluation_timeout: int = 900
     context_window_warn_threshold: float = 0.85
     summary_mode: str = "self-report"  # "self-report" | "rush-extract" | "stream-json"
@@ -64,11 +64,12 @@ class OrchestratorConfig:
             field_name="amp_mode",
             fallback="deep",
         )
-        self.evaluation_mode = _normalize_mode(
-            self.evaluation_mode,
-            field_name="evaluation_mode",
-            fallback=self.amp_mode,
-        )
+        if self.evaluation_mode is not None:
+            self.evaluation_mode = _normalize_mode(
+                self.evaluation_mode,
+                field_name="evaluation_mode",
+                fallback=self.amp_mode,
+            )
         self.evaluation_timeout = _normalize_timeout(
             self.evaluation_timeout,
             field_name="evaluation_timeout",
@@ -78,6 +79,10 @@ class OrchestratorConfig:
     @property
     def effective_evaluation_mode(self) -> str:
         return self.evaluation_mode or self.amp_mode
+
+    @property
+    def requested_evaluation_mode(self) -> str | None:
+        return self.evaluation_mode
 
 
 CONFIG_DIR = ".orc"

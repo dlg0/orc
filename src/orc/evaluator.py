@@ -7,14 +7,20 @@ import logging
 import re
 import shutil
 import subprocess
+import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Protocol
 
 from orc.amp_runner import IssueContext
 from orc.worktree import build_worktree_env
 
 logger = logging.getLogger(__name__)
+
+_STDERR_TAIL_MAX_CHARS = 4000
+_STDERR_TAIL_MAX_LINES = 40
 
 
 class EvaluationVerdict(str, Enum):
@@ -37,6 +43,16 @@ class EvaluationResult:
     task_too_large_signal: bool = False
     context_window_usage_pct: float | None = None
     classification: EvaluationClassification = EvaluationClassification.verdict
+    mode_requested: str | None = None
+    mode_effective: str | None = None
+    timeout_seconds: int | None = None
+    log_path: str | None = None
+    outcome_kind: str = "completed"
+    returncode: int | None = None
+    stderr_tail: str | None = None
+    exception_type: str | None = None
+    exception_message: str | None = None
+    duration_ms: int | None = None
 
     @property
     def passed(self) -> bool:
@@ -51,15 +67,16 @@ class EvaluationResult:
         return not self.passed and not self.infrastructure_failure
 
     @classmethod
-    def fail(cls, summary: str) -> EvaluationResult:
-        return cls(verdict=EvaluationVerdict.failed, summary=summary)
+    def fail(cls, summary: str, **kwargs: object) -> EvaluationResult:
+        return cls(verdict=EvaluationVerdict.failed, summary=summary, **kwargs)
 
     @classmethod
-    def infrastructure_error(cls, summary: str) -> EvaluationResult:
+    def infrastructure_error(cls, summary: str, **kwargs: object) -> EvaluationResult:
         return cls(
             verdict=EvaluationVerdict.failed,
             summary=summary,
             classification=EvaluationClassification.infrastructure_error,
+            **kwargs,
         )
 
     def to_dict(self) -> dict:
@@ -72,6 +89,16 @@ class EvaluationResult:
             "task_too_large_signal": self.task_too_large_signal,
             "context_window_usage_pct": self.context_window_usage_pct,
             "classification": self.classification.value,
+            "mode_requested": self.mode_requested,
+            "mode_effective": self.mode_effective,
+            "timeout_seconds": self.timeout_seconds,
+            "log_path": self.log_path,
+            "outcome_kind": self.outcome_kind,
+            "returncode": self.returncode,
+            "stderr_tail": self.stderr_tail,
+            "exception_type": self.exception_type,
+            "exception_message": self.exception_message,
+            "duration_ms": self.duration_ms,
         }
 
 
@@ -81,6 +108,8 @@ class IssueEvaluator(Protocol):
         context: IssueContext,
         base_branch: str,
         verification_commands: list[str],
+        *,
+        log_path: Path | None = None,
     ) -> EvaluationResult: ...
 
 
@@ -98,7 +127,14 @@ class StubEvaluator:
         context: IssueContext,
         base_branch: str,
         verification_commands: list[str],
+        *,
+        log_path: Path | None = None,
     ) -> EvaluationResult:
+        if log_path is not None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text("# stub evaluation log\n", encoding="utf-8")
+        if self._result.log_path is None and log_path is not None:
+            self._result.log_path = str(log_path)
         return self._result
 
     @classmethod
@@ -120,8 +156,15 @@ _DEFAULT_TIMEOUT = 900  # 15 minutes
 class AmpEvaluatorRunner:
     """Invokes the ``amp`` CLI to independently evaluate worker output."""
 
-    def __init__(self, mode: str = "smart", timeout: int = _DEFAULT_TIMEOUT) -> None:
+    def __init__(
+        self,
+        mode: str | None = "smart",
+        timeout: int = _DEFAULT_TIMEOUT,
+        *,
+        requested_mode: str | None = None,
+    ) -> None:
         self._mode = self._normalize_mode(mode)
+        self._requested_mode = requested_mode
         self._timeout = self._normalize_timeout(timeout)
 
     # ------------------------------------------------------------------
@@ -133,11 +176,31 @@ class AmpEvaluatorRunner:
         context: IssueContext,
         base_branch: str,
         verification_commands: list[str],
+        *,
+        log_path: Path | None = None,
     ) -> EvaluationResult:
+        log_path_str = str(log_path) if log_path is not None else None
+        base_metadata = {
+            "mode_requested": self._requested_mode,
+            "mode_effective": self._mode,
+            "timeout_seconds": self._timeout,
+            "log_path": log_path_str,
+        }
         amp_path = shutil.which("amp")
         if amp_path is None:
+            self._append_log_record(log_path, "orc evaluation error", {
+                **base_metadata,
+                "timestamp": _now_iso(),
+                "outcome_kind": "missing_amp_cli",
+                "exception_type": "RuntimeError",
+                "exception_message": "amp CLI not found in PATH",
+            })
             return EvaluationResult.infrastructure_error(
-                "amp CLI not found in PATH. Install it or ensure it is on the PATH."
+                "amp CLI not found in PATH. Install it or ensure it is on the PATH.",
+                outcome_kind="missing_amp_cli",
+                exception_type="RuntimeError",
+                exception_message="amp CLI not found in PATH",
+                **base_metadata,
             )
 
         prompt = self._build_prompt(context, base_branch, verification_commands)
@@ -156,25 +219,64 @@ class AmpEvaluatorRunner:
         logger.info("Running evaluator in %s", context.repo_root)
         logger.debug("Command: %s", cmd)
 
+        self._append_log_record(log_path, "orc evaluation invocation", {
+            **base_metadata,
+            "timestamp": _now_iso(),
+            "issue_id": context.issue_id,
+            "repo_root": str(context.repo_root),
+            "base_branch": base_branch,
+            "command": cmd,
+        })
+        self._append_log_marker(log_path, "amp stdout (raw --stream-json)")
+
+        started_at = time.monotonic()
         try:
-            proc = subprocess.run(
-                cmd,
-                cwd=str(context.repo_root),
-                capture_output=True,
-                text=True,
-                timeout=self._timeout,
-                env=build_worktree_env(context.repo_root),
-            )
-        except subprocess.TimeoutExpired:
+            proc = self._run_subprocess(context, cmd, log_path)
+        except subprocess.TimeoutExpired as exc:
             logger.error("Evaluator timed out after %d seconds", self._timeout)
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            stderr_tail = self._tail_text(exc.stderr)
+            self._append_log_record(log_path, "orc evaluation timeout", {
+                **base_metadata,
+                "timestamp": _now_iso(),
+                "duration_ms": duration_ms,
+                "stderr_tail": stderr_tail,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            })
             return EvaluationResult.infrastructure_error(
                 f"Evaluator timed out after {self._timeout}s",
+                outcome_kind="timeout",
+                stderr_tail=stderr_tail,
+                exception_type=type(exc).__name__,
+                exception_message=str(exc),
+                duration_ms=duration_ms,
+                **base_metadata,
             )
         except Exception as exc:
             logger.exception("Evaluator invocation failed")
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            stderr_tail = self._tail_text(getattr(exc, "stderr", None))
+            self._append_log_record(log_path, "orc evaluation exception", {
+                **base_metadata,
+                "timestamp": _now_iso(),
+                "duration_ms": duration_ms,
+                "stderr_tail": stderr_tail,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            })
             return EvaluationResult.infrastructure_error(
                 f"Evaluator invocation failed: {exc}",
+                outcome_kind="exception",
+                stderr_tail=stderr_tail,
+                exception_type=type(exc).__name__,
+                exception_message=str(exc),
+                duration_ms=duration_ms,
+                **base_metadata,
             )
+
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        stderr_tail = self._tail_text(proc.stderr)
 
         logger.info("Evaluator exited with code %d", proc.returncode)
         if proc.stdout:
@@ -182,7 +284,20 @@ class AmpEvaluatorRunner:
         if proc.stderr:
             logger.debug("stderr:\n%s", proc.stderr)
 
-        return self._parse_output(proc)
+        result = self._parse_output(proc)
+        result.mode_requested = self._requested_mode
+        result.mode_effective = self._mode
+        result.timeout_seconds = self._timeout
+        result.log_path = log_path_str
+        result.returncode = proc.returncode
+        result.stderr_tail = stderr_tail
+        result.duration_ms = duration_ms
+
+        self._append_log_record(log_path, "orc evaluation completion", {
+            **result.to_dict(),
+            "timestamp": _now_iso(),
+        })
+        return result
 
     # ------------------------------------------------------------------
     # Prompt construction
@@ -209,6 +324,74 @@ class AmpEvaluatorRunner:
         if timeout <= 0:
             raise ValueError("Evaluator timeout must be a positive integer")
         return timeout
+
+    def _run_subprocess(
+        self,
+        context: IssueContext,
+        cmd: list[str],
+        log_path: Path | None,
+    ) -> subprocess.CompletedProcess[str]:
+        env = build_worktree_env(context.repo_root)
+        if log_path is None:
+            return subprocess.run(
+                cmd,
+                cwd=str(context.repo_root),
+                capture_output=True,
+                text=True,
+                timeout=self._timeout,
+                env=env,
+            )
+
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as log_fh:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(context.repo_root),
+                stdout=log_fh,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=self._timeout,
+                env=env,
+            )
+
+        stdout = log_path.read_text(encoding="utf-8")
+        return subprocess.CompletedProcess(
+            args=proc.args,
+            returncode=proc.returncode,
+            stdout=stdout,
+            stderr=proc.stderr,
+        )
+
+    @staticmethod
+    def _append_log_marker(log_path: Path | None, label: str) -> None:
+        if log_path is None:
+            return
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as log_fh:
+            log_fh.write(f"# {label}\n")
+
+    @staticmethod
+    def _append_log_record(log_path: Path | None, label: str, payload: dict) -> None:
+        if log_path is None:
+            return
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as log_fh:
+            log_fh.write(f"# {label}\n")
+            log_fh.write(json.dumps(payload, sort_keys=True) + "\n")
+
+    @staticmethod
+    def _tail_text(text: str | bytes | None) -> str | None:
+        if text is None:
+            return None
+        if isinstance(text, bytes):
+            text = text.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        if len(lines) > _STDERR_TAIL_MAX_LINES:
+            lines = lines[-_STDERR_TAIL_MAX_LINES:]
+        tailed = "\n".join(lines).strip()
+        if len(tailed) > _STDERR_TAIL_MAX_CHARS:
+            tailed = tailed[-_STDERR_TAIL_MAX_CHARS:]
+        return tailed or None
 
     @staticmethod
     def _build_prompt(
@@ -332,11 +515,15 @@ class AmpEvaluatorRunner:
         # Check for error
         if result_msg and result_msg.get("is_error"):
             error_text = result_msg.get("error", "Unknown error")
-            return EvaluationResult.infrastructure_error(error_text)
+            return EvaluationResult.infrastructure_error(
+                error_text,
+                outcome_kind="stream_error",
+            )
 
         if proc.returncode != 0:
             return EvaluationResult.infrastructure_error(
                 f"Evaluator exited with code {proc.returncode}",
+                outcome_kind="nonzero_exit",
             )
 
         # Try to extract verdict JSON from assistant text
@@ -361,11 +548,14 @@ class AmpEvaluatorRunner:
         if result is None:
             return EvaluationResult.infrastructure_error(
                 "Evaluator produced no structured result",
+                outcome_kind="unstructured_output",
             )
 
         # Override context_window_usage_pct from stream JSON (authoritative)
         if context_usage is not None:
             result.context_window_usage_pct = context_usage
+        elif result.context_window_usage_pct is None:
+            result.context_window_usage_pct = self._parse_context_usage(combined_text)
 
         return result
 
@@ -407,4 +597,18 @@ class AmpEvaluatorRunner:
             else False,
             context_window_usage_pct=data.get("context_window_usage_pct"),
             classification=classification,
+            mode_requested=data.get("mode_requested"),
+            mode_effective=data.get("mode_effective"),
+            timeout_seconds=data.get("timeout_seconds"),
+            log_path=data.get("log_path"),
+            outcome_kind=data.get("outcome_kind", "completed"),
+            returncode=data.get("returncode"),
+            stderr_tail=data.get("stderr_tail"),
+            exception_type=data.get("exception_type"),
+            exception_message=data.get("exception_message"),
+            duration_ms=data.get("duration_ms"),
         )
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()

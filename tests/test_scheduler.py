@@ -267,6 +267,8 @@ def test_evaluation_pass_completes_issue(repo_root: Path, state_dir: Path) -> No
 
     state = StateStore(state_dir).load()
     assert state.run_history[0]["result"] == "completed"
+    assert state.run_history[0]["eval_result"]["verdict"] == "pass"
+    assert state.run_history[0]["eval_log_path"].endswith("test-1.log")
 
 
 def test_evaluation_fail_creates_followup(repo_root: Path, state_dir: Path) -> None:
@@ -300,6 +302,8 @@ def test_evaluation_fail_creates_followup(repo_root: Path, state_dir: Path) -> N
 
     state = StateStore(state_dir).load()
     assert state.run_history[0]["result"] == "completed_with_followup"
+    assert state.run_history[0]["eval_result"]["verdict"] == "fail"
+    assert "evaluation" not in state.run_history[0]
 
 
 def test_evaluation_crash_pauses_with_resume_candidate(repo_root: Path, state_dir: Path) -> None:
@@ -336,6 +340,8 @@ def test_evaluation_crash_pauses_with_resume_candidate(repo_root: Path, state_di
     state = StateStore(state_dir).load()
     assert state.mode == OrchestratorMode.paused
     assert state.run_history[0]["result"] == "evaluation_infra_failed"
+    assert state.run_history[0]["eval_result"]["classification"] == "infrastructure_error"
+    assert state.run_history[0]["eval_log_path"].endswith("test-1.log")
     assert state.resume_candidate is not None
     assert state.resume_candidate["issue_id"] == "test-1"
     assert state.resume_candidate["stage"] == "amp_finished"
@@ -411,6 +417,12 @@ def test_evaluation_events_recorded(repo_root: Path, state_dir: Path) -> None:
     event_types = [e["event_type"] for e in events]
     assert "evaluation_started" in event_types
     assert "evaluation_finished" in event_types
+    started = next(e for e in events if e["event_type"] == "evaluation_started")
+    finished = next(e for e in events if e["event_type"] == "evaluation_finished")
+    assert started["data"]["mode_effective"] == config.effective_evaluation_mode
+    assert started["data"]["log_path"].endswith("test-1.log")
+    assert finished["data"]["log_path"].endswith("test-1.log")
+    assert finished["data"]["classification"] == "verdict"
 
 
 def test_evaluation_failure_creates_followup_and_records_run(repo_root: Path, state_dir: Path) -> None:
@@ -444,6 +456,8 @@ def test_evaluation_failure_creates_followup_and_records_run(repo_root: Path, st
 
     state = StateStore(state_dir).load()
     assert state.run_history[0]["result"] == "completed_with_followup"
+    assert state.run_history[0]["eval_result"]["summary"] == "Missing tests"
+    assert state.run_history[0]["eval_log_path"].endswith("test-1.log")
 
 
 def test_claim_issue_called_before_amp(repo_root: Path, state_dir: Path) -> None:
