@@ -495,7 +495,7 @@ class IssueInspectScreen(Screen[None]):
         height: 1fr;
     }
     #ii-sidebar {
-        width: 40;
+        width: 1fr;
         border-right: solid #263041;
         padding: 0 1;
     }
