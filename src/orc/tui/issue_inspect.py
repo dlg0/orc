@@ -24,7 +24,7 @@ from orc.tui.event_helpers import (
     _human_message,
 )
 from orc.tui.modals import AmpStreamModal, _THREAD_URL_PREFIX, build_thread_continue_cmd
-from orc.workflow import PHASE_INFO, PHASE_ORDER, normalize_failure_phase, phase_label
+from orc.workflow import PHASE_INFO, PHASE_ORDER, TIMELINE_PHASE_ORDER, normalize_failure_phase, phase_label
 
 
 # -- Data Model ----------------------------------------------------------------
@@ -300,9 +300,10 @@ def _build_active_timeline(
     preflight_log_path: str | None = None,
 ) -> list[IssueInspectStep]:
     """Build the workflow step timeline for an active issue."""
-    phase_keys = [p.value for p in PHASE_ORDER]
+    # Use full PHASE_ORDER for index lookup so hidden phases still map correctly.
+    all_keys = [p.value for p in PHASE_ORDER]
     try:
-        current_idx = phase_keys.index(current_phase) if current_phase else -1
+        current_idx = all_keys.index(current_phase) if current_phase else -1
     except ValueError:
         current_idx = -1
 
@@ -312,15 +313,17 @@ def _build_active_timeline(
     }
 
     steps: list[IssueInspectStep] = []
-    for i, phase in enumerate(PHASE_ORDER):
+    for phase in TIMELINE_PHASE_ORDER:
         info = PHASE_INFO[phase]
         key = phase.value
+        # Compare against the canonical full-order index.
+        phase_idx = all_keys.index(key)
 
         if current_idx < 0:
             status: StepStatus = "pending"
-        elif i < current_idx:
+        elif phase_idx < current_idx:
             status = "done"
-        elif i == current_idx:
+        elif phase_idx == current_idx:
             status = "active"
         else:
             if key in optional_phases:
@@ -351,23 +354,24 @@ def _build_held_timeline(failure: dict, had_evaluation: bool) -> list[IssueInspe
     stage = failure.get("stage", "legacy")
     fail_at = normalize_failure_phase(stage)
 
-    phase_keys = [p.value for p in PHASE_ORDER]
+    all_keys = [p.value for p in PHASE_ORDER]
     try:
-        fail_idx = phase_keys.index(fail_at)
+        fail_idx = all_keys.index(fail_at)
     except ValueError:
         fail_idx = -1
 
     steps: list[IssueInspectStep] = []
-    for i, phase in enumerate(PHASE_ORDER):
+    for phase in TIMELINE_PHASE_ORDER:
         info = PHASE_INFO[phase]
         key = phase.value
         label = info.label
+        phase_idx = all_keys.index(key)
 
         if fail_idx < 0:
             status: StepStatus = "pending"
-        elif i < fail_idx:
+        elif phase_idx < fail_idx:
             status = "done"
-        elif i == fail_idx:
+        elif phase_idx == fail_idx:
             status = "failed"
         else:
             if key == "evaluation_running" and not had_evaluation and fail_at != key:
@@ -394,9 +398,9 @@ def _build_history_timeline(
 
     Phases up to and including final_phase are marked done; the rest are skipped.
     """
-    phase_keys = [p.value for p in PHASE_ORDER]
+    all_keys = [p.value for p in PHASE_ORDER]
     try:
-        final_idx = phase_keys.index(final_phase)
+        final_idx = all_keys.index(final_phase)
     except ValueError:
         return []
 
@@ -406,11 +410,12 @@ def _build_history_timeline(
     }
 
     steps: list[IssueInspectStep] = []
-    for i, phase in enumerate(PHASE_ORDER):
+    for phase in TIMELINE_PHASE_ORDER:
         info = PHASE_INFO[phase]
         key = phase.value
+        phase_idx = all_keys.index(key)
 
-        if i <= final_idx:
+        if phase_idx <= final_idx:
             status: StepStatus = "done"
         else:
             status = "skipped"

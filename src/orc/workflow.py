@@ -36,10 +36,11 @@ class WorkflowPhase(str, Enum):
 class PhaseInfo:
     label: str
     resumable: bool
+    visible_in_timeline: bool = True
 
 
 PHASE_INFO: dict[WorkflowPhase, PhaseInfo] = {
-    WorkflowPhase.preflight: PhaseInfo("Preflight", False),
+    WorkflowPhase.preflight: PhaseInfo("Preflight", False, visible_in_timeline=False),
     WorkflowPhase.already_implemented_check: PhaseInfo("Already-implemented check", False),
     WorkflowPhase.worktree_created: PhaseInfo("Worktree created", False),
     WorkflowPhase.claimed: PhaseInfo("Claimed in backlog", True),
@@ -59,6 +60,11 @@ PHASE_INFO: dict[WorkflowPhase, PhaseInfo] = {
 
 # Ordered list of phases for timeline display.
 PHASE_ORDER: list[WorkflowPhase] = list(WorkflowPhase)
+
+# Phases visible in the TUI timeline sidebar (excludes internal-only phases).
+TIMELINE_PHASE_ORDER: list[WorkflowPhase] = [
+    p for p in WorkflowPhase if PHASE_INFO[p].visible_in_timeline
+]
 
 # Set of resumable phase values (for checkpoint writes).
 RESUMABLE_PHASES: set[str] = {

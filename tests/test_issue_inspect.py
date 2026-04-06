@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from orc.queue import BdIssue
 from orc.tui.issue_inspect import (
-    IssueInspectModel,
+    _build_active_timeline,
+    _build_held_timeline,
+    _build_history_timeline,
     build_from_history,
     build_from_queue,
 )
@@ -119,3 +121,33 @@ class TestModelConditionalSections:
         model = build_from_queue(issue, "Runnable")
         assert model.description == "desc"
         assert model.acceptance_criteria == "ac"
+
+
+class TestPreflightHiddenFromTimeline:
+    """Preflight should never appear in any timeline; first visible step is Already-implemented check."""
+
+    def test_active_timeline_excludes_preflight(self) -> None:
+        steps = _build_active_timeline("amp_running", "/tmp/log")
+        phases = [s.phase for s in steps]
+        assert "preflight" not in phases
+        assert steps[0].phase == "already_implemented_check"
+
+    def test_held_timeline_excludes_preflight(self) -> None:
+        failure = {"stage": "amp", "summary": "Boom"}
+        steps = _build_held_timeline(failure, had_evaluation=False)
+        phases = [s.phase for s in steps]
+        assert "preflight" not in phases
+        assert steps[0].phase == "already_implemented_check"
+
+    def test_history_timeline_excludes_preflight(self) -> None:
+        steps = _build_history_timeline("merge_running", "completed")
+        phases = [s.phase for s in steps]
+        assert "preflight" not in phases
+        assert steps[0].phase == "already_implemented_check"
+
+    def test_active_at_preflight_phase_still_works(self) -> None:
+        """Even if internal state is 'preflight', timeline shouldn't break."""
+        steps = _build_active_timeline("preflight", None)
+        phases = [s.phase for s in steps]
+        assert "preflight" not in phases
+        assert all(s.status == "pending" for s in steps)
