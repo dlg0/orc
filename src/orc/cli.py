@@ -131,7 +131,13 @@ def status() -> None:
 @click.option("--fail-fast", is_flag=True, default=False, help="Stop on the first issue failure instead of continuing.")
 @click.option("--only", "only_issue", default=None, help="Process only this issue ID, then stop.")
 def start(fail_fast: bool, only_issue: str | None) -> None:
-    """Begin processing ready issues."""
+    """Begin processing ready issues.
+
+    When post-merge evaluation is enabled and fails, Orc creates a follow-up
+    `bd` issue in the current repo's Beads backlog. This behavior is controlled
+    by `.orc/config.yaml`; there is no implemented `ORC_SELF_REPORT_*`
+    environment-variable flow.
+    """
     project = detect_project()
     repo_root = project.repo_root
     state_dir = repo_root / CONFIG_DIR

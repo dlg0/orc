@@ -126,6 +126,23 @@ file with all defaults.
 | `summary_amp_mode` | `"rush"` | Amp mode used when extracting summaries (applies to `"rush-extract"` mode). |
 | `fail_fast` | `false` | Stop the orchestrator loop on the first issue failure instead of continuing to the next issue. |
 
+## Evaluation Follow-Ups
+
+When post-merge evaluation is enabled, Orc runs an independent evaluation step
+after Amp finishes work and the merged result passes local verification.
+
+If that evaluation fails, Orc automatically creates a follow-up `bd` issue in
+the current project's Beads backlog. The follow-up is created as a sibling of
+the original issue, includes the evaluation summary and reported gaps, and the
+original issue is then closed. The run is recorded as `completed_with_followup`.
+
+This behavior is controlled by `.orc/config.yaml`, primarily via
+`enable_evaluation`, `evaluation_mode`, and `evaluation_timeout`. There is no
+implemented `ORC_SELF_REPORT_*` environment-variable flow for filing bug reports
+into the Orc repo itself; those env vars were discussed in planning but are not
+read by the shipped code today. To disable automatic follow-up issue creation,
+disable evaluation.
+
 ## TUI Dashboard
 
 The TUI (`orc tui`) provides a live dashboard for monitoring the orchestrator.
