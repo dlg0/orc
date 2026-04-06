@@ -85,7 +85,11 @@ def _human_message(event_type: str, data: dict | None) -> str:
         case "merge_attempt":
             return f"Merge attempt for {iid}" if iid else "Merge attempt"
         case "issue_closed":
-            return f"Issue {iid} closed" if iid else "Issue closed"
+            reason = d.get("reason", "")
+            msg = f"Issue {iid} closed" if iid else "Issue closed"
+            if reason:
+                msg += f" ({reason.replace('_', ' ')})"
+            return msg
         case "pause_requested":
             return "Pause requested"
         case "stop_requested":

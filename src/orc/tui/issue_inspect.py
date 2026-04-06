@@ -230,13 +230,36 @@ def build_from_held(
 def build_from_history(run: dict) -> IssueInspectModel:
     """Build an IssueInspectModel from a run history entry."""
     raw_result = run.get("result", "")
-    tone = "green" if raw_result == "completed" else "red" if raw_result in ("failed", "error") else "white"
+    if raw_result == "completed":
+        tone = "green"
+    elif raw_result == "skipped_already_implemented":
+        tone = "green"
+    elif raw_result in ("failed", "error"):
+        tone = "red"
+    else:
+        tone = "white"
+
+    # Human-friendly label for results
+    _RESULT_LABELS: dict[str, str] = {
+        "skipped_already_implemented": "Closed (already implemented)",
+    }
+    state_label = _RESULT_LABELS.get(raw_result, raw_result.capitalize() if raw_result else "Unknown")
+
+    # Build workflow timeline for history entries with a final_phase
+    workflow_steps: list[IssueInspectStep] = []
+    final_phase = run.get("final_phase")
+    if final_phase:
+        workflow_steps = _build_history_timeline(
+            final_phase,
+            raw_result,
+            preflight_log_path=run.get("preflight_log_path"),
+        )
 
     return IssueInspectModel(
         issue_id=run.get("issue_id", ""),
         issue_title=run.get("issue_title", ""),
         source="history",
-        state_label=raw_result.capitalize() if raw_result else "Unknown",
+        state_label=state_label,
         status_tone=tone,
         result=raw_result,
         summary=run.get("summary", ""),
@@ -248,6 +271,7 @@ def build_from_history(run: dict) -> IssueInspectModel:
         preflight_log_path=run.get("preflight_log_path"),
         agent_result=run.get("amp_result") if isinstance(run.get("amp_result"), dict) else None,
         evaluation_result=run.get("eval_result") if isinstance(run.get("eval_result"), dict) else None,
+        workflow_steps=workflow_steps,
     )
 
 
@@ -356,6 +380,55 @@ def _build_held_timeline(failure: dict, had_evaluation: bool) -> list[IssueInspe
         detail = failure.get("summary") if status == "failed" else None
         steps.append(IssueInspectStep(
             phase=key, label=label, status=status, detail=detail,
+        ))
+
+    return steps
+
+
+def _build_history_timeline(
+    final_phase: str,
+    result: str,
+    preflight_log_path: str | None = None,
+) -> list[IssueInspectStep]:
+    """Build workflow timeline from a completed history entry.
+
+    Phases up to and including final_phase are marked done; the rest are skipped.
+    """
+    phase_keys = [p.value for p in PHASE_ORDER]
+    try:
+        final_idx = phase_keys.index(final_phase)
+    except ValueError:
+        return []
+
+    optional_phases = {
+        "summary_extraction", "dirty_worktree_check", "conflict_resolution",
+        "parent_promotion", "claim_release_pending", "merge_recovery",
+    }
+
+    steps: list[IssueInspectStep] = []
+    for i, phase in enumerate(PHASE_ORDER):
+        info = PHASE_INFO[phase]
+        key = phase.value
+
+        if i <= final_idx:
+            status: StepStatus = "done"
+        else:
+            status = "skipped"
+
+        if status == "skipped" and key in optional_phases:
+            continue
+
+        has_log = (
+            key == "already_implemented_check"
+            and preflight_log_path is not None
+            and status == "done"
+        )
+
+        steps.append(IssueInspectStep(
+            phase=key,
+            label=info.label,
+            status=status,
+            has_log=has_log,
         ))
 
     return steps
@@ -502,7 +575,7 @@ class IssueInspectScreen(Screen[None]):
                     yield Label("Workflow Steps", id="ii-timeline-title")
                     if m.source in ("active",):
                         yield DataTable(id="ii-timeline-table", cursor_type="row")
-                    elif m.source in ("held",):
+                    elif m.source in ("held",) or (m.source == "history" and m.workflow_steps):
                         yield Static(self._render_timeline_static(), id="ii-timeline-static")
                     else:
                         yield Static("[dim]No workflow data[/]", id="ii-timeline-static")

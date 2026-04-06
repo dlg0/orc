@@ -787,6 +787,11 @@ def run_loop(
                     "evidence": ai_result.evidence,
                 })
                 close_issue(issue.id, cwd=repo_root)
+                events.record(EventType.issue_closed, {
+                    "issue_id": issue.id,
+                    "reason": "already_implemented",
+                    "phase": "already_implemented_check",
+                })
                 click.echo(f"[PREFLIGHT] {issue.id} closed (already implemented)")
                 _clear_active(store, state_dir, state)
                 _record_run(
@@ -798,6 +803,7 @@ def run_loop(
                         **run_log_extra,
                         "confidence": ai_result.confidence.value,
                         "evidence": ai_result.evidence,
+                        "final_phase": "already_implemented_check",
                     },
                 )
                 if fail_fast:

@@ -422,6 +422,7 @@ _RESULT_ICONS: dict[str, str] = {
     "failed": "✖",
     "error": "✖",
     "skipped": "⊘",
+    "skipped_already_implemented": "✔",
     "timeout": "⏱",
 }
 
@@ -1278,7 +1279,7 @@ class HistoryTable(Static):
                 ts = _format_run_timestamp(ts)
             issue_id = run.get("issue_id", "")
             raw_result = run.get("result", "")
-            result_colors = {"completed": "green", "failed": "bold red", "error": "bold red"}
+            result_colors = {"completed": "green", "failed": "bold red", "error": "bold red", "skipped_already_implemented": "green"}
             rc = result_colors.get(raw_result, "white")
             icon = _RESULT_ICONS.get(raw_result, "·")
             # Check if this issue has a failure category for richer coloring
@@ -1302,9 +1303,12 @@ class HistoryTable(Static):
                 }
                 rc = category_colors.get(cat, rc)
                 icon = _CATEGORY_ICONS.get(cat, icon)
+            _RESULT_DISPLAY_LABELS: dict[str, str] = {
+                "skipped_already_implemented": "Closed (already impl.)",
+            }
             result_label = _CATEGORY_LABELS.get(
                 failure_info.get("category", "") if failure_info and isinstance(failure_info, dict) else "",
-                raw_result,
+                _RESULT_DISPLAY_LABELS.get(raw_result, raw_result),
             )
             result = f"[{rc}]{icon} {result_label}[/]"
             branch = run.get("branch", "")
